@@ -419,7 +419,7 @@ export class TaptoolsService {
 
       if (character) {
         // Try to get dynamic price from TapTools first
-        const traitPrices = await this.tapToolsClient.getTraitPrices(policyId);
+        const traitPrices = null;
 
         if (traitPrices && traitPrices.Character && traitPrices.Character[character]) {
           return traitPrices.Character[character];

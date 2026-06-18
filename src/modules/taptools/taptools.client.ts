@@ -5,7 +5,6 @@ import NodeCache from 'node-cache';
 
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 
-import { AnvilClient } from '@/modules/anvil/anvil.client';
 import { Charli3Client } from '@/modules/charli3/charli3.client';
 import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
@@ -86,12 +85,6 @@ export class TapToolsClient {
   private readonly ohlcvCache: NodeCache;
 
   /**
-   * Cache for NFT collection trait prices
-   * TTL: 10 minutes (600 seconds) - trait prices don't change frequently
-   */
-  private readonly traitPricesCache: NodeCache;
-
-  /**
    * Cache for market data (market cap, price changes)
    * TTL: 5 minutes (300 seconds) - market data changes frequently
    */
@@ -100,7 +93,6 @@ export class TapToolsClient {
   constructor(
     private readonly configService: ConfigService,
     private readonly charli3Client: Charli3Client,
-    private readonly anvilClient: AnvilClient,
     private readonly dexHunterPricingClient: DexHunterPricingClient
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -131,13 +123,6 @@ export class TapToolsClient {
     this.ohlcvCache = new NodeCache({
       stdTTL: 300, // 5 minutes in seconds
       checkperiod: 60, // Check for expired keys every minute
-      useClones: false, // Don't clone objects for better performance
-    });
-
-    // Initialize trait prices cache with 10-minute TTL
-    this.traitPricesCache = new NodeCache({
-      stdTTL: 600, // 10 minutes in seconds
-      checkperiod: 120, // Check for expired keys every 2 minutes
       useClones: false, // Don't clone objects for better performance
     });
 
@@ -578,53 +563,22 @@ export class TapToolsClient {
   }
 
   /**
-   * Get trait-based prices for NFT collection from TapTools
-   * Used for collections with trait-based pricing (e.g., Relics of Magma)
-   *
-   * @param policyId - NFT collection policy ID
-   * @returns Object containing trait prices by trait type and value, or null if unavailable
-   */
-  async getTraitPrices(policyId: string): Promise<Record<string, Record<string, number>> | null> {
-    if (!this.isMainnet) return null;
-
-    const cacheKey = `trait_prices_${policyId}`;
-    const cached = this.traitPricesCache.get<Record<string, Record<string, number>>>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    // PRIMARY: Anvil — derives floor prices from marketplace listings
-    try {
-      const anvilTraits = await this.anvilClient.deriveTraitFloorPrices(policyId, 'Character');
-      if (anvilTraits && Object.keys(anvilTraits).length > 0) {
-        const result: Record<string, Record<string, number>> = { Character: anvilTraits };
-        this.traitPricesCache.set(cacheKey, result);
-        return result;
-      }
-    } catch {
-      this.logger.debug(`Anvil trait prices failed for ${policyId}`);
-    }
-
-    return null;
-  }
-
-  /**
    * Clear all caches (useful for testing or manual refresh)
    */
   clearCache(): void {
     const priceSize = this.priceCache.keys().length;
     const poolSize = this.poolCache.keys().length;
     const ohlcvSize = this.ohlcvCache.keys().length;
-    const traitPricesSize = this.traitPricesCache.keys().length;
     const marketDataSize = this.marketDataCache.keys().length;
     const supplySize = this.supplyCache.keys().length;
     this.priceCache.flushAll();
     this.poolCache.flushAll();
     this.ohlcvCache.flushAll();
-    this.traitPricesCache.flushAll();
     this.marketDataCache.flushAll();
     this.supplyCache.flushAll();
     this.logger.log(
       `Cleared caches - price: ${priceSize}, pool: ${poolSize}, ohlcv: ${ohlcvSize}, ` +
-        `traitPrices: ${traitPricesSize}, marketData: ${marketDataSize}, supply: ${supplySize} entries`
+        `marketData: ${marketDataSize}, supply: ${supplySize} entries`
     );
   }
 
@@ -635,13 +589,11 @@ export class TapToolsClient {
     price: { size: number; hits: number; misses: number; keys: number };
     pool: { size: number; hits: number; misses: number; keys: number };
     ohlcv: { size: number; hits: number; misses: number; keys: number };
-    traitPrices: { size: number; hits: number; misses: number; keys: number };
     marketData: { size: number; hits: number; misses: number; keys: number };
   } {
     const priceStats = this.priceCache.getStats();
     const poolStats = this.poolCache.getStats();
     const ohlcvStats = this.ohlcvCache.getStats();
-    const traitPricesStats = this.traitPricesCache.getStats();
     const marketDataStats = this.marketDataCache.getStats();
     return {
       price: {
@@ -661,12 +613,6 @@ export class TapToolsClient {
         hits: ohlcvStats.hits,
         misses: ohlcvStats.misses,
         keys: ohlcvStats.keys,
-      },
-      traitPrices: {
-        size: this.traitPricesCache.keys().length,
-        hits: traitPricesStats.hits,
-        misses: traitPricesStats.misses,
-        keys: traitPricesStats.keys,
       },
       marketData: {
         size: this.marketDataCache.keys().length,
