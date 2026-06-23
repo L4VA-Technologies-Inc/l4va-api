@@ -23,6 +23,11 @@ export class SystemSettingsResponseDto {
   protocol_flat_fee: number;
 
   @ApiProperty({
+    description: 'Protocol fee per asset entry (NFT or FT type, quantity ignored) in lovelace (2 ADA = 2000000)',
+  })
+  protocol_fee_per_asset: number;
+
+  @ApiProperty({
     description: 'LP recommended minimum liquidity in lovelace (500 ADA = 500000000)',
   })
   lp_recommended_min_liquidity: number;

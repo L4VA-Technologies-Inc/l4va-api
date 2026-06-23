@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, ValidateNested, Min, Max, IsNumber } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, ValidateNested, Min, Max, IsNumber, IsInt } from 'class-validator';
+
+import { MAX_ASSET_DECIMALS } from '../contribution-asset.utils';
 
 import { AssetType } from '@/types/asset.types';
 
@@ -106,9 +108,14 @@ export class ContributionAsset {
   @ApiPropertyOptional({
     description: 'Number of decimals for fungible tokens',
     example: 0,
+    minimum: 0,
+    maximum: MAX_ASSET_DECIMALS,
   })
   @Expose()
   @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_ASSET_DECIMALS)
   decimals?: number;
 
   @ApiPropertyOptional({

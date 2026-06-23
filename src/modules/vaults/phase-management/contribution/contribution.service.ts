@@ -3,6 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { ContributeReq } from './dto/contribute.req';
+import { countAssetsForProtocolFee } from './contribution-fee.utils';
+import {
+  getContributionQuantityForLimits,
+  normalizeContributionAssets,
+  sumContributionQuantitiesForLimits,
+} from './contribution-asset.utils';
 
 import { Asset } from '@/database/asset.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -54,7 +60,9 @@ export class ContributionService {
       );
     }
 
-    const assetsByPolicy = contributeReq.assets.reduce(
+    const normalizedAssets = normalizeContributionAssets(contributeReq.assets);
+
+    const assetsByPolicy = normalizedAssets.reduce(
       (acc, asset) => {
         if (!acc[asset.policyId]) {
           acc[asset.policyId] = [];
@@ -152,17 +160,7 @@ export class ContributionService {
       return this.handleExpansionContribution(vaultId, contributeReq, userId);
     }
 
-    // Calculate decimal-adjusted quantity for new contribution (to match currentAssetCount units)
-    const contributionAssetCount = contributeReq.assets.reduce((total, asset) => {
-      const rawQuantity = Number(asset.quantity) || 1;
-      if (asset.type === AssetType.FT) {
-        const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
-        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-        return total + decimalQuantity;
-      }
-      // NFTs always count as 1
-      return total + 1;
-    }, 0);
+    const contributionAssetCount = sumContributionQuantitiesForLimits(normalizedAssets);
 
     // Normal contribution flow - compare decimal-adjusted quantities
     if (currentAssetCount + contributionAssetCount > vaultData.max_contribute_assets) {
@@ -190,7 +188,7 @@ export class ContributionService {
       }
     }
 
-    if (contributeReq.assets.length > 0) {
+    if (normalizedAssets.length > 0) {
       const invalidAssets: string[] = [];
       const policyExceedsLimit: Array<{
         policyId: string;
@@ -209,16 +207,10 @@ export class ContributionService {
 
         const existingPolicyCount = policyCountMap.get(policyId) || 0;
         // Calculate decimal-adjusted quantity for this contribution
-        const policyAssetsQuantity = assetsByPolicy[policyId].reduce((total, asset) => {
-          const rawQuantity = Number(asset.quantity) || 1;
-          if (asset.type === AssetType.NFT) {
-            return total + 1;
-          }
-          // FT: convert raw to decimal
-          const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
-          const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-          return total + decimalQuantity;
-        }, 0);
+        const policyAssetsQuantity = assetsByPolicy[policyId].reduce(
+          (total, asset) => total + getContributionQuantityForLimits(asset),
+          0
+        );
 
         // Additional safety check: prevent individual FT quantities from exceeding reasonable limits
         for (const asset of assetsByPolicy[policyId]) {
@@ -262,13 +254,16 @@ export class ContributionService {
       }
     }
 
+    const feeAssetCount = countAssetsForProtocolFee(normalizedAssets);
+    const contributionFee = Math.round(feeAssetCount * this.systemSettingsService.protocolFeePerAsset);
+
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.contribute,
       assets: [],
       userId,
-      fee: this.systemSettingsService.protocolContributorsFee,
-      metadata: contributeReq.assets,
+      fee: contributionFee,
+      metadata: normalizedAssets,
     });
 
     return {
@@ -324,19 +319,10 @@ export class ContributionService {
       );
     }
 
-    // Calculate total asset count for this contribution
-    // FTs: convert raw quantity to decimal (e.g., 3,500,000 with 6 decimals = 3.5 tokens)
-    // NFTs: always count as 1
-    const contributionAssetCount = contributeReq.assets.reduce((total, asset) => {
-      const rawQuantity = Number(asset.quantity) || 1;
-      if (asset.type === AssetType.FT) {
-        const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
-        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-        return total + decimalQuantity;
-      }
-      // NFTs always count as 1
-      return total + 1;
-    }, 0);
+    const normalizedAssets = normalizeContributionAssets(contributeReq.assets);
+
+    // Calculate total asset count for vault limit checks (quantity-based for FTs)
+    const contributionAssetCount = sumContributionQuantitiesForLimits(normalizedAssets);
 
     // Check asset max if configured - count already CONFIRMED contributions
     if (!expansionConfig.noMax && expansionConfig.assetMax) {
@@ -383,14 +369,17 @@ export class ContributionService {
       );
     }
 
+    const feeAssetCount = countAssetsForProtocolFee(normalizedAssets);
+    const expansionFee = Math.round(feeAssetCount * this.systemSettingsService.protocolFeePerAsset);
+
     // Create transaction (claims will be created during expansion->locked transition)
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.contribute,
       assets: [],
       userId,
-      fee: this.systemSettingsService.protocolContributorsFee,
-      metadata: contributeReq.assets,
+      fee: expansionFee,
+      metadata: normalizedAssets,
     });
 
     return {
