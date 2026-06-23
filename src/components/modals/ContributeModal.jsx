@@ -14,6 +14,7 @@ import { useInfiniteWalletAssets } from '@/hooks/useInfiniteWalletAssets.ts';
 import { AssetsList } from '@/components/modals/AssetsList/AssetsList.jsx';
 import { useCurrency } from '@/hooks/useCurrency';
 import { getDecimalAdjustedQuantity, getRawQuantity } from '@/utils/core.utils';
+import { estimateContributionTransactionCost } from '@/utils/contributionTransactionCost.js';
 
 const MAX_NFT_PER_TRANSACTION = 10;
 const MAX_FT_PER_TRANSACTION = 10;
@@ -174,6 +175,22 @@ export const ContributeModal = ({ vault, onClose, isOpen, isExpansion }) => {
 
   const estimatedTickerVal = hasSelectedAssets ? userEstimatedTokens.toLocaleString() : '0';
 
+  // Protocol fee: each selected NFT or FT type counts as 1 (FT quantity ignored)
+  const feeAssetCount = selectedNFTs.length;
+
+  const feePerAssetAda = vault.protocolFeePerAssetAda || 0;
+
+  const transactionCostEstimate = useMemo(
+    () =>
+      estimateContributionTransactionCost({
+        assetCount: feeAssetCount,
+        protocolFeePerAssetAda: feePerAssetAda,
+      }),
+    [feeAssetCount, feePerAssetAda]
+  );
+
+  const totalProtocolFeeAda = transactionCostEstimate.protocolFeeAda;
+
   // Estimated ADA to Receive (only shown when acquire phase exists)
   // Contributors receive ADA from acquirers (minus LP allocation)
   // Formula: Estimated Value × (Tokens for Acquirers % - LP ADA %)
@@ -333,15 +350,18 @@ export const ContributeModal = ({ vault, onClose, isOpen, isExpansion }) => {
           </div>
         </div>
         <div className="text-xs text-dark-100 border-t border-steel-800 pt-2">
-          Transaction cost:{' '}
-          <span className="text-white font-medium">
-            ~{((vault.protocolContributorsFeeAda || 0) + 1.72).toFixed(2)} ADA
-          </span>{' '}
-          (
-          {vault.protocolContributorsFeeAda > 0
-            ? `${vault.protocolContributorsFeeAda?.toFixed(2)} ADA Protocol fees + ~1.72 ADA Network fees`
-            : '~1.72 ADA Network fees'}
-          )
+          {selectedNFTs.length > 0 ? (
+            <>
+              Transaction cost:{' '}
+              <span className="text-white font-medium">~{transactionCostEstimate.totalWalletAda.toFixed(2)} ADA</span> (
+              {totalProtocolFeeAda > 0
+                ? `${totalProtocolFeeAda.toFixed(2)} ADA Protocol fees (${feeAssetCount} asset${feeAssetCount !== 1 ? 's' : ''} × ${feePerAssetAda} ADA) + ~${transactionCostEstimate.cardanoOverheadAda.toFixed(2)} ADA Cardano costs`
+                : `~${transactionCostEstimate.cardanoOverheadAda.toFixed(2)} ADA Cardano costs`}
+              )
+            </>
+          ) : (
+            <>Select assets to see estimated transaction cost.</>
+          )}
         </div>
       </div>
     );
@@ -405,13 +425,6 @@ export const ContributeModal = ({ vault, onClose, isOpen, isExpansion }) => {
                   : 'Total estimated value of your selected assets. Final value is calculated at the end of the contribution window.'
               }
             />
-            {isExpansionMode && vault.protocolContributorsFeeAda > 0 && (
-              <MetricCard
-                label="Protocol Fee"
-                value={`${currencySymbol}${isAda ? vault.protocolContributorsFeeAda.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : vault.protocolContributorsFeeUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                hint="Fee retained by the protocol for this contribution."
-              />
-            )}
             {!isExpansionMode && (
               <MetricCard
                 label="Vault Allocation"
