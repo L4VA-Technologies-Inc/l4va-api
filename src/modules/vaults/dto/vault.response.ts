@@ -287,26 +287,35 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   projectedLpUsdAmount: number;
 
-  @ApiProperty({ description: 'Protocol fee for contributors in lovelace', required: false })
+  @ApiProperty({
+    description: 'Protocol fee per asset entry (NFT or FT type, quantity ignored) in lovelace',
+    required: false,
+  })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'protocolContributorsFeeLovelace' },
+    expose: { name: 'protocolFeePerAssetLovelace' },
   })
-  protocolContributorsFeeLovelace?: number;
+  protocolFeePerAssetLovelace?: number;
 
-  @ApiProperty({ description: 'Protocol fee for contributors in ADA', required: false })
+  @ApiProperty({
+    description: 'Protocol fee per asset entry (NFT or FT type, quantity ignored) in ADA',
+    required: false,
+  })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'protocolContributorsFeeAda' },
+    expose: { name: 'protocolFeePerAssetAda' },
   })
-  protocolContributorsFeeAda?: number;
+  protocolFeePerAssetAda?: number;
 
-  @ApiProperty({ description: 'Protocol fee for contributors in USD', required: false })
+  @ApiProperty({
+    description: 'Protocol fee per asset entry (NFT or FT type, quantity ignored) in USD',
+    required: false,
+  })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'protocolContributorsFeeUsd' },
+    expose: { name: 'protocolFeePerAssetUsd' },
   })
-  protocolContributorsFeeUsd?: number;
+  protocolFeePerAssetUsd?: number;
 
   @ApiProperty({ description: 'Protocol fee for acquirers in lovelace', required: false })
   @DtoRepresent({
