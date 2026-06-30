@@ -66,7 +66,8 @@ export class DexHunterPricingClient {
       const price = parseFloat(priceStr);
       return isNaN(price) ? null : price;
     } catch (error) {
-      this.logger.error(`Redis get price failed for ${tokenUnit.slice(0, 10)}...: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis get price failed for ${tokenUnit.slice(0, 10)}...: ${errorMessage}`);
       return null;
     }
   }
@@ -87,7 +88,11 @@ export class DexHunterPricingClient {
       });
 
       const results = await pipeline.exec();
-      if (!results) return resultMap;
+      if (!results) {
+        // If pipeline returns null, set all tokens to null to trigger fallback
+        tokenUnits.forEach(unit => resultMap.set(unit, null));
+        return resultMap;
+      }
 
       results.forEach(([err, value], index) => {
         const tokenUnit = tokenUnits[index];
@@ -101,7 +106,8 @@ export class DexHunterPricingClient {
         resultMap.set(tokenUnit, isNaN(price) ? null : price);
       });
     } catch (error) {
-      this.logger.error(`Redis batch get prices failed: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis batch get prices failed: ${errorMessage}`);
       tokenUnits.forEach(unit => resultMap.set(unit, null));
     }
 
@@ -120,7 +126,8 @@ export class DexHunterPricingClient {
       const value = `${priceAda}:${timestamp}`;
       await this.redis.setex(key, this.PRICE_TTL_SECONDS, value);
     } catch (error) {
-      this.logger.error(`Redis set price failed for ${tokenUnit.slice(0, 10)}...: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis set price failed for ${tokenUnit.slice(0, 10)}...: ${errorMessage}`);
     }
   }
 
@@ -144,7 +151,8 @@ export class DexHunterPricingClient {
       await pipeline.exec();
       this.logger.debug(`Bulk cached ${pricesMap.size} token prices in Redis`);
     } catch (error) {
-      this.logger.error(`Redis batch set prices failed: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis batch set prices failed: ${errorMessage}`);
     }
   }
 
@@ -411,23 +419,58 @@ export class DexHunterPricingClient {
   }
 
   /**
+   * Delete Redis keys by pattern using SCAN (memory-efficient, non-blocking)
+   * Deletes keys while scanning to avoid collecting all keys in memory
+   * @param pattern - Redis key pattern to match
+   * @returns Number of keys deleted
+   */
+  private async deleteRedisKeysByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 1000);
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        deleted += keys.length;
+        // UNLINK is better than DEL because it deletes asynchronously
+        await this.redis.unlink(...keys);
+      }
+    } while (cursor !== '0');
+    return deleted;
+  }
+
+  /**
+   * Count Redis keys by pattern using SCAN (non-blocking)
+   * @param pattern - Redis key pattern to match
+   * @returns Number of keys matching the pattern
+   */
+  private async countRedisKeysByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let count = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 1000);
+      cursor = nextCursor;
+      count += keys.length;
+    } while (cursor !== '0');
+    return count;
+  }
+
+  /**
    * Clear all caches (useful for testing or manual refresh)
    */
   async clearCache(): Promise<void> {
     try {
-      // Clear Redis price cache
-      const keys = await this.redis.keys('vyfi_price:*');
-      if (keys.length > 0) {
-        await this.redis.del(...keys);
-      }
+      // Clear Redis price cache using SCAN + UNLINK
+      const deletedPriceKeys = await this.deleteRedisKeysByPattern('vyfi_price:*');
 
       // Clear OHLCV cache
       const ohlcvSize = this.ohlcvCache.keys().length;
       this.ohlcvCache.flushAll();
 
-      this.logger.log(`Cleared caches (Redis price keys: ${keys.length}, OHLCV: ${ohlcvSize} entries)`);
+      this.logger.log(`Cleared caches (Redis price keys: ${deletedPriceKeys}, OHLCV: ${ohlcvSize} entries)`);
     } catch (error) {
-      this.logger.error(`Failed to clear caches: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to clear caches: ${errorMessage}`);
     }
   }
 
@@ -439,12 +482,13 @@ export class DexHunterPricingClient {
     ohlcv: { size: number; hits: number; misses: number; keys: number };
   }> {
     try {
-      const priceKeys = await this.redis.keys('vyfi_price:*');
+      // Use SCAN to count keys instead of KEYS (non-blocking)
+      const priceKeyCount = await this.countRedisKeysByPattern('vyfi_price:*');
       const ohlcvStats = this.ohlcvCache.getStats();
 
       return {
         price: {
-          size: priceKeys.length,
+          size: priceKeyCount,
         },
         ohlcv: {
           size: this.ohlcvCache.keys().length,
@@ -454,7 +498,8 @@ export class DexHunterPricingClient {
         },
       };
     } catch (error) {
-      this.logger.error(`Failed to get cache stats: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to get cache stats: ${errorMessage}`);
       return {
         price: { size: 0 },
         ohlcv: { size: 0, hits: 0, misses: 0, keys: 0 },

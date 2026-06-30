@@ -2,13 +2,13 @@ import { BadRequestException, Injectable, NotFoundException, Logger } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { ContributeReq } from './dto/contribute.req';
-import { countAssetsForProtocolFee } from './contribution-fee.utils';
 import {
   getContributionQuantityForLimits,
   normalizeContributionAssets,
   sumContributionQuantitiesForLimits,
 } from './contribution-asset.utils';
+import { countAssetsForProtocolFee } from './contribution-fee.utils';
+import { ContributeReq } from './dto/contribute.req';
 
 import { Asset } from '@/database/asset.entity';
 import { Proposal } from '@/database/proposal.entity';

@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type Redis from 'ioredis';
 
 import { DexHunterPoolItem, TapToolsClient } from '../taptools/taptools.client';
 
 import { DexHunterPricingClient } from './dexhunter-pricing.client';
+
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 
 /**
  * DexHunter Pricing Service - Orchestrates token pricing from multiple sources
@@ -35,7 +38,8 @@ export class DexHunterPricingService {
   constructor(
     private readonly configService: ConfigService,
     private readonly tapToolsClient: TapToolsClient,
-    private readonly dexHunterClient: DexHunterPricingClient
+    private readonly dexHunterClient: DexHunterPricingClient,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
@@ -98,11 +102,24 @@ export class DexHunterPricingService {
    * Refresh VyFi token price cache in Redis
    * Fetches all token prices from VyFi and stores them in Redis
    * Called by background cron task every 10 minutes
+   *
+   * Uses distributed Redis lock to prevent duplicate execution across multiple API instances.
+   * Lock TTL: 540 seconds (9 minutes) - slightly less than the 10-minute cron interval
+   * to ensure lock is released before next scheduled run.
+   *
    * @returns Number of tokens cached, or null on failure
    */
   async refreshVyFiCache(): Promise<number | null> {
     if (!this.isMainnet) {
       this.logger.debug('Skipping VyFi cache refresh for non-mainnet environment');
+      return null;
+    }
+
+    // Acquire distributed lock to prevent duplicate refresh across multiple instances
+    const lockKey = 'lock:vyfi-price-refresh';
+    const lock = await this.redis.set(lockKey, '1', 'EX', 540, 'NX');
+    if (!lock) {
+      this.logger.debug('Skipping VyFi refresh because another instance is already refreshing');
       return null;
     }
 
