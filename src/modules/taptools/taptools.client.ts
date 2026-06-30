@@ -360,8 +360,11 @@ export class TapToolsClient {
 
   /**
    * Get pool data by onchain ID
-   * Attempts to fetch from Nexus API using the pool ID directly
-   * @param onchainID - Pool onchain ID (can be raw hash or Nexus-formatted ID)
+   * Supports two ID formats:
+   * 1. Nexus pool IDs (e.g., "minswap_v2_{hash}" or raw hash)
+   * 2. VyFi unitsPair format (e.g., "lovelace:tokenUnit")
+   *
+   * @param onchainID - Pool onchain ID
    * @returns Pool data with LP token unit and total supply, or null if not found
    */
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
@@ -372,7 +375,16 @@ export class TapToolsClient {
     if (cached !== undefined) return cached;
 
     try {
-      // Try fetching from Nexus API directly
+      // Check if this is a VyFi unitsPair format (e.g., "lovelace:tokenUnit")
+      if (onchainID.includes(':')) {
+        const vyfiPool = await this.fetchVyFiPoolByUnitsPair(onchainID);
+        if (vyfiPool) {
+          this.poolCache.set(cacheKey, vyfiPool);
+          return vyfiPool;
+        }
+      }
+
+      // Otherwise, try fetching from Nexus API directly
       const pool = await this.nexusClient.getPoolById(onchainID);
 
       if (!pool) {
@@ -401,6 +413,65 @@ export class TapToolsClient {
         `Failed to fetch pool by onchainID ${onchainID.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
       );
       this.poolCache.set(cacheKey, null);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch VyFi pool by unitsPair (e.g., "lovelace:tokenUnit")
+   * @param unitsPair VyFi pool identifier in format "tokenA:tokenB"
+   * @returns Pool data or null if not found
+   */
+  private async fetchVyFiPoolByUnitsPair(unitsPair: string): Promise<TapToolsTokenPoolDto | null> {
+    try {
+      // Parse unitsPair format: "lovelace:tokenUnit" or "tokenUnit:lovelace"
+      const [tokenA, tokenB] = unitsPair.split(':');
+
+      if (!tokenA || !tokenB) {
+        this.logger.warn(`Invalid unitsPair format: ${unitsPair}`);
+        return null;
+      }
+
+      // Determine which token is ADA (lovelace) and which is the asset
+      const isTokenALovelace = tokenA === 'lovelace';
+      const assetTokenUnit = isTokenALovelace ? tokenB : tokenA;
+
+      // Query VyFi API (order matters: tokenAUnit is typically ADA)
+      const url = `https://api-v3.vyfi.io/lp?networkId=${this.networkId}&tokenAUnit=lovelace&tokenBUnit=${assetTokenUnit}&v2=true`;
+      const resp = await fetch(url);
+
+      if (!resp.ok) {
+        this.logger.debug(`VyFi API returned ${resp.status} for unitsPair ${unitsPair}`);
+        return null;
+      }
+
+      const pools: VyFiPoolRaw[] = await resp.json();
+
+      // Find the pool with matching unitsPair
+      const pool = pools.find(p => p.unitsPair === unitsPair);
+
+      if (!pool) {
+        this.logger.debug(`No VyFi pool found with unitsPair: ${unitsPair}`);
+        return null;
+      }
+
+      // Convert to TapToolsTokenPoolDto format
+      return {
+        exchange: 'VyFi',
+        lpTokenUnit: this.extractVyFiLpTokenUnit(pool),
+        onchainID: unitsPair, // Use unitsPair as the canonical ID
+        tokenA: isTokenALovelace ? '' : assetTokenUnit, // Empty string for ADA
+        tokenALocked: isTokenALovelace ? (pool.tokenAQuantity ?? 0) : (pool.tokenBQuantity ?? 0),
+        tokenATicker: isTokenALovelace ? 'ADA' : '',
+        tokenB: isTokenALovelace ? assetTokenUnit : '',
+        tokenBLocked: isTokenALovelace ? (pool.tokenBQuantity ?? 0) : (pool.tokenAQuantity ?? 0),
+        tokenBTicker: isTokenALovelace ? '' : 'ADA',
+        lpTotalSupply: pool.lpQuantity ?? null,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to fetch VyFi pool by unitsPair ${unitsPair}: ${error instanceof Error ? error.message : String(error)}`
+      );
       return null;
     }
   }
