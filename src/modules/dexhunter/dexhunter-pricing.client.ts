@@ -201,21 +201,36 @@ export class DexHunterPricingClient {
       return resultMap;
     }
 
+    // Handle lovelace (ADA) - price is always 1.0 ADA
+    const resultMap = new Map<string, number | null>();
+    const nonLovelaceTokens = tokenIds.filter(tokenId => {
+      if (tokenId === 'lovelace') {
+        resultMap.set(tokenId, 1.0);
+        return false; // Filter out from API calls
+      }
+      return true;
+    });
+
+    // If only lovelace tokens were requested, return early
+    if (nonLovelaceTokens.length === 0) {
+      return resultMap;
+    }
+
     // Check Redis cache first
-    const cachedPrices = await this.getRedisPrices(tokenIds);
+    const cachedPrices = await this.getRedisPrices(nonLovelaceTokens);
     const tokensToFetch: string[] = [];
 
     cachedPrices.forEach((price, tokenId) => {
       if (price !== null) {
-        cachedPrices.set(tokenId, price);
+        resultMap.set(tokenId, price);
       } else {
         tokensToFetch.push(tokenId);
       }
     });
 
-    // If all tokens found in Redis cache, return early
+    // If all tokens found in Redis cache (or were lovelace), return early
     if (tokensToFetch.length === 0) {
-      return cachedPrices;
+      return resultMap;
     }
 
     this.logger.log(`Fetching ${tokensToFetch.length} token prices from DexHunter API`);
@@ -268,7 +283,7 @@ export class DexHunterPricingClient {
 
       // Map results and cache in Redis
       results.forEach(({ tokenId, price }) => {
-        cachedPrices.set(tokenId, price);
+        resultMap.set(tokenId, price);
         if (price !== null) {
           this.setRedisPrice(tokenId, price).catch(err =>
             this.logger.error(`Failed to cache price for ${tokenId.slice(0, 8)}...: ${err.message}`)
@@ -277,7 +292,7 @@ export class DexHunterPricingClient {
       });
     }
 
-    return cachedPrices;
+    return resultMap;
   }
 
   /**
