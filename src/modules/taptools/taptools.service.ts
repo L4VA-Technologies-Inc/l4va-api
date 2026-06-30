@@ -8,6 +8,7 @@ import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
+import { FTPricingStrategyService } from '../pricing-strategy/ft-pricing-strategy.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 import { VyfiService } from '../vyfi/vyfi.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
@@ -117,6 +118,7 @@ export class TaptoolsService {
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly dexHunterPricingService: DexHunterPricingService,
+    private readonly ftPricingStrategy: FTPricingStrategyService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly alertsService: AlertsService,
     private readonly tapToolsClient: TapToolsClient,
@@ -694,7 +696,7 @@ export class TaptoolsService {
           this.logger.warn(`WayUp floor price failed for NFT ${policyId}: ${error.message}`);
         }
       } else {
-        const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(`${policyId}${assetName}`);
+        const tokenPriceAda = await this.ftPricingStrategy.getTokenPrice(`${policyId}${assetName}`);
 
         if (tokenPriceAda !== null && tokenPriceAda > 0) {
           // Apply deviation protection for FT prices
@@ -893,11 +895,9 @@ export class TaptoolsService {
                 }
               }
             } else {
-              // Get DEX price from DexHunter for FTs
+              // Get DEX price from configured FT pricing strategy
               try {
-                const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(
-                  `${asset.policy_id}${asset.asset_id}`
-                );
+                const tokenPriceAda = await this.ftPricingStrategy.getTokenPrice(`${asset.policy_id}${asset.asset_id}`);
                 priceAda = tokenPriceAda !== null && tokenPriceAda > 0 ? tokenPriceAda : null;
               } catch (error) {
                 this.logger.debug(`Failed to get DEX price for FT ${asset.policy_id}: ${error.message}`);
@@ -1830,11 +1830,11 @@ export class TaptoolsService {
       if (isTokenBAda) {
         tokenBPrice = 1;
       } else {
-        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
+        tokenBPrice = (await this.ftPricingStrategy.getTokenPrice(tokenBUnit)) || 0;
       }
 
       // TokenA price (could be another LP token!)
-      tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
+      tokenAPrice = (await this.ftPricingStrategy.getTokenPrice(tokenAUnit)) || 0;
 
       // Calculate TVL
       // VyFi returns quantities in base units, normalize using actual decimals from Blockfrost
@@ -1896,13 +1896,13 @@ export class TaptoolsService {
       if (poolData.tokenATicker === 'ADA' || !poolData.tokenA || poolData.tokenA === '') {
         tokenAPrice = 1;
       } else {
-        tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenA)) || 0;
+        tokenAPrice = (await this.ftPricingStrategy.getTokenPrice(poolData.tokenA)) || 0;
       }
 
       if (poolData.tokenBTicker === 'ADA' || !poolData.tokenB || poolData.tokenB === '') {
         tokenBPrice = 1;
       } else {
-        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenB)) || 0;
+        tokenBPrice = (await this.ftPricingStrategy.getTokenPrice(poolData.tokenB)) || 0;
       }
 
       const tvl = poolData.tokenALocked * tokenAPrice + poolData.tokenBLocked * tokenBPrice;
