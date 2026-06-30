@@ -467,8 +467,14 @@ export class TapToolsClient {
 
       const pools: VyFiPoolRaw[] = await resp.json();
 
-      // Find the pool with matching unitsPair
-      const pool = pools.find(p => p.unitsPair === unitsPair);
+      // Find the pool with matching unitsPair (VyFi responses may normalize to ADA-first order)
+      const candidates = new Set([
+        unitsPair,
+        `${tokenB}:${tokenA}`,
+        `lovelace:${assetTokenUnit}`,
+        `${assetTokenUnit}:lovelace`,
+      ]);
+      const pool = pools.find(p => p.unitsPair && candidates.has(p.unitsPair));
 
       if (!pool) {
         this.logger.debug(`No VyFi pool found with unitsPair: ${unitsPair}`);
