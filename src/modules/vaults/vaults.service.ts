@@ -1238,9 +1238,10 @@ export class VaultsService {
         : undefined,
       acquireExpansionNoMax,
       // Protocol fees
-      protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
-      protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
-      protocolContributorsFeeUsd: (this.systemSettingsService.protocolContributorsFee / 1_000_000) * adaPrice,
+      // Per-asset rate: total fee = assetCount × protocolFeePerAssetLovelace
+      protocolFeePerAssetLovelace: this.systemSettingsService.protocolFeePerAsset,
+      protocolFeePerAssetAda: this.systemSettingsService.protocolFeePerAsset / 1_000_000,
+      protocolFeePerAssetUsd: (this.systemSettingsService.protocolFeePerAsset / 1_000_000) * adaPrice,
       protocolAcquiresFeeLovelace: this.systemSettingsService.protocolAcquiresFee,
       protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
       protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,

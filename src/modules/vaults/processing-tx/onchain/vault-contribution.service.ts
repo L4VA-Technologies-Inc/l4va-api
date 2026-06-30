@@ -25,6 +25,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ContributionInput } from '@/modules/distribution/distribution.types';
+import { sumContributionQuantitiesForLimits } from '@/modules/vaults/phase-management/contribution/contribution-asset.utils';
 import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -399,15 +400,7 @@ export class VaultContributionService {
       contributingAssets = (transaction.metadata as any).assets || [];
     }
 
-    // Count actual asset quantities: NFTs = 1 each, FTs = raw quantity converted to decimal
-    const contributingAssetCount = contributingAssets.reduce((sum, asset: any) => {
-      const rawQuantity = Number(asset?.quantity);
-      // For FTs, convert raw to decimal for counting
-      const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
-      const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-      const assetCount = decimalQuantity && !Number.isNaN(decimalQuantity) ? decimalQuantity : 1;
-      return sum + assetCount;
-    }, 0);
+    const contributingAssetCount = sumContributionQuantitiesForLimits(contributingAssets);
 
     if (vault.vault_status === VaultStatus.expansion) {
       await this.validateExpansionLimits(transaction.id, transaction.vault_id, contributingAssetCount);

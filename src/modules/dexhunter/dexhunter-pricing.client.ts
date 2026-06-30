@@ -1,15 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type Redis from 'ioredis';
 import NodeCache from 'node-cache';
 
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 
 /**
  * DexHunter API client for token pricing and OHLCV data
  * Centralized client for DexHunter token price lookups and chart data
  *
- * Caches token price results for 5 minutes and OHLCV data for 5 minutes to reduce API calls.
- * Designed to support future Redis caching migration without breaking consumers.
+ * Price caching: Redis with 10-minute TTL (supports VyFi bulk refresh)
+ * OHLCV caching: node-cache with 5-minute TTL (chart data)
  */
 @Injectable()
 export class DexHunterPricingClient {
@@ -20,29 +22,25 @@ export class DexHunterPricingClient {
   private readonly dexHunterChartsUrl: string;
 
   /**
-   * Cache for token price results
-   * TTL: 5 minutes (300 seconds) - matches existing pricing cache strategy
+   * Redis TTL for token prices (10 minutes = 600 seconds)
+   * Matches VyFi bulk refresh interval
    */
-  private readonly priceCache: NodeCache;
+  private readonly PRICE_TTL_SECONDS = 600;
 
   /**
    * Cache for OHLCV (price history) results
-   * TTL: 5 minutes (300 seconds) - matches pricing cache strategy
+   * TTL: 5 minutes (300 seconds)
    */
   private readonly ohlcvCache: NodeCache;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
+  ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
     this.dexHunterChartsUrl = 'https://charts.dhapi.io';
-
-    // Initialize price cache with 5-minute TTL
-    this.priceCache = new NodeCache({
-      stdTTL: 300, // 5 minutes in seconds
-      checkperiod: 60, // Check for expired keys every minute
-      useClones: false, // Don't clone objects for better performance
-    });
 
     // Initialize OHLCV cache with 5-minute TTL
     this.ohlcvCache = new NodeCache({
@@ -50,6 +48,112 @@ export class DexHunterPricingClient {
       checkperiod: 60, // Check for expired keys every minute
       useClones: false, // Don't clone objects for better performance
     });
+  }
+
+  /**
+   * Get token price from Redis cache
+   * @param tokenUnit - Full token unit (policyId + assetName)
+   * @returns Price in ADA or null if not cached
+   */
+  async getRedisPrice(tokenUnit: string): Promise<number | null> {
+    try {
+      const key = `vyfi_price:${tokenUnit}`;
+      const value = await this.redis.get(key);
+      if (!value) return null;
+
+      // Parse format: {priceAda}:{timestamp}
+      const [priceStr] = value.split(':');
+      const price = parseFloat(priceStr);
+      return isNaN(price) ? null : price;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis get price failed for ${tokenUnit.slice(0, 10)}...: ${errorMessage}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get multiple token prices from Redis cache using pipeline
+   * @param tokenUnits - Array of token units
+   * @returns Map of tokenUnit -> price in ADA (null if not cached)
+   */
+  async getRedisPrices(tokenUnits: string[]): Promise<Map<string, number | null>> {
+    const resultMap = new Map<string, number | null>();
+    if (tokenUnits.length === 0) return resultMap;
+
+    try {
+      const pipeline = this.redis.pipeline();
+      tokenUnits.forEach(unit => {
+        pipeline.get(`vyfi_price:${unit}`);
+      });
+
+      const results = await pipeline.exec();
+      if (!results) {
+        // If pipeline returns null, set all tokens to null to trigger fallback
+        tokenUnits.forEach(unit => resultMap.set(unit, null));
+        return resultMap;
+      }
+
+      results.forEach(([err, value], index) => {
+        const tokenUnit = tokenUnits[index];
+        if (err || !value) {
+          resultMap.set(tokenUnit, null);
+          return;
+        }
+
+        const [priceStr] = (value as string).split(':');
+        const price = parseFloat(priceStr);
+        resultMap.set(tokenUnit, isNaN(price) ? null : price);
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis batch get prices failed: ${errorMessage}`);
+      tokenUnits.forEach(unit => resultMap.set(unit, null));
+    }
+
+    return resultMap;
+  }
+
+  /**
+   * Set token price in Redis cache
+   * @param tokenUnit - Full token unit
+   * @param priceAda - Price in ADA
+   */
+  async setRedisPrice(tokenUnit: string, priceAda: number): Promise<void> {
+    try {
+      const key = `vyfi_price:${tokenUnit}`;
+      const timestamp = Math.floor(Date.now() / 1000);
+      const value = `${priceAda}:${timestamp}`;
+      await this.redis.setex(key, this.PRICE_TTL_SECONDS, value);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis set price failed for ${tokenUnit.slice(0, 10)}...: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Set multiple token prices in Redis using pipeline
+   * @param pricesMap - Map of tokenUnit -> price in ADA
+   */
+  async setRedisPrices(pricesMap: Map<string, number>): Promise<void> {
+    if (pricesMap.size === 0) return;
+
+    try {
+      const pipeline = this.redis.pipeline();
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      pricesMap.forEach((priceAda, tokenUnit) => {
+        const key = `vyfi_price:${tokenUnit}`;
+        const value = `${priceAda}:${timestamp}`;
+        pipeline.setex(key, this.PRICE_TTL_SECONDS, value);
+      });
+
+      await pipeline.exec();
+      this.logger.debug(`Bulk cached ${pricesMap.size} token prices in Redis`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis batch set prices failed: ${errorMessage}`);
+    }
   }
 
   /**
@@ -97,25 +201,21 @@ export class DexHunterPricingClient {
       return resultMap;
     }
 
-    const priceMap = new Map<string, number | null>();
+    // Check Redis cache first
+    const cachedPrices = await this.getRedisPrices(tokenIds);
     const tokensToFetch: string[] = [];
-    const cacheHits: string[] = [];
 
-    // Check cache first for all tokens
-    tokenIds.forEach(tokenId => {
-      const cacheKey = `token_price_${tokenId}`;
-      const cached = this.priceCache.get<number | null>(cacheKey);
-      if (cached !== undefined) {
-        priceMap.set(tokenId, cached);
-        cacheHits.push(tokenId);
+    cachedPrices.forEach((price, tokenId) => {
+      if (price !== null) {
+        cachedPrices.set(tokenId, price);
       } else {
         tokensToFetch.push(tokenId);
       }
     });
 
-    // If all tokens found in cache, return early
+    // If all tokens found in Redis cache, return early
     if (tokensToFetch.length === 0) {
-      return priceMap;
+      return cachedPrices;
     }
 
     this.logger.log(`Fetching ${tokensToFetch.length} token prices from DexHunter API`);
@@ -166,14 +266,18 @@ export class DexHunterPricingClient {
         })
       );
 
-      // Map results and cache
+      // Map results and cache in Redis
       results.forEach(({ tokenId, price }) => {
-        priceMap.set(tokenId, price);
-        this.priceCache.set(`token_price_${tokenId}`, price);
+        cachedPrices.set(tokenId, price);
+        if (price !== null) {
+          this.setRedisPrice(tokenId, price).catch(err =>
+            this.logger.error(`Failed to cache price for ${tokenId.slice(0, 8)}...: ${err.message}`)
+          );
+        }
       });
     }
 
-    return priceMap;
+    return cachedPrices;
   }
 
   /**
@@ -315,38 +419,91 @@ export class DexHunterPricingClient {
   }
 
   /**
+   * Delete Redis keys by pattern using SCAN (memory-efficient, non-blocking)
+   * Deletes keys while scanning to avoid collecting all keys in memory
+   * @param pattern - Redis key pattern to match
+   * @returns Number of keys deleted
+   */
+  private async deleteRedisKeysByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 1000);
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        deleted += keys.length;
+        // UNLINK is better than DEL because it deletes asynchronously
+        await this.redis.unlink(...keys);
+      }
+    } while (cursor !== '0');
+    return deleted;
+  }
+
+  /**
+   * Count Redis keys by pattern using SCAN (non-blocking)
+   * @param pattern - Redis key pattern to match
+   * @returns Number of keys matching the pattern
+   */
+  private async countRedisKeysByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let count = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 1000);
+      cursor = nextCursor;
+      count += keys.length;
+    } while (cursor !== '0');
+    return count;
+  }
+
+  /**
    * Clear all caches (useful for testing or manual refresh)
    */
-  clearCache(): void {
-    const priceSize = this.priceCache.keys().length;
-    const ohlcvSize = this.ohlcvCache.keys().length;
-    this.priceCache.flushAll();
-    this.ohlcvCache.flushAll();
-    this.logger.log(`Cleared caches (price: ${priceSize}, OHLCV: ${ohlcvSize} entries)`);
+  async clearCache(): Promise<void> {
+    try {
+      // Clear Redis price cache using SCAN + UNLINK
+      const deletedPriceKeys = await this.deleteRedisKeysByPattern('vyfi_price:*');
+
+      // Clear OHLCV cache
+      const ohlcvSize = this.ohlcvCache.keys().length;
+      this.ohlcvCache.flushAll();
+
+      this.logger.log(`Cleared caches (Redis price keys: ${deletedPriceKeys}, OHLCV: ${ohlcvSize} entries)`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to clear caches: ${errorMessage}`);
+    }
   }
 
   /**
    * Get cache statistics (useful for monitoring)
    */
-  getCacheStats(): {
-    price: { size: number; hits: number; misses: number; keys: number };
+  async getCacheStats(): Promise<{
+    price: { size: number };
     ohlcv: { size: number; hits: number; misses: number; keys: number };
-  } {
-    const priceStats = this.priceCache.getStats();
-    const ohlcvStats = this.ohlcvCache.getStats();
-    return {
-      price: {
-        size: this.priceCache.keys().length,
-        hits: priceStats.hits,
-        misses: priceStats.misses,
-        keys: priceStats.keys,
-      },
-      ohlcv: {
-        size: this.ohlcvCache.keys().length,
-        hits: ohlcvStats.hits,
-        misses: ohlcvStats.misses,
-        keys: ohlcvStats.keys,
-      },
-    };
+  }> {
+    try {
+      // Use SCAN to count keys instead of KEYS (non-blocking)
+      const priceKeyCount = await this.countRedisKeysByPattern('vyfi_price:*');
+      const ohlcvStats = this.ohlcvCache.getStats();
+
+      return {
+        price: {
+          size: priceKeyCount,
+        },
+        ohlcv: {
+          size: this.ohlcvCache.keys().length,
+          hits: ohlcvStats.hits,
+          misses: ohlcvStats.misses,
+          keys: ohlcvStats.keys,
+        },
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to get cache stats: ${errorMessage}`);
+      return {
+        price: { size: 0 },
+        ohlcv: { size: 0, hits: 0, misses: 0, keys: 0 },
+      };
+    }
   }
 }

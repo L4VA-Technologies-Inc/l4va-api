@@ -13,6 +13,8 @@ export interface SystemSettingsData {
   vlrm_creator_fee_enabled: boolean;
   protocol_contributors_fee: number;
   protocol_flat_fee: number;
+  // Per-asset contribution fee: charged per NFT or per FT type (quantity ignored)
+  protocol_fee_per_asset: number;
   lp_recommended_min_liquidity: number;
   max_acquire_amount_ada: number;
   auto_create_treasury_wallets: boolean;
@@ -51,6 +53,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_acquires_fee: 5000000,
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
+  protocol_fee_per_asset: 2_000_000, // 2 ADA per asset entry (NFT or FT type, qty ignored)
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
@@ -162,6 +165,12 @@ export class SystemSettingsService implements OnModuleInit {
 
   get protocolFlatFee(): number {
     return this.settings.protocol_enabled ? this.settings.protocol_flat_fee : 0;
+  }
+
+  get protocolFeePerAsset(): number {
+    return this.settings.protocol_enabled
+      ? (this.settings.protocol_fee_per_asset ?? DEFAULT_SETTINGS.protocol_fee_per_asset)
+      : 0;
   }
 
   get lpRecommendedMinLiquidity(): number {

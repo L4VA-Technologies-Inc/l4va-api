@@ -13,4 +13,6 @@ export interface TapToolsTokenPoolDto {
   tokenB: string | null;
   tokenBLocked: number;
   tokenBTicker: string;
+  /** LP token total supply from Nexus/VyFi APIs (null if unavailable) */
+  lpTotalSupply: number | null;
 }

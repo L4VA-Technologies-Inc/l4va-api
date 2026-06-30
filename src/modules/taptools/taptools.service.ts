@@ -419,7 +419,7 @@ export class TaptoolsService {
 
       if (character) {
         // Try to get dynamic price from TapTools first
-        const traitPrices = await this.tapToolsClient.getTraitPrices(policyId);
+        const traitPrices = null;
 
         if (traitPrices && traitPrices.Character && traitPrices.Character[character]) {
           return traitPrices.Character[character];
@@ -1591,27 +1591,12 @@ export class TaptoolsService {
    * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
    * @returns Total supply or null
    */
-  private async fetchLpTokenTotalSupply(lpTokenUnit: string): Promise<number | null> {
-    try {
-      const assetInfo = await this.blockfrost.assetsById(lpTokenUnit);
-
-      if (assetInfo && assetInfo.quantity) {
-        return parseInt(assetInfo.quantity);
-      }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(`Failed to fetch LP token metadata from Blockfrost: ${error.message}`);
-      return null;
-    }
-  }
-
   /**
    * Calculate LP token price from VyFi pool data
-   * Used as fallback when TapTools doesn't have the pool
+   * Uses lpQuantity from VyFi API directly (no Blockfrost call needed)
    * @param tokenAUnit - TokenA unit (hex)
    * @param tokenBUnit - TokenB unit (hex or empty for ADA)
-   * @param lpTokenUnit - Full LP token unit for supply lookup
+   * @param lpTokenUnit - Full LP token unit for logging only
    * @returns LP token price in ADA per normalized unit
    */
   private async calculateLpTokenPriceFromVyFi(
@@ -1634,7 +1619,8 @@ export class TaptoolsService {
         return null;
       }
 
-      const totalSupply = await this.fetchLpTokenTotalSupply(lpTokenUnit);
+      // Use lpQuantity from VyFi API directly (already in base units)
+      const totalSupply = poolData.lpQuantity;
       if (!totalSupply || totalSupply <= 0 || !Number.isSafeInteger(totalSupply)) {
         this.logger.warn(`Invalid/unsafe total supply for LP token ${lpTokenUnit}: ${totalSupply}`);
         return null;
@@ -1708,7 +1694,8 @@ export class TaptoolsService {
    * Formula: LP Token Price = TVL / Total LP Token Supply
    * TVL = (tokenALocked * tokenAPrice) + (tokenBLocked * tokenBPrice)
    *
-   * Falls back to VyFi API if TapTools doesn't have the pool data
+   * Uses lpTotalSupply from Nexus API directly (no Blockfrost call needed)
+   * Falls back to VyFi API if pool ID format indicates VyFi pool
    *
    * @param onchainID - Pool onchain ID (can be VyFi onchain ID format)
    * @param lpTokenUnit - Optional: Full LP token unit to enable VyFi fallback
@@ -1728,9 +1715,12 @@ export class TaptoolsService {
         return null;
       }
 
-      const totalSupply = await this.fetchLpTokenTotalSupply(poolData.lpTokenUnit);
-      if (!totalSupply) {
-        this.logger.warn(`No total supply found for LP token ${poolData.lpTokenUnit}`);
+      // Use lpTotalSupply from Nexus API directly (already fetched with pool data)
+      const totalSupply = poolData.lpTotalSupply;
+      if (!totalSupply || totalSupply <= 0) {
+        this.logger.warn(
+          `No valid total supply in pool data for LP token ${poolData.lpTokenUnit} (onchainID: ${onchainID})`
+        );
         return null;
       }
 
