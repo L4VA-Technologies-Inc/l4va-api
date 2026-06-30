@@ -424,17 +424,37 @@ export class TapToolsClient {
    */
   private async fetchVyFiPoolByUnitsPair(unitsPair: string): Promise<TapToolsTokenPoolDto | null> {
     try {
-      // Parse unitsPair format: "lovelace:tokenUnit" or "tokenUnit:lovelace"
-      const [tokenA, tokenB] = unitsPair.split(':');
+      // Parse unitsPair format:
+      // - "lovelace:tokenUnit" (explicit ADA first)
+      // - "tokenUnit:lovelace" (explicit ADA second)
+      // - ":tokenUnit" (implicit ADA first - empty string = lovelace)
+      // - "tokenUnit:" (implicit ADA second - empty string = lovelace)
+      const parts = unitsPair.split(':');
 
-      if (!tokenA || !tokenB) {
-        this.logger.warn(`Invalid unitsPair format: ${unitsPair}`);
+      if (parts.length !== 2) {
+        this.logger.warn(`Invalid unitsPair format (must contain exactly one colon): ${unitsPair}`);
         return null;
       }
 
-      // Determine which token is ADA (lovelace) and which is the asset
-      const isTokenALovelace = tokenA === 'lovelace';
+      const [tokenA, tokenB] = parts;
+
+      // Determine which token is ADA (lovelace can be explicit or implicit via empty string)
+      const isTokenALovelace = tokenA === 'lovelace' || tokenA === '';
+      const isTokenBLovelace = tokenB === 'lovelace' || tokenB === '';
+
+      // One side must be lovelace/empty (ADA)
+      if (!isTokenALovelace && !isTokenBLovelace) {
+        this.logger.warn(`Invalid unitsPair: neither side is ADA/lovelace: ${unitsPair}`);
+        return null;
+      }
+
+      // Extract the asset token (the non-ADA side)
       const assetTokenUnit = isTokenALovelace ? tokenB : tokenA;
+
+      if (!assetTokenUnit) {
+        this.logger.warn(`Invalid unitsPair: asset token is empty: ${unitsPair}`);
+        return null;
+      }
 
       // Query VyFi API (order matters: tokenAUnit is typically ADA)
       const url = `https://api-v3.vyfi.io/lp?networkId=${this.networkId}&tokenAUnit=lovelace&tokenBUnit=${assetTokenUnit}&v2=true`;
