@@ -951,11 +951,11 @@ export class TaptoolsService {
         this.logger.warn(
           `${rejectedUpdates.length} asset price updates exceeded deviation threshold and were skipped for manual review`
         );
-        await this.alertsService.sendAlert('asset_price_deviation_batch_exceeded', {
-          totalRejected: rejectedUpdates.length,
-          rejectedAssets: rejectedUpdates,
-          action: 'price_updates_rejected_manual_review_required',
-        });
+        // await this.alertsService.sendAlert('asset_price_deviation_batch_exceeded', {
+        //   totalRejected: rejectedUpdates.length,
+        //   rejectedAssets: rejectedUpdates,
+        //   action: 'price_updates_rejected_manual_review_required',
+        // });
       }
 
       // Calculate and return TVL for all affected vaults
