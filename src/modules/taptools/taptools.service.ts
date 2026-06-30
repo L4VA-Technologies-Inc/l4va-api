@@ -447,6 +447,7 @@ export class TaptoolsService {
    * 1. Custom price from customPriceMap (vault-specific overrides)
    * 2. Hardcoded testnet prices
    * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
+   *    WITH DEVIATION PROTECTION: Fresh API prices are checked against cached database prices
    *
    * @returns Promise with the asset value in ADA and USD
    */
@@ -505,6 +506,32 @@ export class TaptoolsService {
         };
       }
 
+      // Fetch cached price from database for deviation protection
+      let cachedPriceAda: number | null = null;
+      try {
+        const assetInDb = await this.assetRepository.findOne({
+          where: {
+            policy_id: policyId,
+            asset_id: assetName,
+            deleted: false,
+          },
+          select: ['dex_price', 'floor_price', 'type'],
+        });
+
+        if (assetInDb) {
+          cachedPriceAda =
+            assetInDb.type === AssetType.NFT
+              ? assetInDb.floor_price
+                ? Number(assetInDb.floor_price)
+                : null
+              : assetInDb.dex_price
+                ? Number(assetInDb.dex_price)
+                : null;
+        }
+      } catch (error) {
+        this.logger.debug(`Could not fetch cached price for ${policyId}.${assetName}: ${error.message}`);
+      }
+
       // Route to appropriate API based on asset type
       if (isNFT) {
         // Relics of Magma - The Porta: Use WayUp floor price
@@ -512,6 +539,39 @@ export class TaptoolsService {
           try {
             const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
             if (traitPrice !== null) {
+              // Apply deviation protection
+              const updateDecision = await this.shouldAcceptPriceUpdate({
+                policyId,
+                assetId: assetName,
+                isNFT: true,
+                previousPrice: cachedPriceAda,
+                nextPrice: traitPrice,
+                source: 'api',
+              });
+
+              if (!updateDecision.accepted) {
+                // Price update rejected - use cached price if available
+                if (cachedPriceAda !== null && cachedPriceAda > 0) {
+                  this.logger.warn(
+                    `Using cached price ${cachedPriceAda} ADA for Porta NFT ${policyId}.${assetName} instead of rejected fresh price ${traitPrice} ADA`
+                  );
+                  const result = {
+                    priceAda: cachedPriceAda,
+                    priceUsd: cachedPriceAda * adaPrice,
+                  };
+                  this.cache.set(cacheKey, result);
+                  return result;
+                } else {
+                  // No cached price - use fallback
+                  const result = {
+                    priceAda: this.RELICS_PORTA_PRICE_FALLBACK,
+                    priceUsd: this.RELICS_PORTA_PRICE_FALLBACK * adaPrice,
+                  };
+                  this.cache.set(cacheKey, result);
+                  return result;
+                }
+              }
+
               const result = {
                 priceAda: traitPrice,
                 priceUsd: traitPrice * adaPrice,
@@ -538,6 +598,40 @@ export class TaptoolsService {
             // Pass the readable name for WayUp character trait search
             const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
             if (traitPrice !== null) {
+              // Apply deviation protection
+              const updateDecision = await this.shouldAcceptPriceUpdate({
+                policyId,
+                assetId: assetName,
+                isNFT: true,
+                previousPrice: cachedPriceAda,
+                nextPrice: traitPrice,
+                source: 'api',
+              });
+
+              if (!updateDecision.accepted) {
+                // Price update rejected - use cached price if available
+                if (cachedPriceAda !== null && cachedPriceAda > 0) {
+                  this.logger.warn(
+                    `Using cached price ${cachedPriceAda} ADA for Vita NFT ${policyId}.${assetName} instead of rejected fresh price ${traitPrice} ADA`
+                  );
+                  const result = {
+                    priceAda: cachedPriceAda,
+                    priceUsd: cachedPriceAda * adaPrice,
+                  };
+                  this.cache.set(cacheKey, result);
+                  return result;
+                } else {
+                  // No cached price - use fallback
+                  const fallbackPrice = this.RELICS_CHARACTER_PRICES_FALLBACK.Balaena;
+                  const result = {
+                    priceAda: fallbackPrice,
+                    priceUsd: fallbackPrice * adaPrice,
+                  };
+                  this.cache.set(cacheKey, result);
+                  return result;
+                }
+              }
+
               const result = {
                 priceAda: traitPrice,
                 priceUsd: traitPrice * adaPrice,
@@ -562,6 +656,37 @@ export class TaptoolsService {
         try {
           const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
           if (floorPriceAda > 0) {
+            // Apply deviation protection for NFT prices
+            const updateDecision = await this.shouldAcceptPriceUpdate({
+              policyId,
+              assetId: assetName,
+              isNFT: true,
+              previousPrice: cachedPriceAda,
+              nextPrice: floorPriceAda,
+              source: 'api',
+            });
+
+            if (!updateDecision.accepted) {
+              // Price update rejected - use cached price if available
+              if (cachedPriceAda !== null && cachedPriceAda > 0) {
+                this.logger.warn(
+                  `Using cached price ${cachedPriceAda} ADA for NFT ${policyId}.${assetName} instead of rejected fresh price ${floorPriceAda} ADA`
+                );
+                const result = {
+                  priceAda: cachedPriceAda,
+                  priceUsd: cachedPriceAda * adaPrice,
+                };
+                this.cache.set(cacheKey, result);
+                return result;
+              } else {
+                // No cached price - return 0 to prevent using manipulated price
+                this.logger.warn(
+                  `No cached price available for NFT ${policyId}.${assetName}, rejecting fresh price and returning 0`
+                );
+                return { priceAda: 0, priceUsd: 0 };
+              }
+            }
+
             this.cache.set(cacheKey, { priceAda: floorPriceAda, priceUsd: floorPriceAda * adaPrice });
             return { priceAda: floorPriceAda, priceUsd: floorPriceAda * adaPrice };
           }
@@ -572,6 +697,37 @@ export class TaptoolsService {
         const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(`${policyId}${assetName}`);
 
         if (tokenPriceAda !== null && tokenPriceAda > 0) {
+          // Apply deviation protection for FT prices
+          const updateDecision = await this.shouldAcceptPriceUpdate({
+            policyId,
+            assetId: assetName,
+            isNFT: false,
+            previousPrice: cachedPriceAda,
+            nextPrice: tokenPriceAda,
+            source: 'api',
+          });
+
+          if (!updateDecision.accepted) {
+            // Price update rejected - use cached price if available
+            if (cachedPriceAda !== null && cachedPriceAda > 0) {
+              this.logger.warn(
+                `Using cached price ${cachedPriceAda} ADA for FT ${policyId}.${assetName} instead of rejected fresh price ${tokenPriceAda} ADA`
+              );
+              const result = {
+                priceAda: cachedPriceAda,
+                priceUsd: cachedPriceAda * adaPrice,
+              };
+              this.cache.set(cacheKey, result);
+              return result;
+            } else {
+              // No cached price - return 0 to prevent using manipulated price
+              this.logger.warn(
+                `No cached price available for FT ${policyId}.${assetName}, rejecting fresh price and returning 0`
+              );
+              return { priceAda: 0, priceUsd: 0 };
+            }
+          }
+
           const result = {
             priceAda: tokenPriceAda,
             priceUsd: tokenPriceAda * adaPrice,
@@ -583,7 +739,17 @@ export class TaptoolsService {
         this.logger.warn(`DexHunter price not available for FT ${policyId}`);
       }
 
-      // Return fallback price if no price found
+      // Return cached price if available, otherwise 0
+      if (cachedPriceAda !== null && cachedPriceAda > 0) {
+        this.logger.debug(
+          `No fresh price available for ${policyId}.${assetName}, using cached price ${cachedPriceAda} ADA`
+        );
+        return {
+          priceAda: cachedPriceAda,
+          priceUsd: cachedPriceAda * adaPrice,
+        };
+      }
+
       return { priceAda: 0, priceUsd: 0 };
     } catch (error) {
       this.logger.error(`Failed to get asset value for ${policyId}:`, error.message);
