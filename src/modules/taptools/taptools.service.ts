@@ -1964,9 +1964,9 @@ export class TaptoolsService {
             if (lpAsset) {
               const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
 
-              // this.logger.debug(
-              //   `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
-              // );
+              this.logger.debug(
+                `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
+              );
 
               lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
             } else {
