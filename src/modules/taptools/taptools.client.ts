@@ -18,6 +18,7 @@ interface VyFiPoolRaw {
   orderValidatorUtxoAddress?: string; // Order validator address (used by DexHunter)
   tokenAQuantity?: number;
   tokenBQuantity?: number;
+  lpQuantity?: number; // LP token total supply
   json?: string; // stringified VyFiPoolConfig
 }
 
@@ -209,19 +210,27 @@ export class TapToolsClient {
       const hasVyFi = dhPools.some(p => p.dex_name.toLowerCase().includes('vyfi'));
       const vyfiPools = hasVyFi ? await this.fetchVyFiPoolsForToken(tokenUnit) : [];
 
-      // Step 3: Map to TapToolsTokenPoolDto with LP token resolution
+      // Step 3: Map to TapToolsTokenPoolDto with LP token resolution and supply
       const result: TapToolsTokenPoolDto[] = await Promise.all(
         dhPools.map(async pool => {
           const dex = pool.dex_name.toLowerCase();
           let lpTokenUnit = '';
+          let lpTotalSupply: number | null = null;
 
           if (dex.includes('vyfi') && vyfiPools.length > 0) {
             // VyFi pools: use VyFi API (Nexus returns empty lpUnit)
             const match = this.findVyFiPool(vyfiPools, pool.pool_id);
-            lpTokenUnit = match ? this.extractVyFiLpTokenUnit(match) : '';
+            if (match) {
+              lpTokenUnit = this.extractVyFiLpTokenUnit(match);
+              lpTotalSupply = match.lpQuantity ?? null;
+            }
           } else {
             // Other DEXs: use Nexus API
-            lpTokenUnit = await this.fetchLpTokenFromNexus(pool.dex_name, pool.pool_id);
+            const nexusData = await this.fetchPoolDataFromNexus(pool.dex_name, pool.pool_id);
+            if (nexusData) {
+              lpTokenUnit = nexusData.lpTokenUnit;
+              lpTotalSupply = nexusData.lpTotalSupply;
+            }
           }
 
           return {
@@ -234,6 +243,7 @@ export class TapToolsClient {
             tokenB: '', // ADA
             tokenBLocked: pool.token_1_amount, // already in ADA from DexHunter API
             tokenBTicker: 'ADA',
+            lpTotalSupply,
           };
         })
       );
@@ -247,22 +257,6 @@ export class TapToolsClient {
       this.poolCache.set(cacheKey, []);
       return [];
     }
-  }
-
-  /**
-   * Get pool details by onchain ID that was from Taptools API
-   * Currently doesnt work
-   * @param onchainID - Pool onchain identifier (56-char hex script hash)
-   */
-  async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
-    if (!this.isMainnet) return null;
-    const cacheKey = `onchainID_${onchainID}`;
-    const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    // TapTools disabled — return null
-    this.poolCache.set(cacheKey, null);
-    return null;
   }
 
   // ─── Pool resolution helpers ─────────────────────────────────────────────────
@@ -307,26 +301,32 @@ export class TapToolsClient {
   }
 
   /**
-   * Fetch LP token unit from Nexus API for non-VyFi pools
+   * Fetch LP token unit and total supply from Nexus API for non-VyFi pools
    * @param dexName DEX name from DexHunter (e.g., "MINSWAPV2", "SUNDAESWAPV3")
    * @param poolId Pool ID from DexHunter (raw hash)
-   * @returns Concatenated LP token unit (policyId + assetName) or empty string
+   * @returns Object with lpTokenUnit and lpTotalSupply, or null if unavailable
    */
-  private async fetchLpTokenFromNexus(dexName: string, poolId: string): Promise<string> {
+  private async fetchPoolDataFromNexus(
+    dexName: string,
+    poolId: string
+  ): Promise<{ lpTokenUnit: string; lpTotalSupply: number | null } | null> {
     try {
       const nexusPoolId = this.normalizePoolId(dexName, poolId);
       const pool = await this.nexusClient.getPoolById(nexusPoolId);
 
       if (!pool || !pool.lpPolicyId || !pool.lpAssetName) {
-        return '';
+        return null;
       }
 
-      return `${pool.lpPolicyId}${pool.lpAssetName}`;
+      return {
+        lpTokenUnit: `${pool.lpPolicyId}${pool.lpAssetName}`,
+        lpTotalSupply: pool.lpTotalSupply ?? null,
+      };
     } catch (error) {
       this.logger.warn(
-        `Failed to fetch LP token from Nexus for ${dexName}/${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to fetch pool data from Nexus for ${dexName}/${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
       );
-      return '';
+      return null;
     }
   }
 
@@ -356,6 +356,53 @@ export class TapToolsClient {
 
     const normalized = dexMap[dexLower] || dexLower;
     return `${normalized}_${poolId}`;
+  }
+
+  /**
+   * Get pool data by onchain ID
+   * Attempts to fetch from Nexus API using the pool ID directly
+   * @param onchainID - Pool onchain ID (can be raw hash or Nexus-formatted ID)
+   * @returns Pool data with LP token unit and total supply, or null if not found
+   */
+  async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
+    if (!this.isMainnet) return null;
+
+    const cacheKey = `pool_${onchainID}`;
+    const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
+    if (cached !== undefined) return cached;
+
+    try {
+      // Try fetching from Nexus API directly
+      const pool = await this.nexusClient.getPoolById(onchainID);
+
+      if (!pool) {
+        this.poolCache.set(cacheKey, null);
+        return null;
+      }
+
+      // Convert Nexus pool to TapToolsTokenPoolDto format
+      const result: TapToolsTokenPoolDto = {
+        exchange: pool.dex || 'unknown',
+        lpTokenUnit: `${pool.lpPolicyId}${pool.lpAssetName}`,
+        onchainID: pool.poolId,
+        tokenA: `${pool.tokenAPolicyId}${pool.tokenAAssetName}`,
+        tokenALocked: pool.tokenAReserve,
+        tokenATicker: '',
+        tokenB: pool.tokenBPolicyId === '' ? '' : `${pool.tokenBPolicyId}${pool.tokenBAssetName}`,
+        tokenBLocked: pool.tokenBReserve,
+        tokenBTicker: pool.tokenBPolicyId === '' ? 'ADA' : '',
+        lpTotalSupply: pool.lpTotalSupply ?? null,
+      };
+
+      this.poolCache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to fetch pool by onchainID ${onchainID.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
+      );
+      this.poolCache.set(cacheKey, null);
+      return null;
+    }
   }
 
   /**
