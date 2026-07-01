@@ -233,8 +233,6 @@ export class DexHunterPricingClient {
       return resultMap;
     }
 
-    this.logger.log(`Fetching ${tokensToFetch.length} token prices from DexHunter API`);
-
     // DexHunter doesn't have batch endpoint - fetch with concurrency control
     const concurrencyLimit = 10;
     for (let i = 0; i < tokensToFetch.length; i += concurrencyLimit) {

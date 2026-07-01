@@ -189,7 +189,7 @@ export class TaptoolsService {
     }
 
     const minAssetPriceForDeviationCheckAda = this.systemSettingsService.priceMinAssetPriceForDeviationCheckAda;
-    if (previousPrice < minAssetPriceForDeviationCheckAda || nextPrice < minAssetPriceForDeviationCheckAda) {
+    if (previousPrice < minAssetPriceForDeviationCheckAda && nextPrice < minAssetPriceForDeviationCheckAda) {
       return { accepted: true };
     }
 
@@ -1804,14 +1804,18 @@ export class TaptoolsService {
       let tokenADecimals = 6; // Default to 6
       let tokenBDecimals = 6; // Default to 6 (ADA standard)
 
-      try {
-        const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
-        tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
-      } catch (error) {
-        this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
+      // TokenA decimals - skip API call if it's ADA (lovelace)
+      const isTokenAAda = tokenAUnit === 'lovelace';
+      if (!isTokenAAda) {
+        try {
+          const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
+          tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
+        } catch (error) {
+          this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
+        }
       }
 
-      // TokenB decimals
+      // TokenB decimals - skip API call if it's ADA (lovelace)
       const isTokenBAda = !tokenBUnit || tokenBUnit === '' || tokenBUnit === 'lovelace';
       if (!isTokenBAda) {
         try {
@@ -1964,15 +1968,10 @@ export class TaptoolsService {
             if (lpAsset) {
               const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
 
-              this.logger.debug(
-                `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
-              );
-
               lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
             } else {
-              this.logger.warn(
-                `VyFi LP token ${whitelistItem.policy_id} not found in vault ${vaultId} assets - cannot calculate price`
-              );
+              // Asset not in vault yet - skip silently (this is expected for whitelisted assets not yet deposited)
+              continue;
             }
           } else {
             // TapTools LP token: use onchainID directly
@@ -1983,7 +1982,10 @@ export class TaptoolsService {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
             // this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
           } else {
-            this.logger.warn(`Failed to calculate LP price for ${whitelistItem.policy_id}`);
+            // Skip logging if price calculation fails - asset may not be in vault yet
+            this.logger.debug(
+              `Failed to calculate LP price for ${whitelistItem.policy_id} - asset may not be deposited yet`
+            );
           }
         }
       }
