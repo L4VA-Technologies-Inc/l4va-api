@@ -186,7 +186,7 @@ export class DexHunterPricingService {
     const dexHunterPrice = dexHunterResult.get(tokenId);
 
     if (dexHunterPrice !== null && dexHunterPrice !== undefined && dexHunterPrice > 0) {
-      this.logger.debug(`DexHunter API price for ${tokenId.slice(0, 10)}...: ${dexHunterPrice} ADA`);
+      // this.logger.debug(`DexHunter API price for ${tokenId.slice(0, 10)}...: ${dexHunterPrice} ADA`);
       return dexHunterPrice;
     }
 

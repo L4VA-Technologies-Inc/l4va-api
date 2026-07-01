@@ -189,7 +189,7 @@ export class TaptoolsService {
     }
 
     const minAssetPriceForDeviationCheckAda = this.systemSettingsService.priceMinAssetPriceForDeviationCheckAda;
-    if (previousPrice < minAssetPriceForDeviationCheckAda || nextPrice < minAssetPriceForDeviationCheckAda) {
+    if (previousPrice < minAssetPriceForDeviationCheckAda && nextPrice < minAssetPriceForDeviationCheckAda) {
       return { accepted: true };
     }
 
@@ -1968,15 +1968,10 @@ export class TaptoolsService {
             if (lpAsset) {
               const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
 
-              this.logger.debug(
-                `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
-              );
-
               lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
             } else {
-              this.logger.warn(
-                `VyFi LP token ${whitelistItem.policy_id} not found in vault ${vaultId} assets - cannot calculate price`
-              );
+              // Asset not in vault yet - skip silently (this is expected for whitelisted assets not yet deposited)
+              continue;
             }
           } else {
             // TapTools LP token: use onchainID directly
@@ -1987,7 +1982,10 @@ export class TaptoolsService {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
             // this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
           } else {
-            this.logger.warn(`Failed to calculate LP price for ${whitelistItem.policy_id}`);
+            // Skip logging if price calculation fails - asset may not be in vault yet
+            this.logger.debug(
+              `Failed to calculate LP price for ${whitelistItem.policy_id} - asset may not be deposited yet`
+            );
           }
         }
       }
