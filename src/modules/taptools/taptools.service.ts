@@ -1804,14 +1804,18 @@ export class TaptoolsService {
       let tokenADecimals = 6; // Default to 6
       let tokenBDecimals = 6; // Default to 6 (ADA standard)
 
-      try {
-        const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
-        tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
-      } catch (error) {
-        this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
+      // TokenA decimals - skip API call if it's ADA (lovelace)
+      const isTokenAAda = tokenAUnit === 'lovelace';
+      if (!isTokenAAda) {
+        try {
+          const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
+          tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
+        } catch (error) {
+          this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
+        }
       }
 
-      // TokenB decimals
+      // TokenB decimals - skip API call if it's ADA (lovelace)
       const isTokenBAda = !tokenBUnit || tokenBUnit === '' || tokenBUnit === 'lovelace';
       if (!isTokenBAda) {
         try {
