@@ -1906,15 +1906,6 @@ export class TaptoolsService {
       const totalSupplyNormalized = totalSupply / Math.pow(10, lpTokenDecimals);
       const lpTokenPrice = tvl / totalSupplyNormalized;
 
-      this.logger.debug(
-        `VyFi LP price calculation for ${lpTokenUnit} - ` +
-          `tokenAPrice: ${tokenAPrice} ADA (decimals: ${tokenADecimals}), ` +
-          `tokenBPrice: ${tokenBPrice} ADA (decimals: ${tokenBDecimals}), ` +
-          `TVL: ${tvl.toFixed(2)} ADA, ` +
-          `LP supply: ${totalSupply} base units (${totalSupplyNormalized} normalized, decimals: ${lpTokenDecimals}), ` +
-          `LP price: ${lpTokenPrice.toFixed(10)} ADA per normalized LP token`
-      );
-
       return lpTokenPrice;
     } catch (error) {
       this.logger.error(`Failed to calculate LP price from VyFi: ${error.message}`, error);

@@ -38,8 +38,8 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService
   ) {
-    const baseIntervalMinutes = this.configService.get<number>('VAULT_TVL_UPDATE_BASE_MINUTES') ?? 1;
-    const jitterMinutes = this.configService.get<number>('VAULT_TVL_UPDATE_JITTER_MINUTES') ?? 1;
+    const baseIntervalMinutes = this.configService.get<number>('VAULT_TVL_UPDATE_BASE_MINUTES') ?? 30;
+    const jitterMinutes = this.configService.get<number>('VAULT_TVL_UPDATE_JITTER_MINUTES') ?? 5;
 
     this.baseIntervalMs = Math.max(1, baseIntervalMinutes) * 60 * 1000;
     this.jitterMs = Math.max(0, jitterMinutes) * 60 * 1000;
