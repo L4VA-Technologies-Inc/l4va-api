@@ -226,10 +226,17 @@ export class TapToolsClient {
 
     try {
       // Check Redis cache first
-      const cached = await this.redis.get(cacheKey);
-      if (cached) {
-        this.logger.debug(`Redis cache hit for pools: ${tokenUnit.slice(0, 10)}...`);
-        return JSON.parse(cached);
+      const cachedRaw = await this.redis.get(cacheKey);
+      if (cachedRaw) {
+        try {
+          const parsed = JSON.parse(cachedRaw);
+          this.logger.debug(`Redis cache hit for pools: ${tokenUnit.slice(0, 10)}...`);
+          return parsed;
+        } catch (error) {
+          // Invalid JSON in cache - delete it and treat as cache miss
+          this.logger.warn(`Invalid JSON in Redis cache for ${cacheKey}, deleting`);
+          await this.redis.del(cacheKey).catch(() => {});
+        }
       }
     } catch (redisError) {
       this.logger.warn(
@@ -522,13 +529,19 @@ export class TapToolsClient {
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
     if (!this.isMainnet) return null;
 
-    const cacheKey = `pool_${onchainID}`;
+    const cacheKey = `dexhunter:pool:${onchainID}`;
 
     // Check Redis cache first
     try {
-      const cached = await this.redis.get(cacheKey);
-      if (cached) {
-        return JSON.parse(cached);
+      const cachedRaw = await this.redis.get(cacheKey);
+      if (cachedRaw) {
+        try {
+          return JSON.parse(cachedRaw);
+        } catch (error) {
+          // Invalid JSON in cache - delete it and treat as cache miss
+          this.logger.warn(`Invalid JSON in Redis cache for ${cacheKey}, deleting`);
+          await this.redis.del(cacheKey).catch(() => {});
+        }
       }
     } catch (redisError) {
       this.logger.warn(
