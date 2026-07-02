@@ -708,9 +708,6 @@ export class TaptoolsService {
         if (tokenUnit === this.VLRM_TOKEN_UNIT) {
           const charli3Data = await this.charli3Client.getTokenCurrent(tokenUnit);
           tokenPriceAda = charli3Data?.current_price || null;
-          if (tokenPriceAda && tokenPriceAda > 0) {
-            this.logger.debug(`Using Charli3 price for VLRM: ${tokenPriceAda.toFixed(10)} ADA`);
-          }
         } else {
           tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(tokenUnit);
         }
@@ -920,9 +917,6 @@ export class TaptoolsService {
                 if (tokenUnit === this.VLRM_TOKEN_UNIT) {
                   const charli3Data = await this.charli3Client.getTokenCurrent(tokenUnit);
                   tokenPriceAda = charli3Data?.current_price || null;
-                  if (tokenPriceAda && tokenPriceAda > 0) {
-                    this.logger.debug(`Using Charli3 price for VLRM: ${tokenPriceAda.toFixed(10)} ADA`);
-                  }
                 } else {
                   tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(tokenUnit);
                 }
@@ -1875,9 +1869,6 @@ export class TaptoolsService {
         // Use Charli3 for VLRM
         const charli3Data = await this.charli3Client.getTokenCurrent(tokenBUnit);
         tokenBPrice = charli3Data?.current_price || 0;
-        if (tokenBPrice > 0) {
-          this.logger.debug(`Using Charli3 price for VLRM: ${tokenBPrice.toFixed(10)} ADA`);
-        }
       } else {
         tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
       }
@@ -1887,9 +1878,6 @@ export class TaptoolsService {
         // Use Charli3 for VLRM
         const charli3Data = await this.charli3Client.getTokenCurrent(tokenAUnit);
         tokenAPrice = charli3Data?.current_price || 0;
-        if (tokenAPrice > 0) {
-          this.logger.debug(`Using Charli3 price for VLRM: ${tokenAPrice.toFixed(10)} ADA`);
-        }
       } else {
         tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
       }
@@ -1957,9 +1945,6 @@ export class TaptoolsService {
         // Use Charli3 for VLRM
         const charli3Data = await this.charli3Client.getTokenCurrent(poolData.tokenA);
         tokenAPrice = charli3Data?.current_price || 0;
-        if (tokenAPrice > 0) {
-          this.logger.debug(`Using Charli3 price for VLRM: ${tokenAPrice.toFixed(10)} ADA`);
-        }
       } else {
         tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenA)) || 0;
       }
@@ -1970,9 +1955,6 @@ export class TaptoolsService {
         // Use Charli3 for VLRM
         const charli3Data = await this.charli3Client.getTokenCurrent(poolData.tokenB);
         tokenBPrice = charli3Data?.current_price || 0;
-        if (tokenBPrice > 0) {
-          this.logger.debug(`Using Charli3 price for VLRM: ${tokenBPrice.toFixed(10)} ADA`);
-        }
       } else {
         tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenB)) || 0;
       }
