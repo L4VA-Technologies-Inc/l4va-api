@@ -2360,7 +2360,7 @@ export class TaptoolsService {
 
   /**
    * Get LP pool data for a token
-   * Proxies to TapToolsClient.getTokenPools with all DEX fallback logic (DexHunter → Nexus → Minswap → VyFi)
+   * Proxies to TapToolsClient.getTokenPools (DexHunter pool list → VyFi for VyFi pools → Nexus for other DEXs, with Minswap API fallback when Nexus data is unavailable)
    * @param tokenUnit - Token unit (policyId + assetName in hex)
    * @returns Array of pool data with LP token units and total supply
    */
