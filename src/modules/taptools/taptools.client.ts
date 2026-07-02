@@ -1,6 +1,7 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
 import NodeCache from 'node-cache';
 
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
@@ -9,6 +10,7 @@ import { Charli3Client } from '@/modules/charli3/charli3.client';
 import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { NexusClient } from '@/modules/nexus/nexus.client';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 
 /** Minimal VyFi pool shape needed for LP token resolution */
 interface VyFiPoolRaw {
@@ -39,6 +41,49 @@ export interface DexHunterPoolItem {
   pool_fee: number;
 }
 
+/** Minswap API protocol types */
+type MinswapProtocol = 'Minswap' | 'MinswapV2' | 'MinswapStable';
+
+/** Minswap API asset metadata */
+interface MinswapAssetMetadata {
+  currency_symbol: string;
+  token_name: string;
+  is_verified: boolean;
+  metadata?: {
+    name: string;
+    url: string;
+    ticker: string;
+    decimals: number;
+    description: string;
+  };
+}
+
+/** Minswap /v1/pools/metrics response - single pool metrics */
+export interface MinswapPoolMetrics {
+  lp_asset: MinswapAssetMetadata;
+  type: MinswapProtocol;
+  asset_a: MinswapAssetMetadata;
+  asset_b: MinswapAssetMetadata;
+  liquidity_raw: number;
+  liquidity_a_raw: number;
+  liquidity_b_raw: number;
+  trading_fee_tier: number[];
+  trading_fee_apr?: number;
+  volume_24h: number;
+  volume_7d: number;
+  trading_fee_24h: number;
+  trading_fee_7d: number;
+  liquidity: number;
+  liquidity_a: number;
+  liquidity_b: number;
+}
+
+/** Minswap /v1/pools/metrics full response */
+export interface MinswapPoolMetricsResponse {
+  search_after?: string[];
+  pool_metrics: MinswapPoolMetrics[];
+}
+
 /**
  * TapTools API client — now a thin wrapper that routes to Charli3 (primary) and Anvil/DexHunter.
  * All direct TapTools HTTP calls have been removed.
@@ -50,6 +95,7 @@ export class TapToolsClient {
   private readonly blockfrost: BlockFrostAPI;
   private readonly dexHunterBaseUrl: string;
   private readonly dexHunterApiKey: string;
+  private readonly minswapBaseUrl: string;
   private readonly networkId: number; // 1 = mainnet, 0 = testnet (VyFi convention)
 
   /** Supply cache — 60 min TTL (total supply is immutable for most tokens) */
@@ -67,12 +113,6 @@ export class TapToolsClient {
   private readonly priceCache: NodeCache;
 
   /**
-   * Cache for token pool results
-   * TTL: 10 minutes (600 seconds) - LP pool data doesn't change frequently
-   */
-  private readonly poolCache: NodeCache;
-
-  /**
    * Cache for OHLCV (price history) results
    * TTL: 5 minutes (300 seconds) - matches pricing cache strategy
    */
@@ -88,7 +128,8 @@ export class TapToolsClient {
     private readonly configService: ConfigService,
     private readonly charli3Client: Charli3Client,
     private readonly dexHunterPricingClient: DexHunterPricingClient,
-    private readonly nexusClient: NexusClient
+    private readonly nexusClient: NexusClient,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -96,6 +137,7 @@ export class TapToolsClient {
     });
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL') || 'https://api.dexhunter.io';
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY') || '';
+    this.minswapBaseUrl = 'https://api-mainnet-prod.minswap.org';
     this.networkId = this.isMainnet ? 1 : 0;
 
     this.supplyCache = new NodeCache({ stdTTL: 3600, checkperiod: 300, useClones: false });
@@ -104,13 +146,6 @@ export class TapToolsClient {
     this.priceCache = new NodeCache({
       stdTTL: 300, // 5 minutes in seconds
       checkperiod: 60, // Check for expired keys every minute
-      useClones: false, // Don't clone objects for better performance
-    });
-
-    // Initialize pool cache with 10-minute TTL
-    this.poolCache = new NodeCache({
-      stdTTL: 600, // 10 minutes in seconds
-      checkperiod: 120, // Check for expired keys every 2 minutes
       useClones: false, // Don't clone objects for better performance
     });
 
@@ -185,9 +220,30 @@ export class TapToolsClient {
    */
   async getTokenPools(tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
     if (!this.isMainnet) return [];
-    const cacheKey = `tokenUnit_${tokenUnit}`;
-    const cached = this.poolCache.get<TapToolsTokenPoolDto[]>(cacheKey);
-    if (cached !== undefined) return cached;
+
+    // Use Redis cache with 10-minute TTL
+    const cacheKey = `dexhunter:pools:${tokenUnit}`;
+
+    try {
+      // Check Redis cache first
+      const cachedRaw = await this.redis.get(cacheKey);
+      if (cachedRaw) {
+        try {
+          const parsed = JSON.parse(cachedRaw);
+          this.logger.debug(`Redis cache hit for pools: ${tokenUnit.slice(0, 10)}...`);
+          return parsed;
+        } catch (error) {
+          // Invalid JSON in cache - delete it and treat as cache miss
+          this.logger.warn(`Invalid JSON in Redis cache for ${cacheKey}, deleting`);
+          await this.redis.del(cacheKey).catch(() => {});
+        }
+      }
+    } catch (redisError) {
+      this.logger.warn(
+        `Redis get failed for ${cacheKey}: ${redisError instanceof Error ? redisError.message : String(redisError)}`
+      );
+      // Continue with fetch on Redis error
+    }
 
     try {
       // Step 1: Get all pools from DexHunter
@@ -196,13 +252,15 @@ export class TapToolsClient {
       });
 
       if (!dhResp.ok) {
-        this.poolCache.set(cacheKey, []);
+        // Cache empty results in Redis for 2 minutes
+        await this.redis.set(cacheKey, JSON.stringify([]), 'EX', 120).catch(() => {});
         return [];
       }
 
       const dhPools: DexHunterPoolItem[] = await dhResp.json();
       if (!dhPools || dhPools.length === 0) {
-        this.poolCache.set(cacheKey, []);
+        // Cache empty results in Redis for 2 minutes
+        await this.redis.set(cacheKey, JSON.stringify([]), 'EX', 120).catch(() => {});
         return [];
       }
 
@@ -226,7 +284,7 @@ export class TapToolsClient {
             }
           } else {
             // Other DEXs: use Nexus API
-            const nexusData = await this.fetchPoolDataFromNexus(pool.dex_name, pool.pool_id);
+            const nexusData = await this.fetchPoolDataFromNexus(pool.dex_name, pool.pool_id, tokenUnit);
             if (nexusData) {
               lpTokenUnit = nexusData.lpTokenUnit;
               lpTotalSupply = nexusData.lpTotalSupply;
@@ -248,13 +306,20 @@ export class TapToolsClient {
         })
       );
 
-      this.poolCache.set(cacheKey, result);
+      // Cache in Redis with 10-minute TTL (600 seconds)
+      await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 600).catch(redisError => {
+        this.logger.warn(
+          `Redis set failed for ${cacheKey}: ${redisError instanceof Error ? redisError.message : String(redisError)}`
+        );
+      });
+
       return result;
     } catch (error) {
       this.logger.warn(
         `getTokenPools failed for ${tokenUnit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
       );
-      this.poolCache.set(cacheKey, []);
+      // Cache empty results in Redis for 2 minutes on error
+      await this.redis.set(cacheKey, JSON.stringify([]), 'EX', 120).catch(() => {});
       return [];
     }
   }
@@ -277,7 +342,7 @@ export class TapToolsClient {
         if (!resp.ok) continue;
         const data: unknown = await resp.json();
         if (Array.isArray(data) && data.length > 0) {
-          this.logger.debug(`Found ${data.length} VyFi pool(s) for token ${tokenUnit.slice(0, 10)}...`);
+          // this.logger.debug(`Found ${data.length} VyFi pool(s) for token ${tokenUnit.slice(0, 10)}...`);
           return data as VyFiPoolRaw[];
         }
       } catch (err) {
@@ -302,19 +367,28 @@ export class TapToolsClient {
 
   /**
    * Fetch LP token unit and total supply from Nexus API for non-VyFi pools
+   * Falls back to Minswap API for Minswap pools if Nexus data is unavailable
    * @param dexName DEX name from DexHunter (e.g., "MINSWAPV2", "SUNDAESWAPV3")
    * @param poolId Pool ID from DexHunter (raw hash)
+   * @param tokenUnit Full token unit for Minswap search fallback
    * @returns Object with lpTokenUnit and lpTotalSupply, or null if unavailable
    */
   private async fetchPoolDataFromNexus(
     dexName: string,
-    poolId: string
+    poolId: string,
+    tokenUnit?: string
   ): Promise<{ lpTokenUnit: string; lpTotalSupply: number | null } | null> {
     try {
       const nexusPoolId = this.normalizePoolId(dexName, poolId);
       const pool = await this.nexusClient.getPoolById(nexusPoolId);
 
       if (!pool || !pool.lpPolicyId || !pool.lpAssetName) {
+        // Fallback to Minswap API for Minswap pools
+        const isMinswap = dexName.toLowerCase().includes('minswap');
+        if (isMinswap && tokenUnit) {
+          // this.logger.debug(`Nexus data unavailable for Minswap pool ${poolId.slice(0, 8)}..., trying Minswap API`);
+          return await this.fetchPoolDataFromMinswap(poolId, tokenUnit);
+        }
         return null;
       }
 
@@ -325,6 +399,91 @@ export class TapToolsClient {
     } catch (error) {
       this.logger.warn(
         `Failed to fetch pool data from Nexus for ${dexName}/${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
+      );
+      // Fallback to Minswap API for Minswap pools
+      const isMinswap = dexName.toLowerCase().includes('minswap');
+      if (isMinswap && tokenUnit) {
+        this.logger.debug(`Trying Minswap API fallback for pool ${poolId.slice(0, 8)}...`);
+        return await this.fetchPoolDataFromMinswap(poolId, tokenUnit);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Fetch LP token unit and total supply from Minswap API
+   * Used as fallback when Nexus API doesn't have pool data
+   * Uses /v1/pools/metrics search endpoint since /v1/pools/{poolId} doesn't work reliably
+   * @param poolId Pool ID hash from DexHunter
+   * @param tokenUnit Full token unit (policyId + assetName) to search for
+   * @returns Object with lpTokenUnit and lpTotalSupply, or null if unavailable
+   */
+  private async fetchPoolDataFromMinswap(
+    poolId: string,
+    tokenUnit: string
+  ): Promise<{ lpTokenUnit: string; lpTotalSupply: number | null } | null> {
+    try {
+      // Extract policy ID (first 56 characters) for search
+      const policyId = tokenUnit.slice(0, 56);
+
+      const url = `${this.minswapBaseUrl}/v1/pools/metrics`;
+      const response = await fetch(url, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10_000),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          term: policyId, // Search by token policy ID
+          sort_field: 'liquidity',
+          limit: 100, // Get enough results to find our pool
+        }),
+      });
+
+      if (!response.ok) {
+        this.logger.debug(`Minswap API returned ${response.status} for policy ${policyId.slice(0, 8)}...`);
+        return null;
+      }
+
+      const data: MinswapPoolMetricsResponse = await response.json();
+      const pools = data?.pool_metrics;
+
+      if (!Array.isArray(pools) || pools.length === 0) {
+        this.logger.debug(`Minswap API returned no pools for policy ${policyId.slice(0, 8)}...`);
+        return null;
+      }
+
+      // Find the pool that matches our poolId
+      // The LP token's token_name should match the poolId from DexHunter
+      const matchingPool = pools.find(p => {
+        const lpTokenName = p.lp_asset?.token_name;
+        return lpTokenName === poolId;
+      });
+
+      if (!matchingPool?.lp_asset?.currency_symbol || !matchingPool?.lp_asset?.token_name) {
+        this.logger.debug(`Could not find matching pool for poolId ${poolId.slice(0, 8)}... in Minswap results`);
+        return null;
+      }
+
+      const lpTokenUnit = `${matchingPool.lp_asset.currency_symbol}${matchingPool.lp_asset.token_name}`;
+
+      // Fetch LP total supply from BlockFrost since Minswap metrics endpoint doesn't provide it
+      let lpTotalSupply: number | null = null;
+      try {
+        const asset = await this.blockfrost.assetsById(lpTokenUnit);
+        lpTotalSupply = asset.quantity ? parseInt(asset.quantity, 10) : null;
+      } catch (error) {
+        this.logger.debug(
+          `Failed to fetch LP total supply from BlockFrost for ${lpTokenUnit.slice(0, 16)}...: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      this.logger.log(
+        `✅ Fetched LP token from Minswap API for pool ${poolId.slice(0, 8)}...: ${lpTokenUnit.slice(0, 16)}... (supply: ${lpTotalSupply ?? 'N/A'})`
+      );
+
+      return { lpTokenUnit, lpTotalSupply };
+    } catch (error) {
+      this.logger.warn(
+        `Failed to fetch pool data from Minswap API for ${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
     }
@@ -370,16 +529,34 @@ export class TapToolsClient {
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
     if (!this.isMainnet) return null;
 
-    const cacheKey = `pool_${onchainID}`;
-    const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
-    if (cached !== undefined) return cached;
+    const cacheKey = `dexhunter:pool:${onchainID}`;
+
+    // Check Redis cache first
+    try {
+      const cachedRaw = await this.redis.get(cacheKey);
+      if (cachedRaw) {
+        try {
+          return JSON.parse(cachedRaw);
+        } catch (error) {
+          // Invalid JSON in cache - delete it and treat as cache miss
+          this.logger.warn(`Invalid JSON in Redis cache for ${cacheKey}, deleting`);
+          await this.redis.del(cacheKey).catch(() => {});
+        }
+      }
+    } catch (redisError) {
+      this.logger.warn(
+        `Redis get failed for ${cacheKey}: ${redisError instanceof Error ? redisError.message : String(redisError)}`
+      );
+      // Continue with fetch on Redis error
+    }
 
     try {
       // Check if this is a VyFi unitsPair format (e.g., "lovelace:tokenUnit")
       if (onchainID.includes(':')) {
         const vyfiPool = await this.fetchVyFiPoolByUnitsPair(onchainID);
         if (vyfiPool) {
-          this.poolCache.set(cacheKey, vyfiPool);
+          // Cache in Redis with 10-minute TTL
+          await this.redis.set(cacheKey, JSON.stringify(vyfiPool), 'EX', 600).catch(() => {});
           return vyfiPool;
         }
       }
@@ -388,7 +565,8 @@ export class TapToolsClient {
       const pool = await this.nexusClient.getPoolById(onchainID);
 
       if (!pool) {
-        this.poolCache.set(cacheKey, null);
+        // Cache null result in Redis for 2 minutes
+        await this.redis.set(cacheKey, JSON.stringify(null), 'EX', 120).catch(() => {});
         return null;
       }
 
@@ -406,13 +584,15 @@ export class TapToolsClient {
         lpTotalSupply: pool.lpTotalSupply ?? null,
       };
 
-      this.poolCache.set(cacheKey, result);
+      // Cache in Redis with 10-minute TTL
+      await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 600).catch(() => {});
       return result;
     } catch (error) {
       this.logger.warn(
         `Failed to fetch pool by onchainID ${onchainID.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
       );
-      this.poolCache.set(cacheKey, null);
+      // Cache null result in Redis for 2 minutes on error
+      await this.redis.set(cacheKey, JSON.stringify(null), 'EX', 120).catch(() => {});
       return null;
     }
   }
@@ -741,18 +921,16 @@ export class TapToolsClient {
    */
   clearCache(): void {
     const priceSize = this.priceCache.keys().length;
-    const poolSize = this.poolCache.keys().length;
     const ohlcvSize = this.ohlcvCache.keys().length;
     const marketDataSize = this.marketDataCache.keys().length;
     const supplySize = this.supplyCache.keys().length;
     this.priceCache.flushAll();
-    this.poolCache.flushAll();
     this.ohlcvCache.flushAll();
     this.marketDataCache.flushAll();
     this.supplyCache.flushAll();
     this.logger.log(
-      `Cleared caches - price: ${priceSize}, pool: ${poolSize}, ohlcv: ${ohlcvSize}, ` +
-        `marketData: ${marketDataSize}, supply: ${supplySize} entries`
+      `Cleared caches - price: ${priceSize}, ohlcv: ${ohlcvSize}, ` +
+        `marketData: ${marketDataSize}, supply: ${supplySize} entries (pool cache uses Redis)`
     );
   }
 
@@ -761,12 +939,10 @@ export class TapToolsClient {
    */
   getCacheStats(): {
     price: { size: number; hits: number; misses: number; keys: number };
-    pool: { size: number; hits: number; misses: number; keys: number };
     ohlcv: { size: number; hits: number; misses: number; keys: number };
     marketData: { size: number; hits: number; misses: number; keys: number };
   } {
     const priceStats = this.priceCache.getStats();
-    const poolStats = this.poolCache.getStats();
     const ohlcvStats = this.ohlcvCache.getStats();
     const marketDataStats = this.marketDataCache.getStats();
     return {
@@ -775,12 +951,6 @@ export class TapToolsClient {
         hits: priceStats.hits,
         misses: priceStats.misses,
         keys: priceStats.keys,
-      },
-      pool: {
-        size: this.poolCache.keys().length,
-        hits: poolStats.hits,
-        misses: poolStats.misses,
-        keys: poolStats.keys,
       },
       ohlcv: {
         size: this.ohlcvCache.keys().length,

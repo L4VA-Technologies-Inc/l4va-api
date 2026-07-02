@@ -16,6 +16,7 @@ import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
 import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
+import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 import { TapToolsClient } from './taptools.client';
 
 import { Asset } from '@/database/asset.entity';
@@ -2355,5 +2356,15 @@ export class TaptoolsService {
       `Cache invalidated for wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}. ` +
         `Assets deleted: ${deletedAssets > 0}, Overview deleted: ${deletedOverview > 0}`
     );
+  }
+
+  /**
+   * Get LP pool data for a token
+   * Proxies to TapToolsClient.getTokenPools (DexHunter pool list → VyFi for VyFi pools → Nexus for other DEXs, with Minswap API fallback when Nexus data is unavailable)
+   * @param tokenUnit - Token unit (policyId + assetName in hex)
+   * @returns Array of pool data with LP token units and total supply
+   */
+  public async getTokenPools(tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
+    return this.tapToolsClient.getTokenPools(tokenUnit);
   }
 }
