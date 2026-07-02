@@ -7,6 +7,7 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
+import { Charli3Client } from '../charli3/charli3.client';
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 import { VyfiService } from '../vyfi/vyfi.service';
@@ -69,6 +70,8 @@ export class TaptoolsService {
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
   private readonly RELICS_OF_MAGMA_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
+  // VLRM token unit - use Charli3 API instead of DexHunter for accurate pricing
+  private readonly VLRM_TOKEN_UNIT = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
   // Fallback prices if TapTools API fails
   private readonly RELICS_CHARACTER_PRICES_FALLBACK = {
     Exploratur: 300, // 300 ADA
@@ -122,6 +125,7 @@ export class TaptoolsService {
     private readonly alertsService: AlertsService,
     private readonly tapToolsClient: TapToolsClient,
     private readonly vyfiService: VyfiService,
+    private readonly charli3Client: Charli3Client,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -530,7 +534,9 @@ export class TaptoolsService {
                 : null;
         }
       } catch (error) {
-        this.logger.debug(`Could not fetch cached price for ${policyId}.${assetName}: ${error.message}`);
+        this.logger.debug(
+          `Could not fetch cached price for ${policyId}.${assetName}: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
 
       // Route to appropriate API based on asset type
@@ -695,7 +701,19 @@ export class TaptoolsService {
           this.logger.warn(`WayUp floor price failed for NFT ${policyId}: ${error.message}`);
         }
       } else {
-        const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(`${policyId}${assetName}`);
+        // Special handling for VLRM - use Charli3 instead of DexHunter
+        const tokenUnit = `${policyId}${assetName}`;
+        let tokenPriceAda: number | null = null;
+
+        if (tokenUnit === this.VLRM_TOKEN_UNIT) {
+          const charli3Data = await this.charli3Client.getTokenCurrent(tokenUnit);
+          tokenPriceAda = charli3Data?.current_price || null;
+          if (tokenPriceAda && tokenPriceAda > 0) {
+            this.logger.debug(`Using Charli3 price for VLRM: ${tokenPriceAda.toFixed(10)} ADA`);
+          }
+        } else {
+          tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(tokenUnit);
+        }
 
         if (tokenPriceAda !== null && tokenPriceAda > 0) {
           // Apply deviation protection for FT prices
@@ -894,11 +912,21 @@ export class TaptoolsService {
                 }
               }
             } else {
-              // Get DEX price from DexHunter for FTs
+              // Get DEX price from DexHunter for FTs (or Charli3 for VLRM)
               try {
-                const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(
-                  `${asset.policy_id}${asset.asset_id}`
-                );
+                const tokenUnit = `${asset.policy_id}${asset.asset_id}`;
+                let tokenPriceAda: number | null = null;
+
+                if (tokenUnit === this.VLRM_TOKEN_UNIT) {
+                  const charli3Data = await this.charli3Client.getTokenCurrent(tokenUnit);
+                  tokenPriceAda = charli3Data?.current_price || null;
+                  if (tokenPriceAda && tokenPriceAda > 0) {
+                    this.logger.debug(`Using Charli3 price for VLRM: ${tokenPriceAda.toFixed(10)} ADA`);
+                  }
+                } else {
+                  tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(tokenUnit);
+                }
+
                 priceAda = tokenPriceAda !== null && tokenPriceAda > 0 ? tokenPriceAda : null;
               } catch (error) {
                 this.logger.debug(`Failed to get DEX price for FT ${asset.policy_id}: ${error.message}`);
@@ -1804,6 +1832,15 @@ export class TaptoolsService {
       // Get token decimals from Blockfrost
       let tokenADecimals = 6; // Default to 6
       let tokenBDecimals = 6; // Default to 6 (ADA standard)
+      let lpTokenDecimals = 0; // Default to 0 for LP tokens
+
+      // LP token decimals - needed to normalize totalSupply
+      try {
+        const lpTokenMetadata = await this.blockfrost.assetsById(lpTokenUnit);
+        lpTokenDecimals = lpTokenMetadata.metadata?.decimals ?? 0;
+      } catch (error) {
+        this.logger.warn(`Failed to fetch LP token decimals for ${lpTokenUnit}, using default 0`);
+      }
 
       // TokenA decimals - skip API call if it's ADA (lovelace)
       const isTokenAAda = tokenAUnit === 'lovelace';
@@ -1834,12 +1871,28 @@ export class TaptoolsService {
       // TokenB is ADA if tokenBUnit is empty or 'lovelace'
       if (isTokenBAda) {
         tokenBPrice = 1;
+      } else if (tokenBUnit === this.VLRM_TOKEN_UNIT) {
+        // Use Charli3 for VLRM
+        const charli3Data = await this.charli3Client.getTokenCurrent(tokenBUnit);
+        tokenBPrice = charli3Data?.current_price || 0;
+        if (tokenBPrice > 0) {
+          this.logger.debug(`Using Charli3 price for VLRM: ${tokenBPrice.toFixed(10)} ADA`);
+        }
       } else {
         tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
       }
 
       // TokenA price (could be another LP token!)
-      tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
+      if (tokenAUnit === this.VLRM_TOKEN_UNIT) {
+        // Use Charli3 for VLRM
+        const charli3Data = await this.charli3Client.getTokenCurrent(tokenAUnit);
+        tokenAPrice = charli3Data?.current_price || 0;
+        if (tokenAPrice > 0) {
+          this.logger.debug(`Using Charli3 price for VLRM: ${tokenAPrice.toFixed(10)} ADA`);
+        }
+      } else {
+        tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
+      }
 
       // Calculate TVL
       // VyFi returns quantities in base units, normalize using actual decimals from Blockfrost
@@ -1847,11 +1900,11 @@ export class TaptoolsService {
       const tokenBNormalized = tokenBLocked / Math.pow(10, tokenBDecimals);
 
       const tvl = tokenANormalized * tokenAPrice + tokenBNormalized * tokenBPrice;
-      const lpTokenPrice = tvl / totalSupply;
 
-      // this.logger.debug(
-      //   `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
-      // );
+      // Normalize LP total supply by LP token decimals
+      // This converts base units to normalized units for proper price calculation
+      const totalSupplyNormalized = totalSupply / Math.pow(10, lpTokenDecimals);
+      const lpTokenPrice = tvl / totalSupplyNormalized;
 
       return lpTokenPrice;
     } catch (error) {
@@ -1900,18 +1953,51 @@ export class TaptoolsService {
 
       if (poolData.tokenATicker === 'ADA' || !poolData.tokenA || poolData.tokenA === '') {
         tokenAPrice = 1;
+      } else if (poolData.tokenA === this.VLRM_TOKEN_UNIT) {
+        // Use Charli3 for VLRM
+        const charli3Data = await this.charli3Client.getTokenCurrent(poolData.tokenA);
+        tokenAPrice = charli3Data?.current_price || 0;
+        if (tokenAPrice > 0) {
+          this.logger.debug(`Using Charli3 price for VLRM: ${tokenAPrice.toFixed(10)} ADA`);
+        }
       } else {
         tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenA)) || 0;
       }
 
       if (poolData.tokenBTicker === 'ADA' || !poolData.tokenB || poolData.tokenB === '') {
         tokenBPrice = 1;
+      } else if (poolData.tokenB === this.VLRM_TOKEN_UNIT) {
+        // Use Charli3 for VLRM
+        const charli3Data = await this.charli3Client.getTokenCurrent(poolData.tokenB);
+        tokenBPrice = charli3Data?.current_price || 0;
+        if (tokenBPrice > 0) {
+          this.logger.debug(`Using Charli3 price for VLRM: ${tokenBPrice.toFixed(10)} ADA`);
+        }
       } else {
         tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenB)) || 0;
       }
 
+      // DexHunter/Nexus returns NORMALIZED (human-readable) token amounts
+      // tokenALocked and tokenBLocked are already normalized
+      // lpTotalSupply might be in base units, so fetch decimals and normalize
+      let lpTokenDecimals = 0;
+      try {
+        const lpTokenMetadata = await this.blockfrost.assetsById(poolData.lpTokenUnit);
+        lpTokenDecimals = lpTokenMetadata.metadata?.decimals ?? 0;
+      } catch (error) {
+        this.logger.warn(`Failed to fetch LP token decimals for ${poolData.lpTokenUnit}, using default 0`);
+      }
+
       const tvl = poolData.tokenALocked * tokenAPrice + poolData.tokenBLocked * tokenBPrice;
-      const lpTokenPrice = tvl / totalSupply;
+      const totalSupplyNormalized = totalSupply / Math.pow(10, lpTokenDecimals);
+      const lpTokenPrice = tvl / totalSupplyNormalized;
+
+      this.logger.debug(
+        `Nexus LP price calculation for ${poolData.lpTokenUnit} - ` +
+          `TVL: ${tvl.toFixed(2)} ADA, ` +
+          `LP supply: ${totalSupply} base units (${totalSupplyNormalized} normalized, decimals: ${lpTokenDecimals}), ` +
+          `LP price: ${lpTokenPrice.toFixed(10)} ADA per normalized LP token`
+      );
 
       return lpTokenPrice;
     } catch (error) {
