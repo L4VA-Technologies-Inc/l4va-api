@@ -151,6 +151,24 @@ export class Proposal {
       actualSlippage?: number;
     }>;
 
+    // Relics staking execution tracking
+    relicsStaking?: {
+      platform: string; // e.g., 'anvil-relics'
+      executedStakes?: Array<{
+        batchIndex: number;
+        assetIds: string[];
+        stakeIds: string[];
+        txHash: string;
+      }>;
+      executedUnstakes?: Array<{
+        stakeId: string;
+        assetId: string;
+        txHash: string;
+        vlrmRewards: string;
+      }>;
+      totalVlrmRewards?: string; // Total VLRM earned from unstaking
+    };
+
     // Execution retry tracking
     _executionRetry?: {
       count: number;

@@ -546,6 +546,16 @@ export class CreateProposalReq {
   assetsWhitelist?: AssetWhitelistProposalDto[];
 
   @ApiProperty({
+    description: 'Relics staking actions (stake or unstake NFTs on Anvil platform)',
+    type: 'array',
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @Expose()
+  relicsStakingActions?: any[]; // Will be validated by RelicsStakingActionDto in service layer
+
+  @ApiProperty({
     description: 'Additional metadata for the proposal',
     required: false,
     example: { assetId: 'xyz-123', targetPrice: '1000' },

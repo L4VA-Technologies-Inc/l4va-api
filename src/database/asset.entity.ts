@@ -204,6 +204,35 @@ export class Asset {
   @Column({ name: 'listed_at', type: 'timestamptz', nullable: true })
   listed_at?: Date;
 
+  // Staking fields (for external platform staking)
+  @Expose({ name: 'stakingPlatform' })
+  @Column({ name: 'staking_platform', type: 'varchar', nullable: true })
+  staking_platform?: string;
+
+  @Expose({ name: 'stakeId' })
+  @Column({ name: 'stake_id', type: 'bigint', nullable: true })
+  stake_id?: string;
+
+  @Expose({ name: 'stakeCollectionId' })
+  @Column({ name: 'stake_collection_id', type: 'int', nullable: true })
+  stake_collection_id?: number;
+
+  @Expose({ name: 'stakeTxHash' })
+  @Column({ name: 'stake_tx_hash', type: 'varchar', nullable: true })
+  stake_tx_hash?: string;
+
+  @Expose({ name: 'unstakeTxHash' })
+  @Column({ name: 'unstake_tx_hash', type: 'varchar', nullable: true })
+  unstake_tx_hash?: string;
+
+  @Expose({ name: 'stakedAt' })
+  @Column({ name: 'staked_at', type: 'timestamptz', nullable: true })
+  staked_at?: Date;
+
+  @Expose({ name: 'unstakedAt' })
+  @Column({ name: 'unstaked_at', type: 'timestamptz', nullable: true })
+  unstaked_at?: Date;
+
   @Expose({ name: 'transaction' })
   @ManyToOne(() => Transaction, (transaction: Transaction) => transaction.id)
   @JoinColumn({ name: 'transaction_id' })

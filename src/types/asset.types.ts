@@ -22,6 +22,8 @@ export enum AssetStatus {
   OFFERED = 'offered',
   /** Offer was canceled or rejected on WayUp */
   CANCEL_OFFER = 'cancel_offer',
+  /** Asset is staked on external platform (not in treasury) */
+  STAKED = 'staked',
 }
 
 export enum AssetOriginType {
@@ -30,6 +32,8 @@ export enum AssetOriginType {
   FEE = 'fee',
   BOUGHT = 'bought',
   OFFERED = 'offered',
+  /** Rewards from external staking platforms (e.g., VLRM from Anvil) */
+  STAKING_REWARD = 'staking_reward',
 }
 
 export enum AssetValuationMethod {

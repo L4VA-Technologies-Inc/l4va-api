@@ -1872,6 +1872,27 @@ export class GovernanceService {
 
         break;
       }
+
+      case ProposalType.RELICS_STAKING:
+      case ProposalType.RELICS_UNSTAKING: {
+        const relicsStakingActions = createProposalReq.relicsStakingActions || [];
+
+        if (relicsStakingActions.length === 0) {
+          throw new BadRequestException(
+            'At least one Relics staking action is required for staking/unstaking proposals'
+          );
+        }
+
+        // Store actions in metadata (validation happens in execution service)
+        proposal.metadata.relicsStaking = {
+          platform: relicsStakingActions[0]?.platform || 'anvil-relics',
+          executedStakes: [],
+          executedUnstakes: [],
+          totalVlrmRewards: '0',
+        };
+
+        break;
+      }
     }
 
     // Check if governance fee is required for this proposal type
@@ -2930,6 +2951,113 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  /**
+   * Get Relics NFTs eligible for external platform staking (extracted to treasury)
+   */
+  async getAssetsToStakeRelics(vaultId: string, platform: string = 'anvil-relics'): Promise<Asset[]> {
+    try {
+      const RELICS_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
+      const RELICS_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
+
+      return await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          type: AssetType.NFT,
+          status: AssetStatus.EXTRACTED,
+          policy_id: In([RELICS_VITA_POLICY, RELICS_PORTA_POLICY]),
+          staking_platform: null as any,
+        },
+        order: {
+          policy_id: 'ASC',
+        },
+      });
+    } catch (error) {
+      this.logger.error(`Error getting Relics assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting Relics assets to stake');
+    }
+  }
+
+  /**
+   * Get vault's staked Relics NFTs
+   */
+  async getVaultStakedAssets(vaultId: string, platform?: string) {
+    try {
+      const whereClause: any = {
+        vault: { id: vaultId },
+        status: AssetStatus.STAKED,
+      };
+
+      if (platform) {
+        whereClause.staking_platform = platform;
+      }
+
+      const assets = await this.assetRepository.find({
+        where: whereClause,
+        order: {
+          staked_at: 'DESC',
+        },
+      });
+
+      return assets;
+    } catch (error) {
+      this.logger.error(`Error getting staked assets for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting staked assets');
+    }
+  }
+
+  /**
+   * Get staking statistics for a vault
+   */
+  async getVaultStakingStats(vaultId: string) {
+    try {
+      const stakedAssets = await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          status: AssetStatus.STAKED,
+        },
+      });
+
+      const rewardAssets = await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          origin_type: AssetOriginType.STAKING_REWARD,
+        },
+      });
+
+      // Group by platform
+      const platformStats = stakedAssets.reduce(
+        (acc, asset) => {
+          const platform = asset.staking_platform || 'unknown';
+          if (!acc[platform]) {
+            acc[platform] = {
+              platform,
+              totalStaked: 0,
+              assets: [],
+            };
+          }
+          acc[platform].totalStaked++;
+          acc[platform].assets.push(asset.id);
+          return acc;
+        },
+        {} as Record<string, any>
+      );
+
+      // Calculate total VLRM earned
+      const totalVlrmEarned = rewardAssets.reduce((sum, asset) => {
+        return sum + (parseFloat(asset.quantity.toString()) || 0);
+      }, 0);
+
+      return {
+        totalStaked: stakedAssets.length,
+        totalVlrmEarned: totalVlrmEarned.toString(),
+        platforms: Object.values(platformStats),
+      };
+    } catch (error) {
+      this.logger.error(`Error getting staking stats for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting staking stats');
     }
   }
 

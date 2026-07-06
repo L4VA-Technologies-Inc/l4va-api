@@ -26,6 +26,8 @@ export enum ProposalType {
   EXPANSION = 'expansion',
   ACQUIRE_EXPANSION = 'acquire_expansion',
   ASSET_WHITELIST_UPDATE = 'asset_whitelist_update',
+  RELICS_STAKING = 'relics_staking',
+  RELICS_UNSTAKING = 'relics_unstaking',
 }
 
 export enum MarketplaceAction {
