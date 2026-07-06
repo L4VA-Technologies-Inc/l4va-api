@@ -45,4 +45,30 @@ export class TaptoolsController {
   async getTokenPools(@Param('tokenUnit') tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
     return this.taptoolsService.getTokenPools(tokenUnit);
   }
+
+  @Get('price/:tokenUnit')
+  @ApiDoc({
+    summary: 'Get token price in ADA',
+    description: 'Returns token price in ADA for a given token unit (includes VLRM -> Charli3 routing)',
+    status: 200,
+  })
+  @ApiParam({
+    name: 'tokenUnit',
+    description: 'Token unit (policyId + assetName in hex format)',
+    example: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Token price result in ADA',
+    schema: {
+      example: {
+        tokenUnit: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d',
+        priceAda: 0.0184,
+      },
+    },
+  })
+  @UseGuards(AdminGuard)
+  async getTokenPrice(@Param('tokenUnit') tokenUnit: string): Promise<{ tokenUnit: string; priceAda: number | null }> {
+    return this.taptoolsService.getTokenPriceAda(tokenUnit);
+  }
 }

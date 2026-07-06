@@ -56,6 +56,11 @@ interface AssetPriceResult {
   priceUsd: number;
 }
 
+interface TokenPriceResult {
+  tokenUnit: string;
+  priceAda: number | null;
+}
+
 @Injectable()
 export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
@@ -2434,5 +2439,44 @@ export class TaptoolsService {
    */
   public async getTokenPools(tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
     return this.tapToolsClient.getTokenPools(tokenUnit);
+  }
+
+  /**
+   * Get token price in ADA for a full token unit.
+   * Reuses existing FT pricing path (including VLRM -> Charli3).
+   */
+  public async getTokenPriceAda(tokenUnit: string): Promise<TokenPriceResult> {
+    if (!this.isMainnet) {
+      return { tokenUnit, priceAda: null };
+    }
+
+    // Cardano token unit = 56-char policyId + optional assetName (hex)
+    if (!tokenUnit || tokenUnit.length < 56) {
+      this.logger.warn(`Invalid token unit received for price lookup: ${tokenUnit}`);
+      return { tokenUnit, priceAda: null };
+    }
+
+    const policyId = tokenUnit.slice(0, 56);
+    const assetName = tokenUnit.slice(56);
+
+    try {
+      const { priceAda } = await this.getAssetValue({
+        policyId,
+        assetName,
+        isNFT: false,
+      });
+
+      return {
+        tokenUnit,
+        priceAda: priceAda > 0 ? priceAda : null,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Failed to resolve token price for ${tokenUnit.slice(0, 12)}...: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return { tokenUnit, priceAda: null };
+    }
   }
 }
