@@ -15,4 +15,8 @@ export interface TapToolsTokenPoolDto {
   tokenBTicker: string;
   /** LP token total supply from Nexus/VyFi APIs (null if unavailable) */
   lpTotalSupply: number | null;
+  /** Pool validator address (VyFi only) - used to exclude from LP rewards */
+  poolValidatorAddress?: string;
+  /** Order validator address (VyFi only) - used to exclude from LP rewards */
+  orderValidatorAddress?: string;
 }

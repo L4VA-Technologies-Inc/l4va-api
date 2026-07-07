@@ -274,6 +274,8 @@ export class TapToolsClient {
           const dex = pool.dex_name.toLowerCase();
           let lpTokenUnit = '';
           let lpTotalSupply: number | null = null;
+          let poolValidatorAddress: string | undefined = undefined;
+          let orderValidatorAddress: string | undefined = undefined;
 
           if (dex.includes('vyfi') && vyfiPools.length > 0) {
             // VyFi pools: use VyFi API (Nexus returns empty lpUnit)
@@ -281,6 +283,9 @@ export class TapToolsClient {
             if (match) {
               lpTokenUnit = this.extractVyFiLpTokenUnit(match);
               lpTotalSupply = match.lpQuantity ?? null;
+              // Extract validator addresses for LP rewards filtering
+              poolValidatorAddress = match.poolValidatorUtxoAddress;
+              orderValidatorAddress = match.orderValidatorUtxoAddress;
             }
           } else {
             // Other DEXs: use Nexus API
@@ -302,6 +307,8 @@ export class TapToolsClient {
             tokenBLocked: pool.token_1_amount, // already in ADA from DexHunter API
             tokenBTicker: 'ADA',
             lpTotalSupply,
+            poolValidatorAddress,
+            orderValidatorAddress,
           };
         })
       );
