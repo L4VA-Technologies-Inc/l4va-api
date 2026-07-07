@@ -3,6 +3,7 @@ import clsx from 'clsx';
 const INTERVALS = [
   { value: '1h', label: '1H' },
   { value: '1d', label: '1D' },
+  { value: '1w', label: '1W' },
 ];
 
 export const IntervalSelector = ({ activeInterval, onIntervalChange, className = '' }) => {
