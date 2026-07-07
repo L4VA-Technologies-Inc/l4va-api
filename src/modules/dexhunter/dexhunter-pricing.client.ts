@@ -149,7 +149,6 @@ export class DexHunterPricingClient {
       });
 
       await pipeline.exec();
-      this.logger.debug(`Bulk cached ${pricesMap.size} token prices in Redis`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis batch set prices failed: ${errorMessage}`);
@@ -342,7 +341,6 @@ export class DexHunterPricingClient {
     // Check cache first
     const cached = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
     if (cached !== undefined) {
-      this.logger.debug(`DexHunter OHLCV cache hit for ${tokenUnit.slice(0, 16)}... (${interval})`);
       return cached;
     }
 
@@ -360,8 +358,8 @@ export class DexHunterPricingClient {
         };
         from = to - numIntervals * (intervalSeconds[period] || 3600);
       } else {
-        // Default: get last 30 days
-        from = to - 30 * 24 * 60 * 60;
+        // Default: get last 365 days (all-time data)
+        from = to - 365 * 24 * 60 * 60;
       }
 
       const response = await fetch(`${this.dexHunterChartsUrl}/charts`, {

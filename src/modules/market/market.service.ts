@@ -71,10 +71,8 @@ export class MarketService implements OnModuleInit {
     let ohlcv = null;
 
     if (script_hash && asset_vault_name) {
-      // Try TapTools first (primary source)
       ohlcv = await this.tapToolsClient.getTokenOHLCV(script_hash, asset_vault_name, interval);
 
-      // Fallback to DexHunter if TapTools fails or returns null
       if (!ohlcv) {
         ohlcv = await this.dexHunterClient.getTokenOHLCV(script_hash, asset_vault_name, interval);
 
