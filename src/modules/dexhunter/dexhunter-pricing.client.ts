@@ -308,7 +308,7 @@ export class DexHunterPricingClient {
 
   /**
    * Aggregate daily OHLCV data into weekly candles
-   * Groups 7 consecutive days into one weekly candle
+   * Groups candles into fixed 7-day buckets based on Unix time (UTC)
    * Filters out zero-volume candles and extreme outliers for cleaner charts
    */
   private aggregateDailyToWeekly(dailyCandles: MarketOhlcvSeries): MarketOhlcvSeries {
