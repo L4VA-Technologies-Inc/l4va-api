@@ -19,7 +19,7 @@ export class AddStakingFieldsToAsset1783089338520 implements MigrationInterface 
     // Add STAKING_REWARD to AssetOriginType enum
     await queryRunner.query(`ALTER TYPE "public"."assets_origin_type_enum" RENAME TO "assets_origin_type_enum_old"`);
     await queryRunner.query(
-      `CREATE TYPE "public  "."assets_origin_type_enum" AS ENUM('acquired', 'contributed', 'fee', 'bought', 'offered', 'staking_reward')`
+      `CREATE TYPE "public"."assets_origin_type_enum" AS ENUM('acquired', 'contributed', 'fee', 'bought', 'offered', 'staking_reward')`
     );
     await queryRunner.query(
       `ALTER TABLE "assets" ALTER COLUMN "origin_type" TYPE "public"."assets_origin_type_enum" USING "origin_type"::"text"::"public"."assets_origin_type_enum"`

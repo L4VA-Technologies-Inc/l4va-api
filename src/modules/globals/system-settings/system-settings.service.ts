@@ -334,6 +334,13 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalExpansion;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdate;
+      // New staking operations (all use staking fee)
+      case 'stake_assets':
+      case 'unstake_assets':
+      case 'harvest_rewards':
+      case 'relics_staking':
+      case 'relics_unstaking':
+        return this.governanceFeeProposalStaking;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;

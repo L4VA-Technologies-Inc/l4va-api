@@ -21,6 +21,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
+import { RelicsStakingService } from '@/modules/relics-staking/relics-staking.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
@@ -74,7 +75,8 @@ export class GovernanceExecutionService {
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly relicsStakingService: RelicsStakingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -660,11 +662,16 @@ export class GovernanceExecutionService {
         case ProposalType.ACQUIRE_EXPANSION:
           return await this.executeAcquireExpansionProposal(proposal);
 
+        case ProposalType.STAKE_ASSETS:
         case ProposalType.RELICS_STAKING:
           return await this.executeRelicsStakingProposal(proposal);
 
+        case ProposalType.UNSTAKE_ASSETS:
         case ProposalType.RELICS_UNSTAKING:
           return await this.executeRelicsUnstakingProposal(proposal);
+
+        case ProposalType.HARVEST_REWARDS:
+          return await this.executeRelicsHarvestProposal(proposal);
 
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
@@ -2618,42 +2625,39 @@ export class GovernanceExecutionService {
 
   /**
    * Execute Relics Staking proposal
-   * Extracts Relics NFTs to treasury and stakes them on Anvil platform
-   * Testnet: bypass actual staking but update asset status
+   * Stakes approved Relics NFTs on Anvil platform.
+   * Uses assetIds or stakeAll flag from governance-approved metadata.
+   * Mainnet only – blocked on testnet (Anvil is mainnet-only).
    */
   private async executeRelicsStakingProposal(proposal: Proposal): Promise<boolean> {
     if (!this.isMainnet) {
-      this.logger.log(
-        `[TESTNET] Relics staking proposal ${proposal.id} - bypassing execution (testnet mode)`
-      );
-      return true;
+      throw new Error('Anvil Relics staking is mainnet-only. This proposal cannot be executed on testnet.');
     }
 
-    this.logger.log(`Executing Relics staking proposal ${proposal.id}`);
+    const relicsMeta = proposal.metadata?.relicsStaking;
+    const platform = relicsMeta?.platform || 'anvil-relics';
 
-    // Extract platform from proposal metadata
-    const platform = proposal.metadata.relicsStaking?.platform || 'anvil-relics';
+    this.logger.log(`executeRelicsStakingProposal: proposal=${proposal.id}, platform=${platform}`);
 
-    // Get assets to stake (EXTRACTED Relics NFTs in treasury)
-    const RELICS_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
-    const RELICS_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
-
-    const assets = await this.assetRepository.find({
-      where: {
-        vault: { id: proposal.vaultId },
-        type: 'nft' as any,
-        status: AssetStatus.EXTRACTED,
-        policy_id: In([RELICS_VITA_POLICY, RELICS_PORTA_POLICY]),
-        staking_platform: null as any,
-      },
-    });
+    // Resolve assets from governance-approved action only
+    let assets: Asset[];
+    if (relicsMeta?.stakeAll) {
+      assets = await this.relicsStakingService.getEligibleAssets(proposal.vaultId, platform);
+    } else if (relicsMeta?.assetIds?.length) {
+      assets = await this.assetRepository.find({
+        where: { id: In(relicsMeta.assetIds), vault_id: proposal.vaultId },
+      });
+    } else {
+      this.logger.warn(`Relics staking proposal ${proposal.id} has no assetIds and stakeAll is not set`);
+      return false;
+    }
 
     if (assets.length === 0) {
       this.logger.warn(`No eligible Relics assets found for vault ${proposal.vaultId}`);
       return false;
     }
 
-    this.logger.log(`Found ${assets.length} Relics NFTs to stake`);
+    this.logger.log(`Staking ${assets.length} Relics NFTs`);
 
     // Get treasury wallet for signing
     const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
@@ -2661,58 +2665,36 @@ export class GovernanceExecutionService {
       throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
     }
 
-    // Note: Actual staking implementation would call RelicsStakingService here
-    // For now, mark as STAKED with platform = 'anvil-relics'
-    const MAX_BATCH_SIZE = 50;
-    const batches: Asset[][] = [];
-    for (let i = 0; i < assets.length; i += MAX_BATCH_SIZE) {
-      batches.push(assets.slice(i, i + MAX_BATCH_SIZE));
-    }
+    const strategy = this.relicsStakingService.getStrategy(platform);
+    const results = await strategy.executeStake(assets, {
+      vaultId: proposal.vaultId,
+      treasuryAddress: treasuryWallet.address,
+    });
 
-    this.logger.log(`Split ${assets.length} assets into ${batches.length} batches for staking`);
+    this.logger.log(`Relics staking executed: ${results.length} batches`);
 
-    // Update assets to STAKED status
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex];
-      const batchAssetIds = batch.map(a => a.id);
-
-      // Update all assets in batch
-      await this.assetRepository.update(
-        { id: In(batchAssetIds) },
-        {
-          status: AssetStatus.STAKED,
-          staking_platform: platform,
-          staked_at: new Date(),
-          stake_collection_id: 54, // Anvil Relics collection ID
-          stake_tx_hash: `simulated-stake-tx-${Date.now()}-batch-${batchIndex}`, // Placeholder
-        }
-      );
-
-      this.logger.log(`Batch ${batchIndex + 1}/${batches.length}: Marked ${batch.length} assets as STAKED`);
-    }
-
-    // Store execution results in proposal metadata
+    // Persist execution details in proposal metadata
     await this.proposalRepository.update(
       { id: proposal.id },
       {
         metadata: {
           ...proposal.metadata,
           relicsStaking: {
-            platform,
-            executedStakes: batches.map((batch, idx) => ({
-              batchIndex: idx,
-              assetIds: batch.map(a => a.id),
-              stakeIds: batch.map((_, i) => `simulated-stake-${idx}-${i}`),
-              txHash: `simulated-stake-tx-${Date.now()}-batch-${idx}`,
+            ...proposal.metadata.relicsStaking,
+            executedStakes: results.map(r => ({
+              batchIndex: r.batchIndex,
+              stakeId: r.stakeId,
+              txHash: r.txHash,
+              assetIds: r.assetIds,
             })),
-            totalVlrmRewards: '0',
+            totalVlrmRewardsRaw: '0',
           },
         },
       }
     );
 
     this.logger.log(`Relics staking proposal ${proposal.id} executed successfully`);
-    return true;
+    return results.length > 0;
   }
 
   /**
@@ -2721,94 +2703,110 @@ export class GovernanceExecutionService {
    */
   private async executeRelicsUnstakingProposal(proposal: Proposal): Promise<boolean> {
     if (!this.isMainnet) {
-      this.logger.log(
-        `[TESTNET] Relics unstaking proposal ${proposal.id} - bypassing execution (testnet mode)`
-      );
-      return true;
+      throw new Error('Anvil Relics unstaking is mainnet-only. This proposal cannot be executed on testnet.');
     }
 
-    this.logger.log(`Executing Relics unstaking proposal ${proposal.id}`);
+    const relicsMeta = proposal.metadata?.relicsStaking;
+    const platform = relicsMeta?.platform || 'anvil-relics';
+    const stakeIds: number[] = (relicsMeta?.stakeIds ?? []).map(Number).filter((n: number) => !isNaN(n));
+    const claimRewards = relicsMeta?.claimRewards !== false; // default true
 
-    const platform = proposal.metadata.relicsStaking?.platform || 'anvil-relics';
-
-    // Get staked assets for this vault
-    const stakedAssets = await this.assetRepository.find({
-      where: {
-        vault: { id: proposal.vaultId },
-        status: AssetStatus.STAKED,
-        staking_platform: platform,
-      },
-    });
-
-    if (stakedAssets.length === 0) {
-      this.logger.warn(`No staked Relics assets found for vault ${proposal.vaultId}`);
+    if (stakeIds.length === 0) {
+      this.logger.warn(`Relics unstaking proposal ${proposal.id} has no stakeIds in metadata`);
       return false;
     }
 
-    this.logger.log(`Found ${stakedAssets.length} staked assets to unstake`);
+    this.logger.log(
+      `executeRelicsUnstakingProposal: proposal=${proposal.id}, stakeIds=[${stakeIds.join(',')}], claim=${claimRewards}`
+    );
 
-    // Get treasury wallet
     const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
     if (!treasuryWallet) {
       throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
     }
 
-    // Simulate unstaking and rewards (in real implementation, call AnvilApiClient)
-    const SIMULATED_VLRM_PER_NFT = 100; // 100 VLRM per NFT (for testing)
-    const totalVlrmRewards = stakedAssets.length * SIMULATED_VLRM_PER_NFT;
-
-    // Update assets back to EXTRACTED status
-    await this.assetRepository.update(
-      { id: In(stakedAssets.map(a => a.id)) },
-      {
-        status: AssetStatus.EXTRACTED,
-        unstaked_at: new Date(),
-        unstake_tx_hash: `simulated-unstake-tx-${Date.now()}`,
-      }
+    const strategy = this.relicsStakingService.getStrategy(platform);
+    const results = await strategy.executeUnstake(
+      stakeIds,
+      { vaultId: proposal.vaultId, treasuryAddress: treasuryWallet.address },
+      claimRewards
     );
 
-    // Create VLRM reward asset
-    const VLRM_UNIT = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
-    const VLRM_POLICY_ID = VLRM_UNIT.slice(0, 56);
-    const VLRM_ASSET_ID = VLRM_UNIT.slice(56);
+    this.logger.log(`Relics unstaking executed: ${results.length} positions`);
 
-    await this.assetRepository.save({
-      vault_id: proposal.vaultId,
-      policy_id: VLRM_POLICY_ID,
-      asset_id: VLRM_ASSET_ID,
-      name: 'Valorum (VLRM)',
-      type: 'ft' as any,
-      quantity: totalVlrmRewards * 10000, // 4 decimals
-      status: AssetStatus.EXTRACTED,
-      origin_type: AssetOriginType.STAKING_REWARD,
-      listing_tx_hash: `simulated-unstake-tx-${Date.now()}`,
-      created_at: new Date(),
-    });
-
-    this.logger.log(`Created VLRM reward asset: ${totalVlrmRewards} VLRM (${totalVlrmRewards * 10000} raw units)`);
-
-    // Store execution results
     await this.proposalRepository.update(
       { id: proposal.id },
       {
         metadata: {
           ...proposal.metadata,
           relicsStaking: {
-            platform,
-            executedUnstakes: stakedAssets.map(asset => ({
-              stakeId: asset.stake_id || 'unknown',
-              assetId: asset.id,
-              txHash: `simulated-unstake-tx-${Date.now()}`,
-              vlrmRewards: String(SIMULATED_VLRM_PER_NFT),
+            ...relicsMeta,
+            executedUnstakes: results.map(r => ({
+              stakeId: r.stakeId,
+              txHash: r.txHash,
+              claimedVlrmRaw: r.claimedVlrmRaw ?? '0',
             })),
-            totalVlrmRewards: String(totalVlrmRewards),
           },
         },
       }
     );
 
     this.logger.log(`Relics unstaking proposal ${proposal.id} executed successfully`);
-    return true;
+    return results.length > 0;
+  }
+
+  private async executeRelicsHarvestProposal(proposal: Proposal): Promise<boolean> {
+    if (!this.isMainnet) {
+      throw new Error('Anvil Relics harvest is mainnet-only. This proposal cannot be executed on testnet.');
+    }
+
+    const relicsMeta = proposal.metadata?.relicsStaking;
+    const platform = relicsMeta?.platform || 'anvil-relics';
+    const stakeIds: number[] = (relicsMeta?.stakeIds ?? []).map(Number).filter((n: number) => !isNaN(n));
+
+    if (stakeIds.length === 0) {
+      this.logger.warn(`Relics harvest proposal ${proposal.id} has no stakeIds in metadata`);
+      return false;
+    }
+
+    this.logger.log(`executeRelicsHarvestProposal: proposal=${proposal.id}, stakeIds=[${stakeIds.join(',')}]`);
+
+    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
+    if (!treasuryWallet) {
+      throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
+    }
+
+    const strategy = this.relicsStakingService.getStrategy(platform);
+
+    // For harvest: claim=false means "harvest only" (claim rewards without unstaking)
+    // This is the Anvil API's terminology: claim=true means "unstake+claim", claim=false means "harvest only"
+    const results = await strategy.executeUnstake(
+      stakeIds,
+      { vaultId: proposal.vaultId, treasuryAddress: treasuryWallet.address },
+      false // claim=false = harvest only (no unstaking)
+    );
+
+    this.logger.log(`Relics harvest executed: ${results.length} positions, rewards claimed`);
+
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          relicsStaking: {
+            ...relicsMeta,
+            executedHarvests: results.map(r => ({
+              stakeId: r.stakeId,
+              txHash: r.txHash,
+              claimedVlrmRaw: r.claimedVlrmRaw ?? '0',
+            })),
+          },
+        },
+      }
+    );
+
+    this.logger.log(`Relics harvest proposal ${proposal.id} executed successfully`);
+    return results.length > 0;
   }
 
   onModuleDestroy(): void {

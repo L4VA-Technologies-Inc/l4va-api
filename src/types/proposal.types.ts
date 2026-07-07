@@ -26,6 +26,11 @@ export enum ProposalType {
   EXPANSION = 'expansion',
   ACQUIRE_EXPANSION = 'acquire_expansion',
   ASSET_WHITELIST_UPDATE = 'asset_whitelist_update',
+  // New staking operations with platform support
+  STAKE_ASSETS = 'stake_assets',
+  UNSTAKE_ASSETS = 'unstake_assets',
+  HARVEST_REWARDS = 'harvest_rewards',
+  // Legacy types - kept for backwards compatibility
   RELICS_STAKING = 'relics_staking',
   RELICS_UNSTAKING = 'relics_unstaking',
 }

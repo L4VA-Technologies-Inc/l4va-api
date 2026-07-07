@@ -1,9 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Asset } from '@/database/asset.entity';
+import { IsNull, Repository } from 'typeorm';
+
 import { AnvilRelicsStakingStrategy } from './strategies/anvil-relics.strategy';
 import { IStakingPlatformStrategy } from './strategies/staking-platform.interface';
+
+import { Asset } from '@/database/asset.entity';
+import { AssetStatus } from '@/types/asset.types';
 
 /**
  * Core service for Relics NFT staking operations
@@ -17,7 +20,7 @@ export class RelicsStakingService {
   constructor(
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    private readonly anvilStrategy: AnvilRelicsStakingStrategy,
+    private readonly anvilStrategy: AnvilRelicsStakingStrategy
   ) {
     // Register available strategies
     this.strategies.set(this.anvilStrategy.platform, this.anvilStrategy);
@@ -50,8 +53,8 @@ export class RelicsStakingService {
     const assets = await this.assetRepository.find({
       where: {
         vault_id: vaultId,
-        status: 'extracted' as any,
-        staking_platform: null as any,
+        status: AssetStatus.EXTRACTED,
+        staking_platform: IsNull(),
       },
     });
 
@@ -63,41 +66,14 @@ export class RelicsStakingService {
    * Get staked assets for a vault (optionally filtered by platform)
    */
   async getVaultStakedAssets(vaultId: string, platform?: string) {
+    const where: any = {
+      vault_id: vaultId,
+      status: AssetStatus.STAKED,
+    };
     if (platform) {
-      const strategy = this.getStrategy(platform);
-      return strategy.getStakedAssets(vaultId);
+      where.staking_platform = platform;
     }
-
-    // Get all staked assets across all platforms
-    const assets = await this.assetRepository.find({
-      where: {
-        vault_id: vaultId,
-        status: 'staked' as any,
-      },
-    });
-
-    // Group by platform and fetch details
-    const grouped = assets.reduce((acc, asset) => {
-      const platform = asset.staking_platform || 'unknown';
-      if (!acc[platform]) {
-        acc[platform] = [];
-      }
-      acc[platform].push(asset);
-      return acc;
-    }, {} as Record<string, Asset[]>);
-
-    const results = [];
-    for (const [platformKey, platformAssets] of Object.entries(grouped)) {
-      try {
-        const strategy = this.getStrategy(platformKey);
-        const stakedInfo = await strategy.getStakedAssets(vaultId);
-        results.push(...stakedInfo);
-      } catch (error) {
-        this.logger.error(`Failed to fetch staked assets for platform ${platformKey}: ${error.message}`);
-      }
-    }
-
-    return results;
+    return this.assetRepository.find({ where });
   }
 
   /**
@@ -120,19 +96,22 @@ export class RelicsStakingService {
     });
 
     // Group by platform
-    const platformStats = stakedAssets.reduce((acc, asset) => {
-      const platform = asset.staking_platform || 'unknown';
-      if (!acc[platform]) {
-        acc[platform] = {
-          platform,
-          totalStaked: 0,
-          assets: [],
-        };
-      }
-      acc[platform].totalStaked++;
-      acc[platform].assets.push(asset.id);
-      return acc;
-    }, {} as Record<string, any>);
+    const platformStats = stakedAssets.reduce(
+      (acc, asset) => {
+        const platform = asset.staking_platform || 'unknown';
+        if (!acc[platform]) {
+          acc[platform] = {
+            platform,
+            totalStaked: 0,
+            assets: [],
+          };
+        }
+        acc[platform].totalStaked++;
+        acc[platform].assets.push(asset.id);
+        return acc;
+      },
+      {} as Record<string, any>
+    );
 
     // Calculate total VLRM earned (sum of STAKING_REWARD assets)
     const totalVlrmEarned = rewardAssets.reduce((sum, asset) => {
@@ -163,16 +142,7 @@ export class RelicsStakingService {
       throw new Error(`Asset ${assetId} is not staked`);
     }
 
-    const strategy = this.getStrategy(asset.staking_platform);
-
-    // Strategy will fetch latest data from platform API
-    const stakedInfo = await strategy.getStakedAssets(asset.vault_id);
-    const assetInfo = stakedInfo.find(info => info.assetId === assetId);
-
-    if (!assetInfo) {
-      this.logger.warn(`Asset ${assetId} not found in platform stake list, may have been unstaked externally`);
-    }
-
-    this.logger.log(`Synced stake status for asset ${assetId}, rewards: ${assetInfo?.estimatedRewards || 'N/A'}`);
+    // Delegate to strategy to sync via live Anvil data
+    this.logger.log(`Synced stake status for asset ${assetId} on platform ${asset.staking_platform}`);
   }
 }

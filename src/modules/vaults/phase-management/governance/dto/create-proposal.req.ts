@@ -15,6 +15,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 
+import { RelicsStakingActionDto } from '@/modules/relics-staking/dto/relics-staking-action.dto';
 import { AssetWhitelistDto } from '@/modules/vaults/dto/assetWhitelist.dto';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
@@ -552,8 +553,22 @@ export class CreateProposalReq {
   })
   @IsOptional()
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RelicsStakingActionDto)
   @Expose()
-  relicsStakingActions?: any[]; // Will be validated by RelicsStakingActionDto in service layer
+  relicsStakingActions?: RelicsStakingActionDto[];
+
+  @ApiProperty({
+    description: 'Staking actions (stake, unstake, or harvest on various platforms)',
+    type: 'array',
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RelicsStakingActionDto)
+  @Expose()
+  stakingActions?: RelicsStakingActionDto[];
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

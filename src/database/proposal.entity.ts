@@ -154,19 +154,35 @@ export class Proposal {
     // Relics staking execution tracking
     relicsStaking?: {
       platform: string; // e.g., 'anvil-relics'
+      /** 'stake' | 'unstake' | 'harvest' */
+      action?: string;
+      stakeCollectionId?: number;
+      /** True if all eligible assets should be staked */
+      stakeAll?: boolean;
+      /** Governance-approved asset DB IDs to stake */
+      assetIds?: string[];
+      /** Governance-approved Anvil stakeIds to unstake */
+      stakeIds?: string[];
+      /** true = claim accrued VLRM rewards on unstake */
+      claimRewards?: boolean;
       executedStakes?: Array<{
         batchIndex: number;
-        assetIds: string[];
-        stakeIds: string[];
+        stakeId: number;
         txHash: string;
+        assetIds: string[];
       }>;
       executedUnstakes?: Array<{
-        stakeId: string;
-        assetId: string;
+        stakeId: number;
         txHash: string;
-        vlrmRewards: string;
+        claimedVlrmRaw?: string;
       }>;
-      totalVlrmRewards?: string; // Total VLRM earned from unstaking
+      executedHarvests?: Array<{
+        stakeId: number;
+        txHash: string;
+        claimedVlrmRaw?: string;
+      }>;
+      /** Total raw VLRM rewards (4 decimals) */
+      totalVlrmRewardsRaw?: string;
     };
 
     // Execution retry tracking

@@ -1,28 +1,24 @@
 import { Asset } from '@/database/asset.entity';
 
-/**
- * Result of building a stake transaction
- */
-export interface StakeTxResult {
+/** Result of a completed stake execution (one Anvil batch = one stakeId) */
+export interface StakeExecutionResult {
   batchIndex: number;
+  stakeId: number;
+  txHash: string;
+  /** DB asset UUIDs included in this batch */
   assetIds: string[];
-  stakeIds: string[];
-  txHash?: string;
-  unsignedCbor: string;
+}
+
+/** Result of a completed unstake / harvest execution */
+export interface UnstakeExecutionResult {
+  stakeId: number;
+  txHash: string;
+  /** Raw VLRM amount received (4 decimals), if claim=true and rewards detected */
+  claimedVlrmRaw?: string;
 }
 
 /**
- * Result of building an unstake transaction
- */
-export interface UnstakeTxResult {
-  stakeId: string;
-  txHash?: string;
-  unsignedCbor: string;
-  vlrmRewards?: string;
-}
-
-/**
- * Staked asset information with rewards
+ * Staked asset information (from DB + Anvil API)
  */
 export interface StakedAssetInfo {
   assetId: string;
@@ -33,8 +29,18 @@ export interface StakedAssetInfo {
 }
 
 /**
- * Platform-specific staking strategy interface
- * Each external staking platform implements this interface
+ * Context passed to the strategy for executing transactions.
+ * Contains treasury credentials and UTxOs.
+ */
+export interface StakingExecutionContext {
+  vaultId: string;
+  /** Treasury address in bech32 format */
+  treasuryAddress: string;
+}
+
+/**
+ * Platform-specific staking strategy interface.
+ * Each external staking platform implements this interface.
  */
 export interface IStakingPlatformStrategy {
   /** Platform identifier (e.g., 'anvil-relics') */
@@ -53,25 +59,24 @@ export interface IStakingPlatformStrategy {
   readonly stakeCollectionId: number;
 
   /**
-   * Build stake transactions for multiple assets (batched)
-   * @param assets Assets to stake (max 50 per batch)
-   * @param treasuryWallet Treasury wallet for signing
-   * @returns Array of stake transaction results (one per batch)
+   * Execute staking for a list of assets, handling batching, signing, and submission.
+   * @returns One result per batch (batch size determined by platform limit)
    */
-  buildStakeTransaction(assets: Asset[], treasuryWallet: any): Promise<StakeTxResult[]>;
+  executeStake(assets: Asset[], ctx: StakingExecutionContext): Promise<StakeExecutionResult[]>;
 
   /**
-   * Build unstake transaction for stake IDs
-   * @param stakeIds Stake IDs to unstake
-   * @param treasuryWallet Treasury wallet for signing
-   * @returns Unstake transaction result
+   * Execute unstaking for a list of Anvil stake IDs, handling signing and submission.
+   * @param stakeIds  Anvil numeric stake IDs to unstake
+   * @param claim     true = also claim accrued VLRM rewards
    */
-  buildUnstakeTransaction(stakeIds: string[], treasuryWallet: any): Promise<UnstakeTxResult[]>;
+  executeUnstake(
+    stakeIds: number[],
+    ctx: StakingExecutionContext,
+    claim: boolean
+  ): Promise<UnstakeExecutionResult[]>;
 
   /**
-   * Get staked assets for a vault
-   * @param vaultId Vault ID
-   * @returns Staked asset information
+   * Fetch live staking data from the external platform for a treasury address.
    */
-  getStakedAssets(vaultId: string): Promise<StakedAssetInfo[]>;
+  getAnvilStakes(treasuryAddress: string): Promise<any[]>;
 }

@@ -328,4 +328,16 @@ export class GovernanceController {
   async getVaultStakingStats(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any> {
     return await this.governanceService.getVaultStakingStats(vaultId);
   }
+
+  @Get('vaults/:vaultId/rewards/staking/anvil-relics')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get live Anvil Relics staking rewards for vault' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Eligible assets, local staked assets, live Anvil stakes, pending VLRM, and claimed VLRM for the vault',
+  })
+  async getAnvilRelicsStakingRewards(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any> {
+    return await this.governanceService.getAnvilRelicsStakingRewards(vaultId);
+  }
 }
