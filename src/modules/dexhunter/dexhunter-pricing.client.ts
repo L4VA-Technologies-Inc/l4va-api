@@ -149,7 +149,6 @@ export class DexHunterPricingClient {
       });
 
       await pipeline.exec();
-      this.logger.debug(`Bulk cached ${pricesMap.size} token prices in Redis`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis batch set prices failed: ${errorMessage}`);
