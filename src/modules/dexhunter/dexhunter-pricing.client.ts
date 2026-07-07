@@ -295,15 +295,93 @@ export class DexHunterPricingClient {
   /**
    * Map TapTools interval format to DexHunter period format
    * TapTools: '1h', '1d', '1w', '1M'
-   * DexHunter: '1hour', '1day', '1week' (no monthly support)
+   * DexHunter: '1hour', '1day' (1week not actually supported, constructed from daily)
    */
   private mapIntervalToDexHunterPeriod(interval: string): string | null {
     const mapping: Record<string, string> = {
       '1h': '1hour',
       '1d': '1day',
-      '1w': '1week',
+      '1w': '1day', // Fetch daily data, aggregate to weekly
     };
     return mapping[interval] || null;
+  }
+
+  /**
+   * Aggregate daily OHLCV data into weekly candles
+   * Groups 7 consecutive days into one weekly candle
+   * Filters out zero-volume candles and extreme outliers for cleaner charts
+   */
+  private aggregateDailyToWeekly(dailyCandles: MarketOhlcvSeries): MarketOhlcvSeries {
+    if (!dailyCandles || dailyCandles.length === 0) {
+      return [];
+    }
+
+    // Filter out zero-volume candles (no trading activity)
+    const activeCandles = dailyCandles.filter(c => c.volume > 0);
+
+    if (activeCandles.length === 0) {
+      return [];
+    }
+
+    // Calculate median close price to detect outliers
+    const closePrices = activeCandles.map(c => c.close).sort((a, b) => a - b);
+    const medianPrice = closePrices[Math.floor(closePrices.length / 2)];
+
+    // Filter extreme outliers (prices > 10x median, likely thin order book trades)
+    const filteredCandles = activeCandles.filter(c => {
+      const priceRatio = Math.max(c.high / medianPrice, medianPrice / c.low);
+      return priceRatio < 10; // Skip candles with 10x+ price deviation
+    });
+
+    if (filteredCandles.length === 0) {
+      return [];
+    }
+
+    const weeklyCandles: MarketOhlcvSeries = [];
+    const WEEK_IN_SECONDS = 7 * 24 * 60 * 60; // 604800 seconds
+
+    // Group candles by week
+    let weekStart = Math.floor(filteredCandles[0].time / WEEK_IN_SECONDS) * WEEK_IN_SECONDS;
+    let weekCandles: typeof filteredCandles = [];
+
+    for (const candle of filteredCandles) {
+      const candleWeekStart = Math.floor(candle.time / WEEK_IN_SECONDS) * WEEK_IN_SECONDS;
+
+      // Check if this candle belongs to the current week
+      if (candleWeekStart === weekStart) {
+        weekCandles.push(candle);
+      } else {
+        // Complete the previous week if we have candles
+        if (weekCandles.length > 0) {
+          weeklyCandles.push({
+            time: weekStart,
+            open: weekCandles[0].open,
+            high: Math.max(...weekCandles.map(c => c.high)),
+            low: Math.min(...weekCandles.map(c => c.low)),
+            close: weekCandles[weekCandles.length - 1].close,
+            volume: weekCandles.reduce((sum, c) => sum + c.volume, 0),
+          });
+        }
+
+        // Start new week
+        weekStart = candleWeekStart;
+        weekCandles = [candle];
+      }
+    }
+
+    // Add the last week if we have candles
+    if (weekCandles.length > 0) {
+      weeklyCandles.push({
+        time: weekStart,
+        open: weekCandles[0].open,
+        high: Math.max(...weekCandles.map(c => c.high)),
+        low: Math.min(...weekCandles.map(c => c.low)),
+        close: weekCandles[weekCandles.length - 1].close,
+        volume: weekCandles.reduce((sum, c) => sum + c.volume, 0),
+      });
+    }
+
+    return weeklyCandles;
   }
 
   /**
@@ -328,13 +406,6 @@ export class DexHunterPricingClient {
       return null;
     }
 
-    // Map TapTools interval to DexHunter period
-    const period = this.mapIntervalToDexHunterPeriod(interval);
-    if (!period) {
-      this.logger.warn(`Unsupported interval for DexHunter: ${interval} (supports: 1h, 1d, 1w)`);
-      return null;
-    }
-
     const tokenUnit = scriptHash + assetName;
     const cacheKey = `ohlcv_${tokenUnit}_${interval}_${numIntervals || 'all'}`;
 
@@ -344,6 +415,15 @@ export class DexHunterPricingClient {
       return cached;
     }
 
+    // Map TapTools interval to DexHunter period (1w -> 1day, will aggregate later)
+    const period = this.mapIntervalToDexHunterPeriod(interval);
+    if (!period) {
+      this.logger.warn(`Unsupported interval for DexHunter: ${interval} (supports: 1h, 1d, 1w)`);
+      return null;
+    }
+
+    const isWeeklyInterval = interval === '1w';
+
     try {
       // Calculate time range
       const to = Math.floor(Date.now() / 1000);
@@ -351,12 +431,13 @@ export class DexHunterPricingClient {
 
       if (numIntervals) {
         // Calculate from based on number of intervals
+        // For weekly, multiply by 7 since we fetch daily and aggregate
         const intervalSeconds: Record<string, number> = {
           '1hour': 3600,
           '1day': 86400,
-          '1week': 604800,
         };
-        from = to - numIntervals * (intervalSeconds[period] || 3600);
+        const multiplier = isWeeklyInterval ? 7 : 1;
+        from = to - numIntervals * (intervalSeconds[period] || 3600) * multiplier;
       } else {
         // Default: get last 365 days (all-time data)
         from = to - 365 * 24 * 60 * 60;
@@ -400,13 +481,12 @@ export class DexHunterPricingClient {
       const intervalSeconds: Record<string, number> = {
         '1hour': 3600,
         '1day': 86400,
-        '1week': 604800,
       };
       const intervalDuration = intervalSeconds[period] || 3600;
 
       // Map DexHunter format to MarketOhlcvPoint format
       // DexHunter response doesn't include timestamps, so generate them based on from/period
-      const ohlcvData: MarketOhlcvSeries = result.data.map((candle: any, index: number) => ({
+      let ohlcvData: MarketOhlcvSeries = result.data.map((candle: any, index: number) => ({
         time: from + index * intervalDuration,
         open: candle.open,
         high: candle.high,
@@ -414,6 +494,14 @@ export class DexHunterPricingClient {
         close: candle.close,
         volume: candle.volume,
       }));
+
+      // If weekly interval requested, aggregate daily data into weekly candles
+      if (isWeeklyInterval) {
+        ohlcvData = this.aggregateDailyToWeekly(ohlcvData);
+        this.logger.debug(
+          `Aggregated ${result.data.length} daily candles into ${ohlcvData.length} weekly candles for ${tokenUnit.slice(0, 16)}...`
+        );
+      }
 
       // this.logger.log(`DexHunter OHLCV success for ${tokenUnit.slice(0, 16)}...: ${ohlcvData.length} data points`);
 
