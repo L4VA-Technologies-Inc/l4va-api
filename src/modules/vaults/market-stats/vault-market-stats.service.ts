@@ -307,8 +307,6 @@ export class VaultMarketStatsService {
 
       if (data) {
         this.logger.log(`DexHunter OHLCV fallback successful for ${policyId}.${assetName}`);
-      } else {
-        this.logger.warn(`Both TapTools and DexHunter OHLCV unavailable for ${policyId}.${assetName}`);
       }
     }
 
