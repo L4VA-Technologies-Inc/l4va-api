@@ -83,8 +83,31 @@ export class DexHunterPricingService {
         const tokenUnit = key.replace('-', '');
         const priceData = value as any;
 
+        // VyFi uses two formats:
+        // Format 1 (LP tokens): {priceADA: number}
+        // Format 2 (regular tokens): {lpRatio: {"lovelace/tokenUnit": {priceRatioAB: number}}}
+        let price: number | null = null;
+
+        // Try Format 1: Direct priceADA field
         if (priceData.priceADA && typeof priceData.priceADA === 'number' && priceData.priceADA > 0) {
-          resultMap.set(tokenUnit, priceData.priceADA);
+          price = priceData.priceADA;
+        }
+        // Try Format 2: lpRatio with priceRatioAB
+        else if (priceData.lpRatio && typeof priceData.lpRatio === 'object') {
+          // Find the lovelace pair (e.g., "lovelace/63efb704...56616c6f72756d")
+          for (const [poolPair, ratioData] of Object.entries(priceData.lpRatio)) {
+            if (poolPair.startsWith('lovelace/') && (ratioData as any).priceRatioAB) {
+              const priceRatioAB = (ratioData as any).priceRatioAB;
+              if (typeof priceRatioAB === 'number' && priceRatioAB > 0) {
+                price = priceRatioAB;
+                break;
+              }
+            }
+          }
+        }
+
+        if (price !== null) {
+          resultMap.set(tokenUnit, price);
           validCount++;
         }
       }
@@ -123,7 +146,6 @@ export class DexHunterPricingService {
       return null;
     }
 
-    const startTime = Date.now();
     const pricesMap = await this.fetchVyFiBulkPrices();
 
     if (!pricesMap || pricesMap.size === 0) {
@@ -134,8 +156,6 @@ export class DexHunterPricingService {
     // Store all prices in Redis via DexHunterPricingClient
     await this.dexHunterClient.setRedisPrices(pricesMap);
 
-    const duration = Date.now() - startTime;
-    this.logger.log(`VyFi cache refresh complete: ${pricesMap.size} tokens cached in ${duration}ms`);
     return pricesMap.size;
   }
 
@@ -186,7 +206,6 @@ export class DexHunterPricingService {
     const dexHunterPrice = dexHunterResult.get(tokenId);
 
     if (dexHunterPrice !== null && dexHunterPrice !== undefined && dexHunterPrice > 0) {
-      // this.logger.debug(`DexHunter API price for ${tokenId.slice(0, 10)}...: ${dexHunterPrice} ADA`);
       return dexHunterPrice;
     }
 
