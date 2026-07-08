@@ -311,7 +311,7 @@ export class TaptoolsService {
       // Valid UTF-8 string
       return decoded;
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (error) {
+    } catch (error: any) {
       return hexName || 'Unknown Asset';
     }
   }
@@ -409,7 +409,7 @@ export class TaptoolsService {
 
       this.logger.warn('CNFT.tools API returned unexpected data structure for Relics Vita trait prices');
       return null;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to fetch Relics Vita trait prices from CNFT.tools: ${error.message}`);
       return null;
     }
@@ -449,7 +449,7 @@ export class TaptoolsService {
 
       this.logger.debug(`Character trait not found in WayUp response for ${name}`);
       return null;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to fetch character from WayUp: ${error.message}`);
       return null;
     }
@@ -494,7 +494,7 @@ export class TaptoolsService {
 
       await this.assetRepository.update({ id: assetEntityId }, { metadata: updatedMetadata });
       this.logger.debug(`Background cached character trait '${character}' for asset ${assetEntityId}`);
-    } catch (error) {
+    } catch (error: any) {
       // Silent failure - this is an optimization, not critical
       this.logger.debug(
         `Failed to background cache character trait: ${error instanceof Error ? error.message : String(error)}`
@@ -521,7 +521,7 @@ export class TaptoolsService {
         if (floorPriceData.hasListings && floorPriceData.floorPriceAda !== null) {
           return floorPriceData.floorPriceAda;
         }
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Failed to fetch Porta floor price from WayUp: ${error.message}`);
       }
 
@@ -544,7 +544,7 @@ export class TaptoolsService {
           if (asset?.metadata?.character) {
             character = asset.metadata.character;
           }
-        } catch (error) {
+        } catch (error: any) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.logger.debug(`Failed to fetch asset metadata for character caching: ${errorMessage}`);
         }
@@ -588,7 +588,7 @@ export class TaptoolsService {
             } else {
               this.logger.debug(`Asset ${assetEntityId} not found for metadata update`);
             }
-          } catch (error) {
+          } catch (error: any) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this.logger.debug(`Failed to cache character trait in asset metadata: ${errorMessage}`);
           }
@@ -715,7 +715,7 @@ export class TaptoolsService {
                 ? Number(assetInDb.dex_price)
                 : null;
         }
-      } catch (error) {
+      } catch (error: any) {
         this.logger.debug(
           `Could not fetch cached price for ${policyId}.${assetName}: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -768,7 +768,7 @@ export class TaptoolsService {
               this.cache.set(cacheKey, result);
               return result;
             }
-          } catch (error) {
+          } catch (error: any) {
             this.logger.warn(`Failed to get floor price for Porta NFT, using fallback: ${error.message}`);
           }
           // Fallback if trait price fetch fails
@@ -828,7 +828,7 @@ export class TaptoolsService {
               this.cache.set(cacheKey, result);
               return result;
             }
-          } catch (error) {
+          } catch (error: any) {
             // Fallback to Balaena price for Vita on error
             this.logger.warn(`Failed to get trait-based price for Vita NFT, using Balaena fallback: ${error.message}`);
             const fallbackPrice = this.RELICS_CHARACTER_PRICES_FALLBACK.Balaena;
@@ -879,7 +879,7 @@ export class TaptoolsService {
             this.cache.set(cacheKey, { priceAda: floorPriceAda, priceUsd: floorPriceAda * adaPrice });
             return { priceAda: floorPriceAda, priceUsd: floorPriceAda * adaPrice };
           }
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`WayUp floor price failed for NFT ${policyId}: ${error.message}`);
         }
       } else {
@@ -943,7 +943,7 @@ export class TaptoolsService {
       }
 
       return { priceAda: 0, priceUsd: 0 };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to get asset value for ${policyId}:`, error.message);
       // Return fallback price on error
       return { priceAda: 0, priceUsd: 0 };
@@ -1082,7 +1082,7 @@ export class TaptoolsService {
                 try {
                   const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(asset.policy_id);
                   priceAda = floorPriceAda > 0 ? floorPriceAda : null;
-                } catch (error) {
+                } catch (error: any) {
                   this.logger.debug(`Failed to get floor price for NFT ${asset.policy_id}: ${error.message}`);
                 }
               }
@@ -1093,7 +1093,7 @@ export class TaptoolsService {
                 const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(tokenUnit);
 
                 priceAda = tokenPriceAda !== null && tokenPriceAda > 0 ? tokenPriceAda : null;
-              } catch (error) {
+              } catch (error: any) {
                 this.logger.debug(`Failed to get DEX price for FT ${asset.policy_id}: ${error.message}`);
               }
             }
@@ -1128,7 +1128,7 @@ export class TaptoolsService {
               );
               updatedCount++;
             }
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Error updating price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
           }
         },
@@ -1154,7 +1154,7 @@ export class TaptoolsService {
 
       // Calculate and return TVL for all affected vaults
       return await this.calculateVaultsTvl(vaultIds);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error in updateAssetPrices:', error.message);
       throw error;
     }
@@ -1322,7 +1322,7 @@ export class TaptoolsService {
 
         totalValueAda += totalAssetValueAda;
         totalValueUsd += totalAssetValueUsd;
-      } catch (error) {
+      } catch (error: any) {
         console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
       }
     }
@@ -1370,13 +1370,13 @@ export class TaptoolsService {
 
               totalValueAda += valueAda * quantity;
               totalValueUsd += valueAda * adaPrice * quantity;
-            } catch (error) {
+            } catch (error: any) {
               this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
             }
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       // Treasury wallet doesn't exist or error fetching - continue without it
       this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
     }
@@ -1567,7 +1567,7 @@ export class TaptoolsService {
 
             totalValueAda += valueAda * asset.quantity;
             totalValueUsd += valueAda * adaPrice * asset.quantity;
-          } catch (error) {
+          } catch (error: any) {
             // Skip assets that can't be valued
             this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
           }
@@ -1603,13 +1603,13 @@ export class TaptoolsService {
 
                   totalValueAda += valueAda * quantity;
                   totalValueUsd += valueAda * adaPrice * quantity;
-                } catch (error) {
+                } catch (error: any) {
                   this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
                 }
               }
             }
           }
-        } catch (error) {
+        } catch (error: any) {
           // Treasury wallet doesn't exist or error fetching - continue without it
           this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
         }
@@ -1622,7 +1622,7 @@ export class TaptoolsService {
       }
 
       return resultMap;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error in batch calculate vault assets:', error.message);
       // Return empty map on error
       return resultMap;
@@ -1950,7 +1950,7 @@ export class TaptoolsService {
       return plainToInstance(PaginatedWalletSummaryDto, result, {
         excludeExtraneousValues: true,
       });
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error('Error fetching paginated wallet summary:', err.message);
 
       if (axios.isAxiosError(err)) {
@@ -2023,7 +2023,7 @@ export class TaptoolsService {
       try {
         const lpTokenMetadata = await this.blockfrost.assetsById(lpTokenUnit);
         lpTokenDecimals = lpTokenMetadata.metadata?.decimals ?? 0;
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Failed to fetch LP token decimals for ${lpTokenUnit}, using default 0`);
       }
 
@@ -2033,7 +2033,7 @@ export class TaptoolsService {
         try {
           const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
           tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
         }
       }
@@ -2044,7 +2044,7 @@ export class TaptoolsService {
         try {
           const tokenBMetadata = await this.blockfrost.assetsById(tokenBUnit);
           tokenBDecimals = tokenBMetadata.metadata?.decimals ?? 6;
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Failed to fetch decimals for tokenB ${tokenBUnit}, using default 6`);
         }
       }
@@ -2076,7 +2076,7 @@ export class TaptoolsService {
       const lpTokenPrice = tvl / totalSupplyNormalized;
 
       return lpTokenPrice;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to calculate LP price from VyFi: ${error.message}`, error);
       return null;
     }
@@ -2139,7 +2139,7 @@ export class TaptoolsService {
       try {
         const lpTokenMetadata = await this.blockfrost.assetsById(poolData.lpTokenUnit);
         lpTokenDecimals = lpTokenMetadata.metadata?.decimals ?? 0;
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Failed to fetch LP token decimals for ${poolData.lpTokenUnit}, using default 0`);
       }
 
@@ -2155,7 +2155,7 @@ export class TaptoolsService {
       );
 
       return lpTokenPrice;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to calculate LP token price for ${onchainID}`, error);
       return null;
     }
@@ -2233,7 +2233,7 @@ export class TaptoolsService {
       }
 
       return customPriceMap;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to load custom prices for vault ${vaultId}:`, error.message);
       return customPriceMap;
     }
@@ -2251,7 +2251,7 @@ export class TaptoolsService {
       // Validate address and check if it exists
       try {
         await this.blockfrost.addresses(walletAddress);
-      } catch (error) {
+      } catch (error: any) {
         // If address has never received transactions, Blockfrost returns 404
         if (error.status_code === 404 || error.message?.includes('not been found')) {
           // Return empty wallet overview
@@ -2306,7 +2306,7 @@ export class TaptoolsService {
       // Cache for 5 minutes
       this.cache.set(overviewCacheKey, overview, 300);
       return overview;
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error('Error creating wallet overview:', err.message);
       if (err.response?.status_code === 404) {
         throw new HttpException('Wallet address not found', 404);
@@ -2386,7 +2386,7 @@ export class TaptoolsService {
       });
 
       return { assets: pageAssets, pagination };
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error('Error getting paginated assets:', err.message);
       throw new HttpException('Failed to fetch paginated assets', 500);
     }
@@ -2413,7 +2413,7 @@ export class TaptoolsService {
 
         // Cache for 2 minutes
         this.walletUnitsCache.set(cacheKey, assetUnits, 60);
-      } catch (err) {
+      } catch (err: any) {
         this.logger.error('Error fetching asset units:', err.message);
         throw new HttpException('Failed to fetch asset units', 500);
       }
