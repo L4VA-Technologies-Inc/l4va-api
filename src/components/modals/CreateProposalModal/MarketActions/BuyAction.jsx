@@ -3,7 +3,13 @@ import { Plus, Wallet, X, Loader2, CheckCircle } from 'lucide-react';
 
 import { NoTreasuryWalletAlert } from '../NoTreasuryWalletAlert';
 
-import { validateOptions, validateOption, formatPriceInput } from './shared/transactionHelpers';
+import {
+  formatPriceInput,
+  validateBuyOptionWithWhitelist,
+  validateBuyOptionsWithWhitelist,
+  extractPolicyIdFromUnit,
+  isPolicyWhitelisted,
+} from './shared/transactionHelpers';
 
 import { LavaSteelInput } from '@/components/shared/LavaInput';
 import { LavaSteelSelect } from '@/components/shared/LavaSelect';
@@ -77,12 +83,20 @@ const BuyOptionMetadataHandler = ({ option, onMetadataChange }) => {
   return null; // This component doesn't render anything
 };
 
-export const BuyAction = ({ vaultId, onDataChange, error }) => {
+export const BuyAction = ({ vaultId, assetsWhitelist = [], onDataChange, error }) => {
   const [options, setOptions] = useState([]);
   const [abstain, setAbstain] = useState(false);
   const [assetMetadataMap, setAssetMetadataMap] = useState({}); // Map of optionId -> metadata
 
   const getExecValue = sellType => (sellType === 'Offer' ? 'OFFER' : 'BUY');
+
+  const isOptionPolicyWhitelisted = useCallback(
+    option => {
+      const policyId = extractPolicyIdFromUnit(option?.assetId);
+      return isPolicyWhitelisted(policyId, assetsWhitelist);
+    },
+    [assetsWhitelist]
+  );
 
   // Handle metadata changes for buy options
   const handleMetadataChange = useCallback((optionId, metadata) => {
@@ -114,9 +128,9 @@ export const BuyAction = ({ vaultId, onDataChange, error }) => {
     onDataChange({
       buyingSellingOptions: options,
       abstain,
-      isValid: validateOptions(options, true), // true = isBuyType
+      isValid: validateBuyOptionsWithWhitelist(options, assetsWhitelist),
     });
-  }, [options, onDataChange, abstain]);
+  }, [options, onDataChange, abstain, assetsWhitelist]);
 
   const handleOptionChange = (id, field, value) => {
     if (field === 'assetId') {
@@ -212,6 +226,12 @@ export const BuyAction = ({ vaultId, onDataChange, error }) => {
         <div className="space-y-8">
           {options.map((option, index) => {
             const metadata = assetMetadataMap[option.id] || {};
+            const isPolicyInvalid =
+              Boolean(option.assetId) &&
+              option.assetId.length >= 56 &&
+              !isOptionPolicyWhitelisted(option) &&
+              !metadata.isLoading;
+            const isOptionInvalid = !validateBuyOptionWithWhitelist(option, assetsWhitelist);
 
             return (
               <div key={option.id}>
@@ -219,11 +239,13 @@ export const BuyAction = ({ vaultId, onDataChange, error }) => {
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
                   <p className="font-medium">
                     Option {index + 1}{' '}
-                    {error && !validateOption(option, true) && (
+                    {error && isOptionInvalid && (
                       <span className="text-red-600 ml-2">
                         {option.assetId && option.assetId.length > 0 && option.assetId.length < 56
                           ? 'Asset ID must be at least 56 characters!'
-                          : 'Fill in all inputs!'}
+                          : isPolicyInvalid
+                            ? 'Asset policy is not whitelisted for this vault!'
+                            : 'Fill in all inputs!'}
                       </span>
                     )}
                   </p>
@@ -320,13 +342,19 @@ export const BuyAction = ({ vaultId, onDataChange, error }) => {
                       value={option.assetId || ''}
                       onChange={value => handleOptionChange(option.id, 'assetId', value)}
                       className={
-                        option.assetId && option.assetId.length > 0 && option.assetId.length < 56
+                        (option.assetId && option.assetId.length > 0 && option.assetId.length < 56) || isPolicyInvalid
                           ? '!border-red-500/60'
                           : ''
                       }
                     />
                     {option.assetId && option.assetId.length > 0 && option.assetId.length < 56 && (
                       <p className="text-xs text-red-500 mt-1">Asset Unit must be at least 56 characters</p>
+                    )}
+                    {isPolicyInvalid && (
+                      <p className="text-xs text-red-500 mt-1">
+                        This policy is not in vault asset whitelist. Allowed policy must match one from assets
+                        whitelist.
+                      </p>
                     )}
                   </div>
                 </div>

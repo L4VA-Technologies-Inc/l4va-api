@@ -18,7 +18,7 @@ const marketOptions = [
   { value: 'swap', label: 'Swap - Coming Soon', disabled: true },
 ];
 
-export const MarketActions = ({ vaultId, onDataChange, error }) => {
+export const MarketActions = ({ vaultId, assetsWhitelist, onDataChange, error }) => {
   const [selectedOption, setSelectedOption] = useState(marketOptions[0].value);
 
   const handleOptionChange = value => {
@@ -51,7 +51,14 @@ export const MarketActions = ({ vaultId, onDataChange, error }) => {
         value={selectedOption}
         onChange={handleOptionChange}
       />
-      {selectedOption === 'buy' && <BuyAction error={error} vaultId={vaultId} onDataChange={handleActionDataChange} />}
+      {selectedOption === 'buy' && (
+        <BuyAction
+          error={error}
+          vaultId={vaultId}
+          assetsWhitelist={assetsWhitelist}
+          onDataChange={handleActionDataChange}
+        />
+      )}
       {selectedOption === 'sell' && (
         <SellAction error={error} vaultId={vaultId} onDataChange={handleActionDataChange} />
       )}
