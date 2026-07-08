@@ -48,6 +48,8 @@ interface GetAssetValueParams {
   customPriceMap?: CustomPriceMap;
   /** Optional readable name for trait-based pricing (e.g., Relics of Magma) */
   name?: string;
+  /** Optional asset entity ID for caching trait metadata */
+  assetEntityId?: string;
 }
 
 interface AssetPriceResult {
@@ -70,11 +72,15 @@ export class TaptoolsService {
   private readonly blockfrost: BlockFrostAPI;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
   private walletUnitsCache = new NodeCache({ stdTTL: 60 }); // cache for 1 minute for wallet asset units
+  private relicsTraitPriceCache = new NodeCache({ stdTTL: 900, checkperiod: 120 }); // cache for 15 minutes for trait prices
 
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
   private readonly RELICS_OF_MAGMA_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
-  // Fallback prices if TapTools API fails
+  private readonly CNFT_TOOLS_VITA_TRAIT_FLOORS_URL = 'https://cnft.tools/toolsapi/v3/traitfloors/romtv';
+  // VLRM token unit - use Charli3 API instead of DexHunter for accurate pricing
+  private readonly VLRM_TOKEN_UNIT = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
+  // Fallback prices if CNFT.tools API fails
   private readonly RELICS_CHARACTER_PRICES_FALLBACK = {
     Exploratur: 300, // 300 ADA
     Phoenix: 200, // 200 ADA
@@ -275,7 +281,7 @@ export class TaptoolsService {
       this.assetDetailsCache.set(cacheKey, assetDetails as BlockfrostAssetResponseDto);
 
       return { details: assetDetails as BlockfrostAssetResponseDto, cached: false };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.debug(`Failed to fetch details for asset ${assetId}: ${error.message}`);
       return null;
     }
@@ -353,6 +359,63 @@ export class TaptoolsService {
   }
 
   /**
+   * Fetch Relics of Magma Vita trait floor prices from CNFT.tools API
+   * @returns Map of character -> price in ADA, or null if fetch fails
+   */
+  private async fetchRelicsVitaTraitPricesFromCNFT(): Promise<Map<string, number> | null> {
+    // Check cache first
+    const cacheKey = 'relics_vita_trait_prices';
+    const cached = this.relicsTraitPriceCache.get<Map<string, number>>(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+
+    // Only works on mainnet
+    if (!this.isMainnet) {
+      return null;
+    }
+
+    try {
+      const response = await axios.get(this.CNFT_TOOLS_VITA_TRAIT_FLOORS_URL, {
+        timeout: 5000,
+      });
+
+      if (response.data && response.data.Character) {
+        const traitPrices = new Map<string, number>();
+        const characterData = response.data.Character;
+
+        // Extract floor prices from the array structure
+        // Format: { "Exploratur": [total_count, on_market, percentage, ..., ..., listing_object], ... }
+        // Index [0] = total count, Index [1] = on market, Index [8] = cheapest listing object with "price" in lovelace
+        for (const [character, data] of Object.entries(characterData)) {
+          if (Array.isArray(data) && data.length > 8 && typeof data[8] === 'object' && data[8] !== null) {
+            const listingObject = data[8] as any;
+            if (listingObject.price && typeof listingObject.price === 'number') {
+              // Convert lovelace to ADA
+              const priceAda = listingObject.price / 1_000_000;
+              traitPrices.set(character, priceAda);
+            }
+          }
+        }
+
+        if (traitPrices.size > 0) {
+          // Cache successful response
+          this.relicsTraitPriceCache.set(cacheKey, traitPrices);
+
+          return traitPrices;
+        }
+      }
+
+      this.logger.warn('CNFT.tools API returned unexpected data structure for Relics Vita trait prices');
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch Relics Vita trait prices from CNFT.tools: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Fetch Relics of Magma Vita character trait from WayUp API
    * WayUp API returns properly decoded attributes including "attributes / Character"
    * @param policyId The policy ID of the NFT
@@ -393,15 +456,63 @@ export class TaptoolsService {
   }
 
   /**
+   * Ensure character trait is cached in asset metadata for Relics Vita NFTs
+   * This is a fire-and-forget optimization that runs in the background
+   * @param policyId The policy ID of the NFT
+   * @param name The readable asset name
+   * @param assetEntityId The asset entity ID
+   */
+  private async ensureRelicsCharacterCached(policyId: string, name: string, assetEntityId: string): Promise<void> {
+    try {
+      // Check if character is already cached
+      const asset = await this.assetRepository.findOne({
+        where: { id: assetEntityId },
+        select: ['id', 'metadata'],
+      });
+
+      if (!asset) {
+        return;
+      }
+
+      // If character is already cached, nothing to do
+      if (asset.metadata?.character) {
+        return;
+      }
+
+      // Fetch character from WayUp
+      const character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
+
+      if (!character) {
+        return;
+      }
+
+      // Cache the character in metadata
+      const updatedMetadata = {
+        ...(asset.metadata || {}),
+        character,
+      };
+
+      await this.assetRepository.update({ id: assetEntityId }, { metadata: updatedMetadata });
+      this.logger.debug(`Background cached character trait '${character}' for asset ${assetEntityId}`);
+    } catch (error) {
+      // Silent failure - this is an optimization, not critical
+      this.logger.debug(
+        `Failed to background cache character trait: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
    * Get trait-based price for Relics of Magma NFTs
    * - Porta: Fetches floor price from WayUp API
-   * - Vita: Fetches trait-based prices from TapTools API
+   * - Vita: Fetches trait-based prices from CNFT.tools API with fallback to hardcoded prices
    * Falls back to hardcoded prices if APIs fail
    * @param policyId The policy ID of the NFT
    * @param name The readable asset name (e.g., "Relics of Magma - The Vita #0899")
+   * @param assetEntityId Optional asset entity ID for caching character trait in metadata
    * @returns Price in ADA or null if not a Relics of Magma NFT
    */
-  private async getRelicsOfMagmaPrice(policyId: string, name: string): Promise<number | null> {
+  private async getRelicsOfMagmaPrice(policyId: string, name: string, assetEntityId?: string): Promise<number | null> {
     // Handle Relics of Magma - The Porta (fetch floor price from WayUp)
     if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
       try {
@@ -418,21 +529,90 @@ export class TaptoolsService {
       return this.RELICS_PORTA_PRICE_FALLBACK;
     }
 
-    // Handle Relics of Magma - The Vita (trait-based pricing from TapTools)
+    // Handle Relics of Magma - The Vita (trait-based pricing from CNFT.tools)
     if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
-      // Fetch character trait from WayUp API (they have decoded attributes)
-      const character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
+      let character: string | null = null;
+
+      // Priority 1: Check if character is cached in asset metadata
+      if (assetEntityId) {
+        try {
+          const asset = await this.assetRepository.findOne({
+            where: { id: assetEntityId },
+            select: ['id', 'metadata'],
+          });
+
+          if (asset?.metadata?.character) {
+            character = asset.metadata.character;
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.debug(`Failed to fetch asset metadata for character caching: ${errorMessage}`);
+        }
+      } else {
+        this.logger.debug('No assetEntityId provided, skipping metadata cache check');
+      }
+
+      // Priority 2: Fetch character trait from WayUp API if not cached
+      if (!character) {
+        this.logger.debug(`Character not cached, fetching from WayUp for: ${name}`);
+        character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
+        this.logger.debug(`WayUp returned character: ${character || 'null'}`);
+
+        // Store the character in asset metadata for future use
+        if (character && assetEntityId) {
+          this.logger.debug(`Attempting to cache character '${character}' for asset ${assetEntityId}`);
+          try {
+            // Fetch the asset to get current metadata
+            const asset = await this.assetRepository.findOne({
+              where: { id: assetEntityId },
+              select: ['id', 'metadata'],
+            });
+
+            if (asset) {
+              // Merge character into existing metadata or create new metadata object
+              const updatedMetadata = {
+                ...(asset.metadata || {}),
+                character,
+              };
+
+              this.logger.debug(
+                `Updating metadata from ${JSON.stringify(asset.metadata)} to ${JSON.stringify(updatedMetadata)}`
+              );
+              const updateResult = await this.assetRepository.update(
+                { id: assetEntityId },
+                { metadata: updatedMetadata }
+              );
+              this.logger.debug(
+                `Cached character trait in asset metadata: ${character}, affected: ${updateResult.affected}`
+              );
+            } else {
+              this.logger.debug(`Asset ${assetEntityId} not found for metadata update`);
+            }
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.debug(`Failed to cache character trait in asset metadata: ${errorMessage}`);
+          }
+        } else if (!character) {
+          this.logger.debug(`No character found from WayUp, cannot cache`);
+        } else if (!assetEntityId) {
+          this.logger.debug(`No assetEntityId provided, cannot cache character`);
+        }
+      }
 
       if (character) {
-        // Try to get dynamic price from TapTools first
-        const traitPrices = null;
+        // Priority 3: Try to get dynamic price from CNFT.tools API
+        const traitPrices = await this.fetchRelicsVitaTraitPricesFromCNFT();
 
-        if (traitPrices && traitPrices.Character && traitPrices.Character[character]) {
-          return traitPrices.Character[character];
+        if (traitPrices && traitPrices.has(character)) {
+          const cnftPrice = traitPrices.get(character)!;
+          return cnftPrice;
         }
 
-        // Fallback to hardcoded prices if TapTools fails
+        // Priority 4: Fallback to hardcoded prices if CNFT.tools API fails or character not found
         if (this.RELICS_CHARACTER_PRICES_FALLBACK[character]) {
+          this.logger.debug(
+            `Using fallback trait price for ${character}: ${this.RELICS_CHARACTER_PRICES_FALLBACK[character]} ADA`
+          );
           return this.RELICS_CHARACTER_PRICES_FALLBACK[character];
         }
       }
@@ -463,6 +643,7 @@ export class TaptoolsService {
     isNFT,
     customPriceMap,
     name,
+    assetEntityId,
   }: GetAssetValueParams): Promise<AssetPriceResult> {
     try {
       const adaPrice = await this.priceService.getAdaPrice();
@@ -545,7 +726,7 @@ export class TaptoolsService {
         // Relics of Magma - The Porta: Use WayUp floor price
         if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
           try {
-            const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
+            const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '', assetEntityId);
             if (traitPrice !== null) {
               // Apply deviation protection
               const updateDecision = await this.shouldAcceptPriceUpdate({
@@ -604,7 +785,7 @@ export class TaptoolsService {
           try {
             // Fetch trait-based price from TapTools API using WayUp for character extraction
             // Pass the readable name for WayUp character trait search
-            const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
+            const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '', assetEntityId);
             if (traitPrice !== null) {
               // Apply deviation protection
               const updateDecision = await this.shouldAcceptPriceUpdate({
@@ -818,13 +999,15 @@ export class TaptoolsService {
   ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
     try {
       // Build query to get unique assets across specified vaults
-      const assets = await this.assetRepository.find({
+      const assets: Array<
+        Pick<Asset, 'id' | 'policy_id' | 'asset_id' | 'type' | 'name' | 'vault_id' | 'dex_price' | 'floor_price'>
+      > = await this.assetRepository.find({
         where: {
           status: In([AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
           deleted: false,
           vault: { id: In(vaultIds) },
         },
-        select: ['policy_id', 'asset_id', 'type', 'name', 'vault_id', 'dex_price', 'floor_price'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'name', 'vault_id', 'dex_price', 'floor_price'],
       });
 
       // Deduplicate by policy_id + asset_id + vault_id
@@ -891,7 +1074,7 @@ export class TaptoolsService {
             // Priority 3: Fetch from external APIs
             else if (isNFT) {
               // Check for Relics of Magma trait-based pricing first
-              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
+              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name, asset.id);
               if (relicsPrice !== null) {
                 priceAda = relicsPrice;
               } else {
@@ -1010,6 +1193,7 @@ export class TaptoolsService {
     const assetMap = new Map<
       string,
       {
+        id?: string;
         policyId: string;
         assetId: string;
         quantity: number;
@@ -1056,6 +1240,7 @@ export class TaptoolsService {
         }
 
         assetMap.set(key, {
+          id: asset.id,
           policyId: asset.policy_id,
           assetId: asset.asset_id,
           quantity: asset.normalizedQuantity,
@@ -1106,6 +1291,12 @@ export class TaptoolsService {
           // Use cached price from database
           valueAda = asset.cachedPrice;
           valueUsd = valueAda * adaPrice;
+
+          // Special handling: For Relics Vita NFTs, ensure character trait is cached even when using cached price
+          if (asset.policyId === this.RELICS_OF_MAGMA_VITA_POLICY && asset.id && asset.name) {
+            // Fire and forget - cache the character trait in the background without blocking
+            void this.ensureRelicsCharacterCached(asset.policyId, asset.name, asset.id);
+          }
         } else {
           const assetValue = await this.getAssetValue({
             policyId: asset.policyId,
@@ -1113,6 +1304,7 @@ export class TaptoolsService {
             isNFT: asset.isNft,
             customPriceMap,
             name: asset.name,
+            assetEntityId: asset.id,
           });
           valueAda = assetValue?.priceAda || 0;
           valueUsd = assetValue?.priceUsd || 0;
@@ -1172,6 +1364,7 @@ export class TaptoolsService {
                 assetName: asset.assetName,
                 isNFT: isNft,
                 customPriceMap,
+                // Note: Treasury assets don't have DB entity IDs, so character trait caching won't work
               });
               const valueAda = assetValue?.priceAda || 0;
 
@@ -1271,6 +1464,7 @@ export class TaptoolsService {
         const assetMap = new Map<
           string,
           {
+            id?: string;
             policyId: string;
             assetId: string;
             quantity: number;
@@ -1323,6 +1517,7 @@ export class TaptoolsService {
             }
 
             assetMap.set(key, {
+              id: asset.id,
               policyId: asset.policy_id,
               assetId: asset.asset_id,
               quantity: asset.normalizedQuantity,
@@ -1351,6 +1546,13 @@ export class TaptoolsService {
 
             if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
               valueAda = asset.cachedPrice;
+
+              // Special handling: For Relics Vita NFTs, ensure character trait is cached even when using cached price
+              // This allows us to optimize trait-based pricing by avoiding repeated WayUp API calls
+              if (asset.policyId === this.RELICS_OF_MAGMA_VITA_POLICY && asset.id && asset.name) {
+                // Fire and forget - cache the character trait in the background without blocking TVL calculation
+                void this.ensureRelicsCharacterCached(asset.policyId, asset.name, asset.id);
+              }
             } else {
               const assetValue = await this.getAssetValue({
                 policyId: asset.policyId,
@@ -1358,6 +1560,7 @@ export class TaptoolsService {
                 isNFT: asset.isNft,
                 customPriceMap: vaultCustomPrices,
                 name: asset.name,
+                assetEntityId: asset.id,
               });
               valueAda = assetValue?.priceAda || 0;
             }
@@ -1568,7 +1771,7 @@ export class TaptoolsService {
 
     // Recalculate complete TVL and gains for all affected users from ALL their vaults
     if (affectedUserIds.size > 0) {
-      this.logger.debug(`Recalculating TVL and gains for ${affectedUserIds.size} users`);
+      // this.logger.debug(`Recalculating TVL and gains for ${affectedUserIds.size} users`);
 
       // Batch query: Get all relevant vaults
       const allRelevantVaults = await this.vaultRepository.find({

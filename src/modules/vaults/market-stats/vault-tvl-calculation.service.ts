@@ -100,6 +100,8 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
     try {
       this.isProcessing = true;
 
+      this.logger.log('[]Starting vault valuation update process...');
+
       // Get active vaults (those with assets that need price updates)
       const activeVaults: Array<Pick<Vault, 'id' | 'name' | 'vault_status'>> = await this.vaultRepository.find({
         where: {
