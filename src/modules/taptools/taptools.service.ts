@@ -493,7 +493,6 @@ export class TaptoolsService {
       };
 
       await this.assetRepository.update({ id: assetEntityId }, { metadata: updatedMetadata });
-      this.logger.debug(`Background cached character trait '${character}' for asset ${assetEntityId}`);
     } catch (error: any) {
       // Silent failure - this is an optimization, not critical
       this.logger.debug(
@@ -554,13 +553,11 @@ export class TaptoolsService {
 
       // Priority 2: Fetch character trait from WayUp API if not cached
       if (!character) {
-        this.logger.debug(`Character not cached, fetching from WayUp for: ${name}`);
         character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
         this.logger.debug(`WayUp returned character: ${character || 'null'}`);
 
         // Store the character in asset metadata for future use
         if (character && assetEntityId) {
-          this.logger.debug(`Attempting to cache character '${character}' for asset ${assetEntityId}`);
           try {
             // Fetch the asset to get current metadata
             const asset = await this.assetRepository.findOne({
@@ -575,9 +572,6 @@ export class TaptoolsService {
                 character,
               };
 
-              this.logger.debug(
-                `Updating metadata from ${JSON.stringify(asset.metadata)} to ${JSON.stringify(updatedMetadata)}`
-              );
               const updateResult = await this.assetRepository.update(
                 { id: assetEntityId },
                 { metadata: updatedMetadata }
