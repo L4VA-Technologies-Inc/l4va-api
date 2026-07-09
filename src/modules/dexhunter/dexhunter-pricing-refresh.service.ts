@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 
 import { DexHunterPricingService } from './dexhunter-pricing.service';
 
@@ -21,10 +21,9 @@ export class DexHunterPricingRefreshService {
   }
 
   /**
-   * Refresh VyFi price cache every 10 minutes
-   * Cron expression: every 10 minutes
+   * Refresh VyFi price cache every 15 minutes
    */
-  @Cron(CronExpression.EVERY_10_MINUTES, {
+  @Cron('*/15 * * * *', {
     name: 'vyfi-price-refresh',
     timeZone: 'UTC',
   })
