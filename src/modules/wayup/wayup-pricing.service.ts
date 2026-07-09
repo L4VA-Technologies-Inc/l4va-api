@@ -30,8 +30,6 @@ export class WayUpPricingService {
   private readonly anvilMarketplaceApi: string;
   private readonly anvilApiKey: string;
   private readonly isMainnet: boolean;
-  private readonly tapToolsApiKey: string;
-  private readonly tapToolsApiUrl: string;
   private floorPriceCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache for floor prices
 
   private isTrackingInProgress = false;
@@ -44,8 +42,6 @@ export class WayUpPricingService {
     private readonly assetsService: AssetsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
-    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
     const anvilApiUrl = this.configService.get<string>('ANVIL_API_URL') ?? 'https://prod.api.ada-anvil.app/v2';
     this.anvilMarketplaceApi = `${anvilApiUrl.replace(/\/$/, '')}/services/marketplace`;
     this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY') ?? '';
@@ -94,54 +90,6 @@ export class WayUpPricingService {
       this.logger.error(`Failed to fetch collection assets for policy ${query.policyId}`, error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to fetch collection assets: ${errorMessage}`);
-    }
-  }
-
-  /**
-   * Fetch floor price from TapTools API as fallback
-   * @param policyId - The policy ID of the NFT collection
-   * @returns Floor price result or null if no data available
-   */
-  private async fetchFloorPriceFromTapTools(policyId: string): Promise<{
-    floorPrice: number | null;
-    floorPriceAda: number | null;
-    hasListings: boolean;
-  } | null> {
-    try {
-      const tapToolsResponse = await fetch(`${this.tapToolsApiUrl}/nft/collection/stats?policy=${policyId}`, {
-        headers: {
-          'x-api-key': this.tapToolsApiKey,
-        },
-      });
-
-      if (!tapToolsResponse.ok) {
-        const errorText = await tapToolsResponse.text();
-        throw new Error(`TapTools API error: ${tapToolsResponse.status} ${tapToolsResponse.statusText} - ${errorText}`);
-      }
-
-      const tapToolsData = await tapToolsResponse.json();
-
-      // TapTools returns price in ADA
-      if (!tapToolsData.price || tapToolsData.price === 0) {
-        this.logger.debug(`TapTools returned no floor price for collection ${policyId}`);
-        return null;
-      }
-
-      const floorPriceAda = tapToolsData.price;
-      const floorPriceLovelace = Math.round(floorPriceAda * 1_000_000);
-
-      this.logger.log(
-        `Successfully fetched floor price from TapTools for collection ${policyId}: ${floorPriceAda} ADA`
-      );
-
-      return {
-        floorPrice: floorPriceLovelace,
-        floorPriceAda,
-        hasListings: tapToolsData.listings > 0,
-      };
-    } catch (error) {
-      this.logger.warn(`TapTools API failed for collection ${policyId}`, error);
-      return null;
     }
   }
 
@@ -208,13 +156,13 @@ export class WayUpPricingService {
             hasListings: true,
           };
         } else {
-          this.logger.warn(`WayUp returned zero price for collection ${policyId}, trying TapTools fallback`);
+          this.logger.warn(`WayUp returned zero price for collection ${policyId}`);
         }
       } else {
-        this.logger.debug(`WayUp returned no listings for collection ${policyId}, trying TapTools fallback`);
+        this.logger.debug(`WayUp returned no listings for collection ${policyId}`);
       }
     } catch (error) {
-      this.logger.warn(`WayUp API failed for collection ${policyId}, trying TapTools fallback`, error);
+      this.logger.warn(`WayUp API failed for collection ${policyId}`, error);
     }
 
     // If WayUp succeeded with valid data, cache and return it
@@ -223,16 +171,8 @@ export class WayUpPricingService {
       return wayUpResult;
     }
 
-    // Fallback to TapTools API
-    const tapToolsResult = await this.fetchFloorPriceFromTapTools(policyId);
-
-    if (tapToolsResult) {
-      this.floorPriceCache.set(cacheKey, tapToolsResult);
-      return tapToolsResult;
-    }
-
     // Both APIs failed or returned no data - cache the result to avoid repeated failed lookups
-    this.logger.warn(`No floor price data available from WayUp or TapTools for collection ${policyId}`);
+    this.logger.warn(`No floor price data available from WayUp for collection ${policyId}`);
     const noDataResult = {
       floorPrice: null,
       floorPriceAda: null,
