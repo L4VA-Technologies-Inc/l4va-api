@@ -71,4 +71,48 @@ export class NexusClient {
       return null;
     }
   }
+
+  /**
+   * Get current ADA price in USD from Nexus market API
+   * @returns ADA price in USD, or null if fetch fails
+   */
+  async getAdaPrice(): Promise<number | null> {
+    // Skip for non-mainnet
+    if (!this.isMainnet) {
+      this.logger.debug(`Skipping Nexus ADA price call for non-mainnet environment`);
+      return null;
+    }
+
+    // Skip if API key not configured
+    if (!this.nexusApiKey) {
+      this.logger.debug(`Skipping Nexus ADA price call - API key not configured`);
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${this.nexusApiUrl}/api/market/ada`, {
+        headers: {
+          'X-Api-Key': this.nexusApiKey,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data || typeof data.priceUsd !== 'number') {
+        throw new Error('Invalid price data from Nexus API');
+      }
+
+      return Number(data.priceUsd);
+    } catch (error) {
+      this.logger.error(
+        `Failed to fetch ADA price from Nexus: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
 }

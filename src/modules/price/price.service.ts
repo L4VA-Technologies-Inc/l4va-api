@@ -3,20 +3,21 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import NodeCache from 'node-cache';
 
+import { NexusClient } from '@/modules/nexus/nexus.client';
+
 @Injectable()
 export class PriceService {
   private readonly logger = new Logger(PriceService.name);
   private cache = new NodeCache({ stdTTL: 600 });
   private readonly dexHunterApiKey: string;
   private readonly dexHunterBaseUrl: string;
-  private readonly tapToolsApiKey: string;
-  private readonly tapToolsApiUrl: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly nexusClient: NexusClient
+  ) {
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
-    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
-    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
   }
 
   async getAdaPrice(): Promise<number> {
@@ -63,34 +64,21 @@ export class PriceService {
 
         return adaPrice;
       } catch (dexHunterError) {
-        this.logger.warn(`DexHunter API failed: ${dexHunterError.message}. Trying TapTools...`);
+        this.logger.warn(`DexHunter API failed: ${dexHunterError.message}. Trying Nexus...`);
 
-        // Fallback to TapTools API
-        try {
-          const tapToolsResponse = await axios.get(`${this.tapToolsApiUrl}/token/quote`, {
-            params: { quote: 'USD' },
-            headers: {
-              'X-API-Key': this.tapToolsApiKey,
-            },
-            timeout: 5000,
-          });
+        // Fallback to Nexus API using NexusClient
+        const adaPrice = await this.nexusClient.getAdaPrice();
 
-          if (!tapToolsResponse.data || typeof tapToolsResponse.data.price !== 'number') {
-            throw new Error('Invalid price data from TapTools API');
-          }
-
-          const adaPrice = Number(tapToolsResponse.data.price);
-
-          // Cache price for 15 minutes
-          this.cache.set(cacheKey, adaPrice, 900);
-          this.cache.set('last_known_good_ada_price', adaPrice, 86400);
-
-          this.logger.log(`Successfully fetched ADA price from TapTools: $${adaPrice.toFixed(4)}`);
-          return adaPrice;
-        } catch (tapToolsError) {
-          this.logger.error(`TapTools API also failed: ${tapToolsError.message}`);
-          throw new Error('Both DexHunter and TapTools APIs failed');
+        if (adaPrice === null) {
+          throw new Error('Both DexHunter and Nexus APIs failed');
         }
+
+        // Cache price for 15 minutes
+        this.cache.set(cacheKey, adaPrice, 900);
+        this.cache.set('last_known_good_ada_price', adaPrice, 86400);
+
+        this.logger.log(`Successfully fetched ADA price from Nexus: $${adaPrice.toFixed(4)}`);
+        return adaPrice;
       }
     } catch (error) {
       this.logger.error(`Failed to fetch ADA price: ${error.message}`);
