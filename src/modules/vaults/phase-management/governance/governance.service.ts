@@ -1879,9 +1879,7 @@ export class GovernanceService {
 
       case ProposalType.STAKE_ASSETS:
       case ProposalType.UNSTAKE_ASSETS:
-      case ProposalType.HARVEST_REWARDS:
-      case ProposalType.RELICS_STAKING:
-      case ProposalType.RELICS_UNSTAKING: {
+      case ProposalType.HARVEST_REWARDS: {
         // Support both old and new payload formats
         const actions = createProposalReq.stakingActions || createProposalReq.relicsStakingActions || [];
 
@@ -1895,7 +1893,7 @@ export class GovernanceService {
 
         // Determine action type from proposal type
         const actionType =
-          createProposalReq.type === ProposalType.STAKE_ASSETS || createProposalReq.type === ProposalType.RELICS_STAKING
+          createProposalReq.type === ProposalType.STAKE_ASSETS
             ? 'stake'
             : createProposalReq.type === ProposalType.HARVEST_REWARDS
               ? 'harvest'

@@ -338,8 +338,6 @@ export class SystemSettingsService implements OnModuleInit {
       case 'stake_assets':
       case 'unstake_assets':
       case 'harvest_rewards':
-      case 'relics_staking':
-      case 'relics_unstaking':
         return this.governanceFeeProposalStaking;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);

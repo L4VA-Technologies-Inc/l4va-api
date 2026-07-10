@@ -663,11 +663,9 @@ export class GovernanceExecutionService {
           return await this.executeAcquireExpansionProposal(proposal);
 
         case ProposalType.STAKE_ASSETS:
-        case ProposalType.RELICS_STAKING:
           return await this.executeRelicsStakingProposal(proposal);
 
         case ProposalType.UNSTAKE_ASSETS:
-        case ProposalType.RELICS_UNSTAKING:
           return await this.executeRelicsUnstakingProposal(proposal);
 
         case ProposalType.HARVEST_REWARDS:
