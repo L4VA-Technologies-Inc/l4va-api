@@ -41,9 +41,36 @@ export class AddStakingFieldsToAsset1783089338520 implements MigrationInterface 
     );
     await queryRunner.query(`CREATE INDEX "IDX_assets_stake_id" ON "assets" ("stake_id") WHERE "stake_id" IS NOT NULL`);
     await queryRunner.query(`CREATE INDEX "IDX_assets_status_staked" ON "assets" ("status") WHERE "status" = 'staked'`);
+
+    // Add new staking proposal types to enum
+    await queryRunner.query(
+      `ALTER TYPE "public"."proposal_proposal_type_enum" RENAME TO "proposal_proposal_type_enum_old"`
+    );
+    await queryRunner.query(
+      `CREATE TYPE "public"."proposal_proposal_type_enum" AS ENUM('staking', 'distribution', 'termination', 'burning', 'buy_sell', 'marketplace_action', 'expansion', 'acquire_expansion', 'asset_whitelist_update', 'stake_assets', 'unstake_assets', 'harvest_rewards')`
+    );
+    await queryRunner.query(
+      `ALTER TABLE "proposal" ALTER COLUMN "proposal_type" TYPE "public"."proposal_proposal_type_enum" USING "proposal_type"::"text"::"public"."proposal_proposal_type_enum"`
+    );
+    await queryRunner.query(`DROP TYPE "public"."proposal_proposal_type_enum_old"`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    // Revert proposal type enum changes
+    await queryRunner.query(
+      `DELETE FROM "proposal" WHERE "proposal_type" IN ('stake_assets', 'unstake_assets', 'harvest_rewards')`
+    );
+    await queryRunner.query(
+      `CREATE TYPE "public"."proposal_proposal_type_enum_old" AS ENUM('staking', 'distribution', 'termination', 'burning', 'buy_sell', 'marketplace_action', 'expansion', 'acquire_expansion', 'asset_whitelist_update')`
+    );
+    await queryRunner.query(
+      `ALTER TABLE "proposal" ALTER COLUMN "proposal_type" TYPE "public"."proposal_proposal_type_enum_old" USING "proposal_type"::"text"::"public"."proposal_proposal_type_enum_old"`
+    );
+    await queryRunner.query(`DROP TYPE "public"."proposal_proposal_type_enum"`);
+    await queryRunner.query(
+      `ALTER TYPE "public"."proposal_proposal_type_enum_old" RENAME TO "proposal_proposal_type_enum"`
+    );
+
     // Remove indexes
     await queryRunner.query(`DROP INDEX "public"."IDX_assets_status_staked"`);
     await queryRunner.query(`DROP INDEX "public"."IDX_assets_stake_id"`);
