@@ -1966,48 +1966,8 @@ export class TaptoolsService {
    * @returns Total supply or null
    */
   /**
-   * Get cached token price from database (dex_price field)
-   * This ensures we use prices that have already passed deviation checks
-   * instead of potentially deviated prices from external APIs
-   * @param tokenUnit - Token unit (policyId + assetName in hex)
-   * @returns Cached price in ADA or null if not found
-   */
-  private async getCachedTokenPrice(tokenUnit: string): Promise<number | null> {
-    try {
-      // Split tokenUnit into policyId and assetName
-      // Policy ID is 56 chars, rest is asset name
-      const policyId = tokenUnit.substring(0, 56);
-      const assetName = tokenUnit.substring(56);
-
-      const asset = await this.assetRepository.findOne({
-        where: {
-          policy_id: policyId,
-          asset_id: assetName,
-          deleted: false,
-        },
-        select: ['dex_price'],
-      });
-
-      if (asset?.dex_price) {
-        const price = Number(asset.dex_price);
-        if (price > 0) {
-          return price;
-        }
-      }
-
-      return null;
-    } catch (error: any) {
-      this.logger.debug(
-        `Could not fetch cached price for ${tokenUnit.substring(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return null;
-    }
-  }
-
-  /**
    * Calculate LP token price from VyFi pool data
    * Uses lpQuantity from VyFi API directly (no Blockfrost call needed)
-   * Uses CACHED database prices for tokens to avoid using deviated API prices
    * @param tokenAUnit - TokenA unit (hex)
    * @param tokenBUnit - TokenB unit (hex or empty for ADA)
    * @param lpTokenUnit - Full LP token unit for logging only
@@ -2083,7 +2043,7 @@ export class TaptoolsService {
         }
       }
 
-      // Get token prices - use CACHED database prices to avoid using deviated API prices
+      // Get token prices
       let tokenAPrice = 0;
       let tokenBPrice = 0;
 
@@ -2091,24 +2051,11 @@ export class TaptoolsService {
       if (isTokenBAda) {
         tokenBPrice = 1;
       } else {
-        // Use cached price from database instead of fresh API price
-        const cachedPrice = await this.getCachedTokenPrice(tokenBUnit);
-        if (cachedPrice !== null && cachedPrice > 0) {
-          tokenBPrice = cachedPrice;
-        } else {
-          // Fallback to API only if no cached price exists
-          tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
-        }
+        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
       }
 
-      // TokenA price (could be another LP token!) - use cached price
-      const cachedTokenAPrice = await this.getCachedTokenPrice(tokenAUnit);
-      if (cachedTokenAPrice !== null && cachedTokenAPrice > 0) {
-        tokenAPrice = cachedTokenAPrice;
-      } else {
-        // Fallback to API only if no cached price exists
-        tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
-      }
+      // TokenA price (could be another LP token!)
+      tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
 
       // Calculate TVL
       // VyFi returns quantities in base units, normalize using actual decimals from Blockfrost
@@ -2136,7 +2083,6 @@ export class TaptoolsService {
    *
    * Uses lpTotalSupply from Nexus API directly (no Blockfrost call needed)
    * Falls back to VyFi API if pool ID format indicates VyFi pool
-   * Uses CACHED database prices for tokens to avoid using deviated API prices
    *
    * @param onchainID - Pool onchain ID (can be VyFi onchain ID format)
    * @param lpTokenUnit - Optional: Full LP token unit to enable VyFi fallback
@@ -2171,27 +2117,13 @@ export class TaptoolsService {
       if (poolData.tokenATicker === 'ADA' || !poolData.tokenA || poolData.tokenA === '') {
         tokenAPrice = 1;
       } else {
-        // Use cached price from database instead of fresh API price
-        const cachedPrice = await this.getCachedTokenPrice(poolData.tokenA);
-        if (cachedPrice !== null && cachedPrice > 0) {
-          tokenAPrice = cachedPrice;
-        } else {
-          // Fallback to API only if no cached price exists
-          tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenA)) || 0;
-        }
+        tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenA)) || 0;
       }
 
       if (poolData.tokenBTicker === 'ADA' || !poolData.tokenB || poolData.tokenB === '') {
         tokenBPrice = 1;
       } else {
-        // Use cached price from database instead of fresh API price
-        const cachedPrice = await this.getCachedTokenPrice(poolData.tokenB);
-        if (cachedPrice !== null && cachedPrice > 0) {
-          tokenBPrice = cachedPrice;
-        } else {
-          // Fallback to API only if no cached price exists
-          tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenB)) || 0;
-        }
+        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenB)) || 0;
       }
 
       // DexHunter/Nexus returns NORMALIZED (human-readable) token amounts
