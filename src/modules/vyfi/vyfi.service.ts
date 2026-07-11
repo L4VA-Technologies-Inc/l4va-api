@@ -4,9 +4,10 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import type Redis from 'ioredis';
 import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
@@ -17,6 +18,7 @@ import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onc
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -86,6 +88,11 @@ const VYFI_CONSTANTS = {
 export class VyfiService {
   private readonly logger = new Logger(VyfiService.name);
   private readonly vyfiApiUrl = 'https://api-v3.vyfi.io';
+  /**
+   * Redis TTL for VyFi pool cache (30 minutes = 1800 seconds)
+   * Pools change infrequently, so longer TTL is acceptable
+   */
+  private readonly POOL_CACHE_TTL_SECONDS = 1800;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
@@ -103,7 +110,8 @@ export class VyfiService {
     private vaultRepository: Repository<Vault>,
     private readonly httpService: HttpService,
     private readonly blockchainService: BlockchainService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -134,6 +142,7 @@ export class VyfiService {
       }
   > {
     const url = `${this.vyfiApiUrl}/lp`;
+    const cacheKey = this.buildPoolCacheKey(tokenAUnit, tokenBUnit);
     const queryParams = new URLSearchParams({
       networkId: this.networkId.toString(),
       tokenAUnit,
@@ -143,6 +152,23 @@ export class VyfiService {
 
     try {
       const response = await firstValueFrom(this.httpService.get(`${url}?${queryParams.toString()}`));
+
+      // Cache successful pool lookups in Redis
+      if (Array.isArray(response.data) && response.data.length > 0) {
+        try {
+          const cacheValue = JSON.stringify({
+            data: response.data,
+            updatedAt: Date.now(),
+          });
+          await this.redis.set(cacheKey, cacheValue, 'EX', this.POOL_CACHE_TTL_SECONDS);
+        } catch (cacheError) {
+          // Log but don't fail on cache write errors
+          this.logger.warn(
+            `Failed to cache VyFi pool data: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`
+          );
+        }
+      }
+
       return {
         exists: true,
         data: response.data,
@@ -154,8 +180,49 @@ export class VyfiService {
           error: 'Pool does not exist',
         };
       }
+
+      if (this.isTransientVyFiError(error)) {
+        try {
+          const cachedValue = await this.redis.get(cacheKey);
+          if (cachedValue) {
+            const cached = JSON.parse(cachedValue) as { data: VyFiPoolData[]; updatedAt: number };
+            if (cached?.data?.length) {
+              this.logger.warn(
+                `VyFi /lp transient error for ${tokenAUnit}/${tokenBUnit}; using cached pool data from ${new Date(cached.updatedAt).toISOString()}`
+              );
+              return {
+                exists: true,
+                data: cached.data,
+              };
+            }
+          }
+        } catch (cacheError) {
+          this.logger.error(
+            `Failed to retrieve cached VyFi pool data: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`
+          );
+        }
+      }
+
       throw new Error(`Failed to check VyFi pool: ${error.message}`);
     }
+  }
+
+  private buildPoolCacheKey(tokenAUnit: string, tokenBUnit: string): string {
+    return `vyfi_pool:${this.networkId}:${tokenAUnit}:${tokenBUnit}`;
+  }
+
+  private isTransientVyFiError(error: any): boolean {
+    const status = error?.response?.status;
+    const code = error?.code;
+
+    return (
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      code === 'ECONNABORTED' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNRESET'
+    );
   }
 
   async getPoolInfo(poolId: string): Promise<any> {
