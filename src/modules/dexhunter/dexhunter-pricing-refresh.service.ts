@@ -21,9 +21,9 @@ export class DexHunterPricingRefreshService {
   }
 
   /**
-   * Refresh VyFi price cache every 15 minutes
+   * Refresh VyFi price cache every 10 minutes
    */
-  @Cron('*/15 * * * *', {
+  @Cron('*/10 * * * *', {
     name: 'vyfi-price-refresh',
     timeZone: 'UTC',
   })
