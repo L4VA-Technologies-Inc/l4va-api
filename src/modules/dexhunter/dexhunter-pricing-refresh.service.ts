@@ -36,7 +36,7 @@ export class DexHunterPricingRefreshService {
       const count = await this.dexHunterPricingService.refreshVyFiCache();
 
       if (count !== null) {
-        this.logger.log(`VyFi bulk price refresh complete: ${count} tokens cached`);
+        this.logger.log(`VyFi fetchmaster refresh complete: ${count} tokens cached`);
       } else {
         this.logger.warn('VyFi bulk price refresh failed or returned no data');
       }

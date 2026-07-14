@@ -1987,6 +1987,12 @@ export class TaptoolsService {
       // Convert empty tokenB to 'lovelace' for VyFi API
       const tokenBQuery = !tokenBUnit || tokenBUnit === '' ? 'lovelace' : tokenBUnit;
 
+      // Fast-path: use pre-fetched allPools Redis cache (avoids /lp call + Blockfrost lookups)
+      const poolCache = await this.dexHunterPricingService.getVyFiPoolFromCache(tokenAUnit, tokenBQuery);
+      if (poolCache && poolCache.tvl > 0 && poolCache.lpTokenTotalSupply > 0) {
+        return poolCache.tvl / poolCache.lpTokenTotalSupply;
+      }
+
       const poolData = await this.vyfiService.getVyFiPoolData(tokenAUnit, tokenBQuery);
       if (!poolData) {
         this.logger.warn(`No VyFi pool found for ${tokenAUnit}/${tokenBQuery}`);
