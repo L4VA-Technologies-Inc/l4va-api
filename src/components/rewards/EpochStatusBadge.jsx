@@ -16,12 +16,12 @@ export const EpochStatusBadge = ({ status }) => {
       label: 'Processing',
       animate: true,
     },
-    finalized: {
+    completed: {
       bg: 'bg-blue-500/10',
       border: 'border-blue-500/30',
       text: 'text-blue-400',
       dot: 'bg-blue-500',
-      label: 'Finalized',
+      label: 'Completed',
       animate: false,
     },
   };

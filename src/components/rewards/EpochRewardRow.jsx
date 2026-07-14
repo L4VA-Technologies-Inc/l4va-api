@@ -6,6 +6,8 @@ import { formatDateRange } from '@/utils/rewards/normalizers';
 export const EpochRewardRow = ({ epoch, reward = null, score = null, onClick = null }) => {
   const hasReward = reward && Number(reward.finalReward) > 0;
   const isCapped = reward?.wasCapped || false;
+  const isActiveEpoch = epoch?.status === 'active' || epoch?.isActive === true;
+  const epochLabel = epoch?.epochNumber || epoch?.weekNumber;
 
   return (
     <div
@@ -16,7 +18,7 @@ export const EpochRewardRow = ({ epoch, reward = null, score = null, onClick = n
         {/* Epoch Info */}
         <div className="flex-1">
           <div className="flex items-center gap-3 mb-2">
-            <h4 className="font-semibold text-white">{epoch.weekNumber ? `Week ${epoch.weekNumber}` : 'Epoch'}</h4>
+            <h4 className="font-semibold text-white">{epochLabel ? `Epoch ${epochLabel}` : 'Epoch'}</h4>
             <EpochStatusBadge status={epoch.status} />
             {isCapped && (
               <div className="px-2 py-0.5 bg-yellow-500/10 border border-yellow-500/30 rounded text-xs text-yellow-400">
@@ -45,7 +47,7 @@ export const EpochRewardRow = ({ epoch, reward = null, score = null, onClick = n
               )}
             </>
           ) : (
-            <div className="text-gray-600">No rewards</div>
+            !isActiveEpoch && <div className="text-gray-600">No rewards</div>
           )}
         </div>
       </div>
