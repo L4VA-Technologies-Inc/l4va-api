@@ -78,8 +78,6 @@ export class TaptoolsService {
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
   private readonly RELICS_OF_MAGMA_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
   private readonly CNFT_TOOLS_VITA_TRAIT_FLOORS_URL = 'https://cnft.tools/toolsapi/v3/traitfloors/romtv';
-  // VLRM token unit - use Charli3 API instead of DexHunter for accurate pricing
-  private readonly VLRM_TOKEN_UNIT = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
   // Fallback prices if CNFT.tools API fails
   private readonly RELICS_CHARACTER_PRICES_FALLBACK = {
     Exploratur: 300, // 300 ADA

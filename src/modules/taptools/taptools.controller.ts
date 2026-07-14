@@ -49,7 +49,7 @@ export class TaptoolsController {
   @Get('price/:tokenUnit')
   @ApiDoc({
     summary: 'Get token price in ADA',
-    description: 'Returns token price in ADA for a given token unit (includes VLRM -> Charli3 routing)',
+    description: 'Returns token price in ADA for a given token unit',
     status: 200,
   })
   @ApiParam({
