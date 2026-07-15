@@ -2637,13 +2637,25 @@ export class GovernanceExecutionService {
 
     this.logger.log(`executeRelicsStakingProposal: proposal=${proposal.id}, platform=${platform}`);
 
+    // Get treasury wallet for signing
+    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
+    if (!treasuryWallet) {
+      throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
+    }
+
     // Resolve assets from governance-approved action only
     let assets: Asset[];
     if (relicsMeta?.stakeAll) {
       assets = await this.relicsStakingService.getEligibleAssets(proposal.vaultId, platform);
     } else if (relicsMeta?.assetIds?.length) {
       assets = await this.assetRepository.find({
-        where: { id: In(relicsMeta.assetIds), vault_id: proposal.vaultId },
+        where: {
+          id: In(relicsMeta.assetIds),
+          vault_id: proposal.vaultId,
+          status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
+          staking_platform: null,
+          type: AssetType.NFT,
+        },
       });
     } else {
       this.logger.warn(`Relics staking proposal ${proposal.id} has no assetIds and stakeAll is not set`);
@@ -2655,12 +2667,27 @@ export class GovernanceExecutionService {
       return false;
     }
 
-    this.logger.log(`Staking ${assets.length} Relics NFTs`);
+    // Separate LOCKED and EXTRACTED assets
+    const lockedAssets = assets.filter(a => a.status === AssetStatus.LOCKED);
 
-    // Get treasury wallet for signing
-    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
-    if (!treasuryWallet) {
-      throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
+    // Extract LOCKED assets to treasury first
+    if (lockedAssets.length > 0) {
+      this.logger.log(`Extracting ${lockedAssets.length} LOCKED assets to treasury before staking`);
+
+      const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
+        vaultId: proposal.vaultId,
+        assetIds: lockedAssets.map(a => a.id),
+        treasuryAddress: treasuryWallet.address,
+        skipOnchain: false,
+        isBurn: false,
+      });
+
+      this.logger.log(
+        `Successfully extracted ${extractionResult.extractedAssets.length} assets to treasury in transaction ${extractionResult.txHash}`
+      );
+
+      // Update status from LOCKED to EXTRACTED
+      await this.assetRepository.update({ id: In(lockedAssets.map(a => a.id)) }, { status: AssetStatus.EXTRACTED });
     }
 
     const strategy = this.relicsStakingService.getStrategy(platform);

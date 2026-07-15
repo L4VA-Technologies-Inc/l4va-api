@@ -297,7 +297,7 @@ export class GovernanceController {
     };
   }
 
-  @Get('vaults/:vaultId/governance/assets-to-stake-relics')
+  @Get('vaults/:vaultId/assets-to-stake-relics')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get Relics NFTs eligible for external platform staking' })
   @ApiResponse({ status: 200, description: 'List of Relics NFTs ready to stake' })

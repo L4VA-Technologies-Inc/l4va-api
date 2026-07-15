@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 
 import { AnvilRelicsStakingStrategy } from './strategies/anvil-relics.strategy';
 import { IStakingPlatformStrategy } from './strategies/staking-platform.interface';
@@ -46,6 +46,8 @@ export class RelicsStakingService {
 
   /**
    * Get assets eligible for staking on a specific platform
+   * Returns both LOCKED (in vault) and EXTRACTED (in treasury) assets
+   * LOCKED assets will be extracted to treasury during execution
    */
   async getEligibleAssets(vaultId: string, platform: string): Promise<Asset[]> {
     const strategy = this.getStrategy(platform);
@@ -53,7 +55,7 @@ export class RelicsStakingService {
     const assets = await this.assetRepository.find({
       where: {
         vault_id: vaultId,
-        status: AssetStatus.EXTRACTED,
+        status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
         staking_platform: IsNull(),
       },
     });

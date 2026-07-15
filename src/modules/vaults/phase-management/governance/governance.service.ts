@@ -1889,6 +1889,10 @@ export class GovernanceService {
           );
         }
 
+        if (actions.length > 1) {
+          throw new BadRequestException('Only one staking action is supported per proposal');
+        }
+
         const action = actions[0];
 
         // Determine action type from proposal type
@@ -3183,12 +3187,18 @@ export class GovernanceService {
         amount: string;
         decimals: number;
         unit: string;
-      } => ({
-        raw: raw.toString(),
-        amount: (Number(raw) / 10 ** VLRM_DECIMALS).toFixed(VLRM_DECIMALS),
-        decimals: VLRM_DECIMALS,
-        unit: VLRM_UNIT,
-      });
+      } => {
+        const divisor = BigInt(10 ** VLRM_DECIMALS);
+        const integerPart = raw / divisor;
+        const fractionalPart = raw % divisor;
+        const amount = `${integerPart}.${fractionalPart.toString().padStart(VLRM_DECIMALS, '0')}`;
+        return {
+          raw: raw.toString(),
+          amount,
+          decimals: VLRM_DECIMALS,
+          unit: VLRM_UNIT,
+        };
+      };
 
       return {
         platform: PLATFORM,
