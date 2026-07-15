@@ -98,7 +98,7 @@ export class TokenVerificationRefreshService {
         return true;
       }
       return false;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(
         `WayUp token verification refresh for policy ${policyId}: ${error instanceof Error ? error.message : error}`
       );

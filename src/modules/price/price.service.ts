@@ -92,7 +92,7 @@ export class PriceService {
           throw new Error('Both DexHunter and TapTools APIs failed');
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to fetch ADA price: ${error.message}`);
 
       // If we have a last known good price, use that

@@ -169,7 +169,7 @@ export class VaultsService {
           .on('end', () => resolve(results))
           .on('error', error => reject(error));
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error parsing CSV from Google Cloud Storage:', error);
       throw new BadRequestException('Failed to parse CSV file');
     }
@@ -365,7 +365,7 @@ export class VaultsService {
         newVault = await this.vaultsRepository.save(vaultData as Vault);
         // Always reload the entity to ensure it's managed and has all relations
         newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
-      } catch (error) {
+      } catch (error: any) {
         // Handle unique constraint violation for file relations as fallback
         if (error.code === '23505' && error.detail?.includes('already exists')) {
           this.logger.warn(
@@ -721,7 +721,7 @@ export class VaultsService {
         presignedTx,
         txId: transactionId,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error creating vault:', error);
 
       // Revert the partially-created vault to draft so the user can retry from their drafts.
@@ -1436,7 +1436,7 @@ export class VaultsService {
       }
 
       return !!result.has_transaction;
-    } catch (error) {
+    } catch (error: any) {
       return false;
     }
   }
@@ -1881,7 +1881,7 @@ export class VaultsService {
       this.logger.log(`Vault ${vaultId} successfully marked as burned`);
 
       return { txHash };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error publishing burn transaction for vault ${vaultId}:`, error);
       throw error;
     }
@@ -2029,7 +2029,7 @@ export class VaultsService {
       }
 
       return { phaseStartTime, phaseEndTime };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error calculating phase times for vault ${vault.id}:`, error);
       return { phaseStartTime: null, phaseEndTime: null };
     }
@@ -2285,7 +2285,7 @@ export class VaultsService {
           platform: VerificationPlatform.WAYUP,
         })
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to fetch collection info for policyId ${policyId}: ${error.message}`);
 
       return Object.assign(new TokenVerification(), {

@@ -96,7 +96,7 @@ export class AutomatedDistributionService {
 
       // Step 2: Check extraction completion and trigger contributor payments
       await this.checkExtractionsAndTriggerPayments();
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error in vault distribution process:', error);
     } finally {
       this.isRunning = false;
@@ -199,7 +199,7 @@ export class AutomatedDistributionService {
           );
           await this.vaultRepository.update({ id: vault.id }, { manual_distribution_mode: true });
         }
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Error processing vault ${vault.id}:`, error);
       }
     }
@@ -290,7 +290,7 @@ export class AutomatedDistributionService {
 
           await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
         }
-      } catch (error) {
+      } catch (error: any) {
         // Handle insufficient UTXOs - stop processing this vault and wait for next cron cycle
         if (error instanceof InsufficientUtxosException) {
           this.logger.warn(
@@ -335,7 +335,7 @@ export class AutomatedDistributionService {
       );
 
       this.logger.log(`Successfully parameterized dispatch script for vault ${vault.id}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error parameterizing dispatch script for vault ${vault.id}:`, error);
       throw error;
     }
@@ -421,7 +421,7 @@ export class AutomatedDistributionService {
       // Create governance snapshot
       try {
         await this.governanceService.createAutomaticSnapshot(vaultId, `${script_hash}${asset_vault_name}`);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Error creating governance snapshot for vault ${vaultId}:`, error);
       }
 
@@ -429,7 +429,7 @@ export class AutomatedDistributionService {
         `Vault ${vaultId} distribution finalized successfully ` +
           `(${hasExpansionClaims ? 'expansion distribution' : vault.liquidity_pool_contribution > 0 ? 'LP created' : 'no LP'})`
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to finalize vault distribution for ${vaultId}:`, error);
       await this.vaultRepository.update({ id: vaultId }, { distribution_in_progress: false });
       throw error;

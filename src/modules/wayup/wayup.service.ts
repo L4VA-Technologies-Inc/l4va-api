@@ -162,7 +162,7 @@ export class WayUpService {
         txHash: submitResponse.txHash,
         listedAssets: listings,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to create listing', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
@@ -255,7 +255,7 @@ export class WayUpService {
         txHash: submitResponse.txHash,
         unlistedAssets: unlistings,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to unlist NFTs', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
@@ -355,7 +355,7 @@ export class WayUpService {
         txHash: submitResponse.txHash,
         updatedAssets: updates,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to update listing', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
@@ -464,7 +464,7 @@ export class WayUpService {
         txHash: submitResponse.txHash,
         offers: offers,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to make offer', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
@@ -572,7 +572,7 @@ export class WayUpService {
         txHash: submitResponse.txHash,
         purchases: purchases,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to buy NFT', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
@@ -742,7 +742,7 @@ export class WayUpService {
               policyId: unlist.policyId,
               txHashIndex: `${unlist.txHashIndex}#${outputIndex}`,
             });
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to find output index for unlist ${unlist.policyId}: ${error.message}`);
             throw new Error(`Cannot unlist ${unlist.policyId}: ${error.message}`);
           }
@@ -767,7 +767,7 @@ export class WayUpService {
               txHashIndex: `${update.txHashIndex}#${outputIndex}`,
               newPriceAda: update.newPriceAda,
             });
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to find output index for update ${update.policyId}: ${error.message}`);
             throw new Error(`Cannot update listing for ${update.policyId}: ${error.message}`);
           }
@@ -808,7 +808,7 @@ export class WayUpService {
               policyId: unlistOffer.policyId,
               txHashIndex: txHashIndexWithOutput,
             });
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to find output index for offer cancel ${unlistOffer.policyId}: ${error.message}`);
             throw new Error(`Cannot cancel offer ${unlistOffer.policyId}: ${error.message}`);
           }
@@ -867,7 +867,7 @@ export class WayUpService {
         txHash: submitResponse.txHash,
         summary,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to execute combined marketplace actions', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
@@ -905,7 +905,7 @@ export class WayUpService {
       }
 
       throw new Error(`Could not find NFT ${policyId}${assetName} in marketplace script output of tx ${listingTxHash}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error finding output index for tx ${listingTxHash}: ${error.message}`, error.stack);
       throw error;
     }
@@ -932,7 +932,7 @@ export class WayUpService {
 
       // Return the signed transaction as hex
       return Buffer.from(txToSign.to_bytes()).toString('hex');
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to sign transaction for vault ${vaultId}`, error);
       throw new Error(`Failed to sign transaction: ${error.message}`);
     }

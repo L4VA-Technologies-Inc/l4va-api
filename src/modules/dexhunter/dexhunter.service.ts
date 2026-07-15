@@ -131,7 +131,7 @@ export class DexHunterService {
         totalFee: data.total_fee,
         splits: data.splits || [],
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to estimate swap', error);
       throw new Error(`Failed to estimate swap: ${error.message}`);
     }
@@ -289,7 +289,7 @@ export class DexHunterService {
         estimatedOutput: estimate.totalOutput,
         actualSlippage: actualSlippage,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to execute swap', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;

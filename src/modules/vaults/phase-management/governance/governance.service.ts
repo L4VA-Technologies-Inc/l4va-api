@@ -218,7 +218,7 @@ export class GovernanceService {
       const failed = results.filter(r => r.status === 'rejected').length;
 
       this.logger.log(`Daily snapshot creation completed: ${successful} successful, ${failed} failed`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
     }
   }
@@ -291,14 +291,14 @@ export class GovernanceService {
             }
             page++;
           }
-        } catch (error) {
+        } catch (error: any) {
           if (error.message.includes('not been found') || error.status_code === 404) {
             this.logger.warn(`Asset ${assetId} not found on blockchain. Verify policy ID and asset name are correct.`);
 
             if (Object.keys(addressBalances).length === 0) {
               try {
                 await this.blockfrost.assetsById(assetId);
-              } catch (assetError) {
+              } catch (assetError: any) {
                 this.logger.error(`Asset ${assetId} does not exist on blockchain: ${assetError.message}`);
                 throw new NotFoundException(
                   `Asset ${assetId} not found on blockchain. Check policy ID and asset name.`
@@ -367,7 +367,7 @@ export class GovernanceService {
               addressBalances[user.address] = (addressBalances[user.address] ?? BigInt(0)) + underlyingTokens;
             }
             this.logger.log(`Processed LP pool ${pool.exchange} successfully.`);
-          } catch (poolError) {
+          } catch (poolError: any) {
             this.logger.error(`Failed to process pool ${pool.exchange}: ${poolError.message}`);
           }
         }
@@ -417,7 +417,7 @@ export class GovernanceService {
       );
 
       return snapshot;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create automatic snapshot: ${error.message}`, error.stack);
       throw error;
     }
@@ -783,7 +783,7 @@ export class GovernanceService {
                   `Found ${vyfiPools.length} VyFi pool(s) but none of the LP tokens exist in admin wallet`
                 );
               }
-            } catch (error) {
+            } catch (error: any) {
               const errorMessage = error instanceof Error ? error.message : 'Unknown error';
               this.logger.warn(`Failed to check admin wallet for VyFi LP tokens: ${errorMessage}`);
             }
@@ -850,7 +850,7 @@ export class GovernanceService {
               `Termination proposal validated: All ${allPools.length} LP pool(s) are recoverable. Safe to proceed.`
             );
           }
-        } catch (error) {
+        } catch (error: any) {
           // If it's already a BadRequestException (from our validation), re-throw it
           if (error instanceof BadRequestException) {
             throw error;
@@ -932,7 +932,7 @@ export class GovernanceService {
                     `Required up to ${totalMaxAda} ADA for WayUp buys/offers, available: ${adaBalance.toFixed(2)} ADA.`
                 );
               }
-            } catch (error) {
+            } catch (error: any) {
               this.logger.error(
                 `Failed to validate treasury balance for vault ${vaultId}: ${error.message}`,
                 error.stack
@@ -1188,7 +1188,7 @@ export class GovernanceService {
                         ' Cancel-offer proposal cannot be created.'
                     );
                   }
-                } catch (error) {
+                } catch (error: any) {
                   if (error instanceof BadRequestException) {
                     throw error;
                   }
@@ -1279,7 +1279,7 @@ export class GovernanceService {
                   slippage,
                 });
                 this.logger.log(`Swap pool verified for ${action.assetId} with quantity ${swapQuantity}`);
-              } catch (error) {
+              } catch (error: any) {
                 // Check if error is pool not found - could be no pool OR amount too low
                 if (error.message?.includes('pool_not_found') || error.message?.includes('not found')) {
                   // Try with a high amount (1M tokens) to distinguish between "no pool" and "amount too low"
@@ -1561,7 +1561,7 @@ export class GovernanceService {
               `Expansion proposal validated: Vault ${vaultForLpCheck.name} has active LP on ${liquidityCheck.pools.length} DEX(es): ${dexList}. ` +
                 `Total TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA`
             );
-          } catch (error) {
+          } catch (error: any) {
             // If it's already a BadRequestException, re-throw it
             if (error instanceof BadRequestException) {
               throw error;
@@ -1850,7 +1850,7 @@ export class GovernanceService {
               currentAdaRaised: 0,
               marketPriceSnapshot: currentVtPrice, // Store for display purposes only
             };
-          } catch (error) {
+          } catch (error: any) {
             // If it's already a BadRequestException, re-throw it
             if (error instanceof BadRequestException) {
               throw error;
@@ -1980,7 +1980,7 @@ export class GovernanceService {
           presignedTx: feeTransaction.presignedTx,
           feeAmount: feeTransaction.feeAmount,
         };
-      } catch (error) {
+      } catch (error: any) {
         // If fee transaction build fails, delete the proposal and throw error
         await this.proposalRepository.remove(proposal);
         this.logger.error(`Failed to build governance fee transaction: ${error.message}`, error.stack);
@@ -2088,7 +2088,7 @@ export class GovernanceService {
               abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
             },
           };
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error fetching votes for proposal ${proposal.id}: ${error.message}`, error.stack);
           return baseProposal;
         }
@@ -2154,7 +2154,7 @@ export class GovernanceService {
           canVote = isActive && hasVotingPower;
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error checking voting eligibility for user ${userId} on proposal ${proposalId}: ${error.message}`
       );
@@ -2368,7 +2368,7 @@ export class GovernanceService {
             error: b.error,
           })),
         };
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Failed to get distribution status for proposal ${proposalId}: ${error.message}`);
       }
     }
@@ -2392,7 +2392,7 @@ export class GovernanceService {
         no: voteResult.noVotePercent,
         abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error calculating vote percentages for proposal ${proposal.id}: ${error.message}`,
         error.stack
@@ -2617,14 +2617,14 @@ export class GovernanceService {
 
       txHash = result.txHash;
       this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
-    } catch (error) {
+    } catch (error: any) {
       const errorMsg = error?.message || error?.toString() || 'Unknown error';
       this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
 
       // Mark DB record as failed (transaction was rejected by chain)
       try {
         await this.transactionsService.updateTransactionStatusById(feeTx.id, TransactionStatus.failed);
-      } catch (statusError) {
+      } catch (statusError: any) {
         this.logger.error(`Failed to mark fee tx DB record as failed: ${statusError.message}`, statusError);
       }
 
@@ -2632,7 +2632,7 @@ export class GovernanceService {
       try {
         await this.proposalRepository.remove(proposal);
         this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
-      } catch (deleteError) {
+      } catch (deleteError: any) {
         this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
       }
 
@@ -2649,7 +2649,7 @@ export class GovernanceService {
         feeAmount: pendingPayment.feeAmount,
         paymentTxHash: txHash,
       });
-    } catch (dbError) {
+    } catch (dbError: any) {
       this.logger.error(
         `Governance fee payment succeeded (txHash: ${txHash}), but DB update failed for proposal ${proposalId}: ${dbError?.message || dbError}`,
         dbError?.stack
@@ -2939,7 +2939,7 @@ export class GovernanceService {
       }
 
       return power;
-    } catch (error) {
+    } catch (error: any) {
       let cacheTTL = this.CACHE_TTL.VOTING_POWER;
 
       // Cache errors with longer TTL to redce repeated failed calls (only if distribution is processed)
@@ -2987,7 +2987,7 @@ export class GovernanceService {
           status: AssetStatus.LOCKED,
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
     }
@@ -2996,7 +2996,7 @@ export class GovernanceService {
   /**
    * Get Relics NFTs eligible for external platform staking (extracted to treasury)
    */
-  async getAssetsToStakeRelics(vaultId: string, platform: string = 'anvil-relics'): Promise<Asset[]> {
+  async getAssetsToStakeRelics(vaultId: string): Promise<Asset[]> {
     try {
       const RELICS_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
       const RELICS_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
@@ -3013,7 +3013,7 @@ export class GovernanceService {
           policy_id: 'ASC',
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting Relics assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting Relics assets to stake');
     }
@@ -3041,7 +3041,7 @@ export class GovernanceService {
       });
 
       return assets;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting staked assets for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting staked assets');
     }
@@ -3050,7 +3050,11 @@ export class GovernanceService {
   /**
    * Get staking statistics for a vault
    */
-  async getVaultStakingStats(vaultId: string) {
+  async getVaultStakingStats(vaultId: string): Promise<{
+    totalStaked: number;
+    totalVlrmEarned: string;
+    platforms: any[];
+  }> {
     try {
       const stakedAssets = await this.assetRepository.find({
         where: {
@@ -3094,7 +3098,7 @@ export class GovernanceService {
         totalVlrmEarned: totalVlrmEarned.toString(),
         platforms: Object.values(platformStats),
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting staking stats for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting staking stats');
     }
@@ -3154,8 +3158,14 @@ export class GovernanceService {
         }
       }
 
-      const divisor = BigInt(10 ** VLRM_DECIMALS);
-      const formatVlrm = (raw: bigint) => ({
+      const formatVlrm = (
+        raw: bigint
+      ): {
+        raw: string;
+        amount: string;
+        decimals: number;
+        unit: string;
+      } => ({
         raw: raw.toString(),
         amount: (Number(raw) / 10 ** VLRM_DECIMALS).toFixed(VLRM_DECIMALS),
         decimals: VLRM_DECIMALS,
@@ -3171,7 +3181,7 @@ export class GovernanceService {
         pendingRewards: formatVlrm(pendingVlrmRaw),
         claimedRewards: formatVlrm(claimedVlrmRaw),
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error getting Anvil Relics staking rewards for vault ${vaultId}: ${error.message}`,
         error.stack
@@ -3226,7 +3236,7 @@ export class GovernanceService {
           blockingReason: lpValidation.blockingReason,
         },
       };
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof NotFoundException) {
         throw error;
       }
@@ -3318,7 +3328,7 @@ export class GovernanceService {
               break;
             }
           }
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(
             `Failed to check admin wallet for VyFi LP tokens: ${error instanceof Error ? error.message : 'Unknown'}`
           );
@@ -3374,7 +3384,7 @@ export class GovernanceService {
         blockingReason,
         warning,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error validating LP for termination: ${error instanceof Error ? error.message : 'Unknown'}`);
 
       // On error, allow termination but warn
@@ -3407,7 +3417,7 @@ export class GovernanceService {
       return plainToInstance(AssetBuySellDto, assets, {
         excludeExtraneousValues: true,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting assets to burn for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to burn');
     }
@@ -3452,7 +3462,7 @@ export class GovernanceService {
         }),
         treasuryWalletBalance,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting assets for sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for selling');
     }
@@ -3522,7 +3532,7 @@ export class GovernanceService {
         limit: safeLimit,
         totalPages: Math.ceil(total / safeLimit) || 0,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting offers to cancel for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting offers to cancel');
     }
@@ -3559,7 +3569,7 @@ export class GovernanceService {
       return plainToInstance(AssetBuySellDto, assets, {
         excludeExtraneousValues: true,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting assets to unlist for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for unlisting');
     }
@@ -3596,7 +3606,7 @@ export class GovernanceService {
       return plainToInstance(AssetBuySellDto, assets, {
         excludeExtraneousValues: true,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting assets to update listing for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for updating listings');
     }
@@ -3648,7 +3658,7 @@ export class GovernanceService {
       this.assetMetadataCache.set(cacheKey, result, 3600);
 
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error fetching asset metadata for unit ${unit}: ${error.message}`);
 
       // Handle Blockfrost-specific errors
@@ -3745,7 +3755,7 @@ export class GovernanceService {
         if (hasResults && firstAsset?.collection?.verified) {
           continue;
         }
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(
           `Failed to verify whitelist token ${item.policyId}: ${error instanceof Error ? error.message : error}`
         );
@@ -3856,7 +3866,7 @@ export class GovernanceService {
             treasuryBalances.set(amount.unit, parseInt(amount.quantity));
           }
         }
-      } catch (error) {
+      } catch (error: any) {
         // Treasury wallet empty or not found - that's ok
         if (error.status_code !== 404) {
           this.logger.warn(`Failed to fetch treasury balance: ${error.message}`);
@@ -4048,7 +4058,7 @@ export class GovernanceService {
       }
 
       return voteWeight;
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) {
         throw error;
       }

@@ -92,7 +92,7 @@ export class DistributionService {
     let balance: { lovelace: number; assets: any[] };
     try {
       balance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
-    } catch (error) {
+    } catch (error: any) {
       // Blockfrost returns 404 "not found" for addresses that have never received any ADA
       // This means the wallet exists but has no UTXOs yet
       this.logger.warn(
@@ -608,7 +608,7 @@ export class DistributionService {
       this.logger.log(`Batch ${batch.batchNumber} completed successfully: ${txHash}`);
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Batch ${batch.batchNumber} failed: ${error.message}`, error.stack);
 
       batch.retryCount++;

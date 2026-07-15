@@ -143,7 +143,7 @@ export class LifecycleService {
               `Closing PR automatically because vault ${vault.name} has failed.`
             );
             this.logger.log(`Successfully closed PR #${pr.pr_number} for failed vault ${data.vaultId}`);
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to close PR #${pr.pr_number} for vault ${data.vaultId}:`, error);
           }
         }
@@ -181,7 +181,7 @@ export class LifecycleService {
           await this.treasuryWalletService.createTreasuryWallet({
             vaultId: vault.id,
           });
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Failed to create treasury wallet for vault ${vault.id}:`, error);
         }
       }
@@ -217,7 +217,7 @@ export class LifecycleService {
         `Executed immediate phase transition for vault ${vault.id} to ${data.newStatus}` +
           (data.phaseStartField ? ` and set ${data.phaseStartField}` : '')
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to execute phase transition for vault ${data.vaultId}:`, error);
       throw error;
     }
@@ -386,7 +386,7 @@ export class LifecycleService {
           `Vault ${vaultId}: Switched ${result.affected} asset whitelist entries from custom to market pricing`
         );
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to switch custom prices to market for vault ${vaultId}:`, error);
       // Don't throw - continue with price update even if this fails
     }
@@ -653,7 +653,7 @@ export class LifecycleService {
       // Step 2: Update asset prices from market (DexHunter for FTs, WayUp for NFTs)
       try {
         await this.taptoolsService.updateAssetPrices([vault.id]);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
       }
 
@@ -692,7 +692,7 @@ export class LifecycleService {
             totalValueLocked: vault.total_assets_cost_ada || 0,
             contributorIds,
           });
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error emitting contribution complete event for vault ${vault.id}:`, error);
         }
       };
@@ -721,7 +721,7 @@ export class LifecycleService {
         }
         // Otherwise, skip - the cron will pick it up when time arrives
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing contribution to acquire transition for vault ${vault.id}`, error);
     }
   }
@@ -832,7 +832,7 @@ export class LifecycleService {
 
       try {
         await this.taptoolsService.updateAssetPrices([vault.id]);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
       }
 
@@ -930,7 +930,7 @@ export class LifecycleService {
                 assetId: asset.id,
               });
             }
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Error getting price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
           }
         }
@@ -1126,7 +1126,7 @@ export class LifecycleService {
                 `LP VT: ${finalAdjustedVtLpAmount}, LP ADA: ${lpAdaAmount})`
             );
           }
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
 
@@ -1175,7 +1175,7 @@ export class LifecycleService {
               is_treasury_claim: vault.is_acquire_only === true,
             });
             acquirerClaims.push(claim);
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to create acquirer claim for user ${userId} transaction ${tx.id}:`, error);
           }
         }
@@ -1191,7 +1191,7 @@ export class LifecycleService {
             }
 
             await this.claimRepository.save(acquirerClaims);
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to save batch of acquirer claims:`, error);
           }
         }
@@ -1246,7 +1246,7 @@ export class LifecycleService {
             });
 
             contributorClaims.push(claim);
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
           }
         }
@@ -1254,7 +1254,7 @@ export class LifecycleService {
         if (contributorClaims.length > 0) {
           try {
             await this.claimRepository.save(contributorClaims);
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to save batch of acquirer claims:`, error);
           }
         }
@@ -1306,7 +1306,7 @@ export class LifecycleService {
         // Recalculate vault totals with fresh prices after successful metadata update
         try {
           await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Failed to update vault totals for ${vault.id}:`, error);
         }
 
@@ -1343,7 +1343,7 @@ export class LifecycleService {
               ...new Set([...finalAcquirerClaims.map(c => c.user_id), ...finalContributorClaims.map(c => c?.user_id)]),
             ],
           });
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error emitting distribution.claim_available event for vault ${vault.id}:`, error);
         }
 
@@ -1359,7 +1359,7 @@ export class LifecycleService {
             tokenTicker: vault.vault_token_ticker,
             impliedVaultValue: totalAcquiredAda + totalContributedValueAda,
           });
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error emitting vault.success event for vault ${vault.id}:`, error);
         }
       } else {
@@ -1397,11 +1397,11 @@ export class LifecycleService {
             contributorIds: [...new Set(contributionTransactions.map(tx => tx.user_id).filter(Boolean))],
           });
           this.eventEmitter.emit('vault.failed.email', { vault });
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error emitting vault.failed event for vault ${vault.id}:`, error);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
     }
   }
@@ -1441,7 +1441,7 @@ export class LifecycleService {
       // Step 2: Update asset prices from market (DexHunter for FTs, WayUp for NFTs)
       try {
         await this.taptoolsService.updateAssetPrices([vault.id]);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
       }
 
@@ -1627,7 +1627,7 @@ export class LifecycleService {
           });
 
           contributorClaims.push(claim);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Failed to create contributor claim for transaction ${tx.id}:`, error);
         }
       }
@@ -1640,7 +1640,7 @@ export class LifecycleService {
             `Saved ${contributorClaims.length} contributor claims for vault ${vault.id} ` +
               `(amounts pre-calculated using multipliers, no recalculation needed)`
           );
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Failed to save batch of contributor claims for vault ${vault.id}:`, error);
           throw error;
         }
@@ -1676,7 +1676,7 @@ export class LifecycleService {
       // Recalculate vault totals with fresh prices after successful metadata update
       try {
         await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Failed to update vault totals for ${vault.id}:`, error);
       }
 
@@ -1742,10 +1742,10 @@ export class LifecycleService {
           tokenTicker: vault.vault_token_ticker,
           impliedVaultValue: totalContributedValueAda, // FDV = TVL
         });
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Error emitting events for vault ${vault.id}:`, error);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error in direct contribution to governance for vault ${vault.id}:`, error);
       throw error;
     }
@@ -1811,7 +1811,7 @@ export class LifecycleService {
 
       try {
         await this.expansionService.executeExpansionToLockedTransition(vault);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(
           `Failed to process expansion->locked transition for vault ${vault.id}: ${error.message}`,
           error.stack
@@ -1948,7 +1948,7 @@ export class LifecycleService {
 
       try {
         await this.expansionService.executeAcquireExpansionToLockedTransition(vault);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(
           `Failed to process acquire expansion->locked transition for vault ${vault.id}: ${error.message}`,
           error.stack
@@ -2492,7 +2492,7 @@ export class LifecycleService {
           this.logger.error(`Error emitting failure events for acquire-only vault ${vault.id}:`, err);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
     }
   }

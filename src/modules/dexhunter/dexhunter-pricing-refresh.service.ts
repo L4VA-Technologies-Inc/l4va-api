@@ -41,7 +41,7 @@ export class DexHunterPricingRefreshService {
       } else {
         this.logger.warn('VyFi bulk price refresh failed or returned no data');
       }
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`VyFi bulk price refresh error: ${errorMessage}`);
       // Don't throw - stale cache is better than crashing the service

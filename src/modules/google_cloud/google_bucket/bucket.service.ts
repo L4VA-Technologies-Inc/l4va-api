@@ -188,7 +188,7 @@ export class GoogleCloudStorageService {
         stream,
         contentType,
       };
-    } catch (error) {
+    } catch (error: any) {
       if (error.code === 404 || error.message?.includes('No such object')) {
         throw new BadRequestException(`Image with key ${bucketKey} not found`);
       }
@@ -241,7 +241,7 @@ export class GoogleCloudStorageService {
         stream,
         contentType,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting CSV ${bucketKey}: ${error.message}`, error);
       if (error.code === 404 || error.message?.includes('No such object')) {
         throw new BadRequestException(`CSV with key ${bucketKey} not found`);
@@ -307,7 +307,7 @@ export class GoogleCloudStorageService {
 
       const addresses = await this.parseCsvAddresses(file.buffer);
       return { addresses, total: addresses.length };
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof BadRequestException) {
         throw error;
       }
@@ -364,7 +364,7 @@ export class GoogleCloudStorageService {
       await this.fileRepository.save(newFile);
       this.logger.log(`File entity saved with ID: ${newFile.id}`);
       return newFile;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
     }
@@ -466,7 +466,7 @@ export class GoogleCloudStorageService {
       await this.fileRepository.save(newFile);
 
       return `ipfs://${objectId}`;
-    } catch (error) {
+    } catch (error: any) {
       return null;
     }
   }
@@ -484,7 +484,7 @@ export class GoogleCloudStorageService {
       });
 
       return { stream, contentType: 'image/webp' };
-    } catch (error) {
+    } catch (error: any) {
       if (error.code === 404 || error.message?.includes('No such object')) {
         throw new BadRequestException(`Asset image ${id} not found`);
       }
@@ -546,7 +546,7 @@ export class GoogleCloudStorageService {
       await this.fileRepository.delete({ file_key: trimmedKey });
 
       this.logger.log(`Deleted file ${trimmedKey} (${fileName})`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to delete file ${trimmedKey}: ${error.message}`, error);
       throw new BadRequestException(`Failed to delete file: ${error.message}`);
     }

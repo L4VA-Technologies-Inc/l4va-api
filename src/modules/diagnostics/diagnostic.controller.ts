@@ -281,7 +281,7 @@ export class DiagnosticController {
   //       claimCount: claims.length,
   //       note: 'Claims are now PENDING. They will be marked CLAIMED once the transaction is confirmed on-chain.',
   //     };
-  //   } catch (error) {
+  //   } catch (error: any) {
   //     this.logger.error(`Failed to process claims:`, error);
   //     return {
   //       success: false,
@@ -642,7 +642,7 @@ export class DiagnosticController {
   //       },
   //       nextStep: 'Save this txHash for the extraction step (Step 7)',
   //     };
-  //   } catch (error) {
+  //   } catch (error: any) {
   //     this.logger.error(`[RECOVERY] Failed to submit contribution:`, error);
   //     await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
 
@@ -857,7 +857,7 @@ export class DiagnosticController {
         success: true,
         data: result,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error simulating vault multipliers for vault ${vaultId}:`, error);
       return {
         success: false,
@@ -887,7 +887,7 @@ export class DiagnosticController {
         success: true,
         data: result,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error simulating vault distribution for vault ${vaultId}:`, error);
       return {
         success: false,
@@ -961,7 +961,7 @@ export class DiagnosticController {
         txHash,
         vaultAssetName,
       });
-    } catch (error) {
+    } catch (error: any) {
       if (error.message.includes('not found')) {
         throw new NotFoundException(error.message);
       }

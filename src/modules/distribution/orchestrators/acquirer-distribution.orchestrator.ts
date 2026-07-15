@@ -165,7 +165,7 @@ export class AcquirerDistributionOrchestrator {
 
     try {
       await this.executeBatchExtraction(vault, claims, extractionTx, config);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Batch extraction failed for ${claims.length} claims: ${error.message}`);
 
       await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
@@ -281,7 +281,7 @@ export class AcquirerDistributionOrchestrator {
           // Also update in-memory vault object to prevent subsequent batches from trying to register again
           (vault as { stake_registered: boolean }).stake_registered = true;
           this.logger.log(`Marked vault ${vault.id} stake as registered`);
-        } catch (stakeError) {
+        } catch (stakeError: any) {
           // If another batch already registered, that's fine - just log and continue
           this.logger.warn(`Failed to mark stake as registered (may already be set): ${stakeError.message}`);
         }

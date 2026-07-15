@@ -151,7 +151,7 @@ export class AuthService {
           email: user.email,
         },
       };
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
         message: error.message || 'Authentication failed',

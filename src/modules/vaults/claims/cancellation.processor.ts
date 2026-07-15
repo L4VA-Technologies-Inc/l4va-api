@@ -88,7 +88,7 @@ export class CancellationProcessor extends WorkerHost {
         actualBatchSize: currentBatchSize,
         reducedFrom: originalBatchSize,
       };
-    } catch (error) {
+    } catch (error: any) {
       const isSizeError =
         error.message?.toLowerCase().includes('size') ||
         error.message?.toLowerCase().includes('too large') ||
@@ -116,7 +116,7 @@ export class CancellationProcessor extends WorkerHost {
             reducedFrom: currentBatchSize,
             reason: 'BATCH_SPLIT',
           };
-        } catch (splitError) {
+        } catch (splitError: any) {
           this.logger.error(`Failed to split batch: ${splitError.message}`);
           // Fall through to regular error handling
         }
@@ -169,7 +169,7 @@ export class CancellationProcessor extends WorkerHost {
       );
 
       this.logger.log(`✅ Re-queued ${reducedClaimIds.length} claims with reduced batch size`);
-    } catch (queueError) {
+    } catch (queueError: any) {
       this.logger.error(`Failed to requeue reduced batch: ${queueError.message}`);
       await this.claimsService.updateClaimStatus(reducedClaimIds, ClaimStatus.FAILED, {
         metadata: { failureReason: `Requeue failed: ${queueError.message}`, batchSize: newBatchSize },
@@ -198,7 +198,7 @@ export class CancellationProcessor extends WorkerHost {
         );
 
         this.logger.log(`✅ Queued remaining ${remainingClaimIds.length} claims`);
-      } catch (queueError) {
+      } catch (queueError: any) {
         this.logger.error(`Failed to queue remaining claims: ${queueError.message}`);
 
         await this.claimsService.updateClaimStatus(remainingClaimIds, ClaimStatus.FAILED, {

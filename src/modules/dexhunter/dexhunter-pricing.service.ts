@@ -91,7 +91,7 @@ export class DexHunterPricingService {
 
       this.logger.log(`VyFi bulk fetch: ${validCount} token prices retrieved`);
       return resultMap;
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`VyFi bulk fetch failed: ${errorMessage}`);
       return null;
@@ -341,7 +341,7 @@ export class DexHunterPricingService {
         totalAdaLiquidity,
         pools,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to check token liquidity for ${tokenId}`, error);
       return null;
     }

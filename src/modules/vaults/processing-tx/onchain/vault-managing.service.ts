@@ -237,7 +237,7 @@ export class VaultManagingService {
       );
       utxoHexArray = result.filteredUtxos;
       requiredInputs = result.requiredInputs;
-    } catch (error) {
+    } catch (error: any) {
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
 
       // Check if this is an insufficient assets error
@@ -473,7 +473,7 @@ export class VaultManagingService {
         applyParamsResult,
         transactionId: transaction.id,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to create vault:', error);
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
 
@@ -566,7 +566,7 @@ export class VaultManagingService {
         presignedTx: txToSubmitOnChain.to_hex(),
         txId: transaction.id,
       };
-    } catch (error) {
+    } catch (error: any) {
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
 
       if (error instanceof NotFoundException || error instanceof BadRequestException) {
@@ -778,7 +778,7 @@ export class VaultManagingService {
 
       await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
-    } catch (error) {
+    } catch (error: any) {
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       this.logger.error('Failed to build vault update tx:', error);
       throw error;
@@ -840,7 +840,7 @@ export class VaultManagingService {
       }
 
       return { txHash: result.txHash };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to submit vault transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
     }

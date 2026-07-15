@@ -53,7 +53,7 @@ export class ProposalSchedulerService {
 
           // Clean up the activation job
           this.cleanupJob(jobName);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
 
           // Retry activation after 1 minute
@@ -106,7 +106,7 @@ export class ProposalSchedulerService {
 
           // Clean up the job after execution
           this.cleanupJob(jobName);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
 
           // Retry after 3 minutes on error
@@ -162,7 +162,7 @@ export class ProposalSchedulerService {
       }
 
       this.logger.log(`Restored ${upcomingCount} upcoming and ${activeCount} active proposal schedules`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error restoring proposal schedules: ${error.message}`, error.stack);
     }
   }
@@ -199,7 +199,7 @@ export class ProposalSchedulerService {
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error processing overdue activations: ${error.message}`, error.stack);
     }
   }
@@ -228,7 +228,7 @@ export class ProposalSchedulerService {
         try {
           this.schedulerRegistry.deleteCronJob(key);
           this.logger.debug(`Cleaned up job: ${key}`);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Failed to clean up job ${key}: ${error.message}`);
         }
       }

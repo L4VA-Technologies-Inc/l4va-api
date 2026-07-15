@@ -105,7 +105,7 @@ export class ExpansionService {
 
       this.logger.log(`Successfully executed expansion proposal ${proposal.id}`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing expansion proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
@@ -173,7 +173,7 @@ export class ExpansionService {
         reason,
         onChainTxHash: onChainResult.txHash,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error closing expansion for vault ${vaultId}: ${error.message}`, error.stack);
     }
   }
@@ -324,7 +324,7 @@ export class ExpansionService {
             this.logger.log(
               `Created expansion claim for user ${transaction.user_id}: ${assetValueAda} ADA → ${Number(vtAmount) / decimalMultiplier} VT`
             );
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Error creating claim for transaction ${transaction.id}: ${error.message}`, error.stack);
           }
         }
@@ -410,7 +410,7 @@ export class ExpansionService {
       }
 
       this.logger.log(`Successfully closed expansion for vault ${vault.id}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error during expansion->locked transition for vault ${vault.id}: ${error.message}`,
         error.stack
@@ -513,7 +513,7 @@ export class ExpansionService {
 
       this.logger.log(`Successfully executed acquire expansion proposal ${proposal.id}`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing acquire expansion proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
@@ -585,7 +585,7 @@ export class ExpansionService {
         newMultiplier,
         onChainTxHash: onChainResult.txHash,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error closing acquire expansion for vault ${vaultId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -809,7 +809,7 @@ export class ExpansionService {
             this.logger.log(
               `Created acquire expansion claim for user ${transaction.user_id}: ${transaction.amount} ADA → ${Number(vtAmount) / decimalMultiplier} VT`
             );
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Error creating claim for transaction ${transaction.id}: ${error.message}`, error.stack);
           }
         }
@@ -864,7 +864,7 @@ export class ExpansionService {
       }
 
       this.logger.log(`Successfully closed acquire expansion for vault ${vault.id}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error during acquire expansion->locked transition for vault ${vault.id}: ${error.message}`,
         error.stack

@@ -123,7 +123,7 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
       await this.taptoolsService.updateMultipleVaultTotals(vaultIds);
 
       this.logger.log(`Successfully updated ${activeVaults.length} vaults with fresh prices and TVL`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error updating vault valuations:', error);
     } finally {
       this.isProcessing = false;

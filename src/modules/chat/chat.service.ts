@@ -37,7 +37,7 @@ export class ChatService {
       }
 
       return channel;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create vault chat room: ${error.message}`);
       throw error;
     }

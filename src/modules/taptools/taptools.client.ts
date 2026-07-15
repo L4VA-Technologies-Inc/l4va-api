@@ -232,7 +232,7 @@ export class TapToolsClient {
           const parsed = JSON.parse(cachedRaw);
           this.logger.debug(`Redis cache hit for pools: ${tokenUnit.slice(0, 10)}...`);
           return parsed;
-        } catch (error) {
+        } catch (error: any) {
           // Invalid JSON in cache - delete it and treat as cache miss
           this.logger.warn(`Invalid JSON in Redis cache for ${cacheKey}, deleting`);
           await this.redis.del(cacheKey).catch(() => {});
@@ -314,7 +314,7 @@ export class TapToolsClient {
       });
 
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(
         `getTokenPools failed for ${tokenUnit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -396,7 +396,7 @@ export class TapToolsClient {
         lpTokenUnit: `${pool.lpPolicyId}${pool.lpAssetName}`,
         lpTotalSupply: pool.lpTotalSupply ?? null,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(
         `Failed to fetch pool data from Nexus for ${dexName}/${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -470,7 +470,7 @@ export class TapToolsClient {
       try {
         const asset = await this.blockfrost.assetsById(lpTokenUnit);
         lpTotalSupply = asset.quantity ? parseInt(asset.quantity, 10) : null;
-      } catch (error) {
+      } catch (error: any) {
         this.logger.debug(
           `Failed to fetch LP total supply from BlockFrost for ${lpTokenUnit.slice(0, 16)}...: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -481,7 +481,7 @@ export class TapToolsClient {
       );
 
       return { lpTokenUnit, lpTotalSupply };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(
         `Failed to fetch pool data from Minswap API for ${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -537,7 +537,7 @@ export class TapToolsClient {
       if (cachedRaw) {
         try {
           return JSON.parse(cachedRaw);
-        } catch (error) {
+        } catch (error: any) {
           // Invalid JSON in cache - delete it and treat as cache miss
           this.logger.warn(`Invalid JSON in Redis cache for ${cacheKey}, deleting`);
           await this.redis.del(cacheKey).catch(() => {});
@@ -587,7 +587,7 @@ export class TapToolsClient {
       // Cache in Redis with 10-minute TTL
       await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 600).catch(() => {});
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(
         `Failed to fetch pool by onchainID ${onchainID.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -674,7 +674,7 @@ export class TapToolsClient {
         tokenBTicker: isTokenALovelace ? '' : 'ADA',
         lpTotalSupply: pool.lpQuantity ?? null,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Failed to fetch VyFi pool by unitsPair ${unitsPair}: ${error instanceof Error ? error.message : String(error)}`
       );

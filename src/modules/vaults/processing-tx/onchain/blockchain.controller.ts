@@ -100,7 +100,7 @@ export class BlockchainController {
         status: 'success',
         details: txSummary,
       };
-    } catch (error) {
+    } catch (error: any) {
       return {
         status: 'error',
         details: error.message,

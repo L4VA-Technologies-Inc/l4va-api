@@ -79,7 +79,7 @@ export class GoogleCloudStorageController {
       });
 
       stream.pipe(res);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error getting image ${id}:`, error);
       if (!res.headersSent) {
         res.status(404).json({ message: error.message || 'Image not found' });
@@ -107,7 +107,7 @@ export class GoogleCloudStorageController {
       });
 
       stream.pipe(res);
-    } catch (error) {
+    } catch (error: any) {
       if (!res.headersSent) {
         res.redirect(`https://ipfs.blockfrost.dev/ipfs/${cleanId}`);
       }

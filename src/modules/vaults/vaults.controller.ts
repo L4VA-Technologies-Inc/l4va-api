@@ -243,7 +243,7 @@ export class VaultsController {
 
     try {
       return await this.draftVaultsService.getDraftVaultById(params.id, userId);
-    } catch (error) {
+    } catch (error: any) {
       if (error?.message === 'Draft vault not found') {
         return this.vaultsService.getVaultById(params.id, userId);
       }

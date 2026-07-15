@@ -1,5 +1,5 @@
-import { IsEnum, IsArray, IsBoolean, IsNumber, IsString, IsOptional, ArrayMinSize } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { IsEnum, IsArray, IsBoolean, IsNumber, IsString, IsOptional } from 'class-validator';
 
 export enum RelicsStakingAction {
   STAKE = 'stake',

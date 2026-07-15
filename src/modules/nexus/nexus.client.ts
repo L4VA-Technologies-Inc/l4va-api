@@ -64,7 +64,7 @@ export class NexusClient {
 
       const pool: NexusPool = await response.json();
       return pool;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Failed to fetch pool from Nexus (${poolId}): ${error instanceof Error ? error.message : String(error)}`
       );

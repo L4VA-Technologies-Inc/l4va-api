@@ -508,7 +508,7 @@ export class L4vaRewardsService {
         transactionId: transactionId,
         blockchainTxHash: submitResponse.txHash,
       };
-    } catch (error) {
+    } catch (error: any) {
       await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
       throw error;
     }
@@ -562,7 +562,7 @@ export class L4vaRewardsService {
       );
 
       this.logger.log(`✅ Cancelled ${result.affected} unvested L4VA claims for terminated vault ${vaultId}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to handle vault termination for ${vaultId}:`, error);
       throw error;
     }

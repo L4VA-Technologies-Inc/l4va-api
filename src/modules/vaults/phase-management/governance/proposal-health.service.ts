@@ -61,7 +61,7 @@ export class ProposalHealthService {
           await this.executionService.processProposal(proposal.id);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Fallback cron error: ${error.message}`, error.stack);
     }
   }
@@ -110,7 +110,7 @@ export class ProposalHealthService {
         executionJobs,
         timestamp: new Date(),
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error monitoring job health: ${error.message}`, error.stack);
     }
   }

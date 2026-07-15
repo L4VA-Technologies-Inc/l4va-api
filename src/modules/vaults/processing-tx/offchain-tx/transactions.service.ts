@@ -133,7 +133,7 @@ export class TransactionsService {
           const unit = assetItem.policyId + assetItem.assetName;
           const assetInfo = await this.blockfrost.assetsById(unit);
           return { assetItem, blockfrostMetadata: assetInfo };
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(
             `Failed to fetch metadata for ${assetItem.policyId}${assetItem.assetName}: ${error.message}`
           );
@@ -148,7 +148,7 @@ export class TransactionsService {
         let decodedName: string | null = null;
         try {
           decodedName = assetItem.assetName ? Buffer.from(assetItem.assetName, 'hex').toString('utf8') : null;
-        } catch (error) {
+        } catch (error: any) {
           decodedName = assetItem.assetName || null;
         }
 
@@ -846,7 +846,7 @@ export class TransactionsService {
           }
         }
         this.logger.log(`Updated ${txsToUpdate.length} transactions to confirmed status`);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error('Failed to update transaction statuses', error);
       }
     }
@@ -926,7 +926,7 @@ export class TransactionsService {
       await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
 
       this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
       // Don't throw - this is a secondary operation that shouldn't fail the main transaction
     }
@@ -991,7 +991,7 @@ export class TransactionsService {
       this.logger.log(
         `Updated acquire expansion ADA raised for vault ${vaultId}: ${currentAdaRaisedLovelace} lovelace (${totalAdaFloat.toFixed(2)} ADA)`
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to update acquire expansion ADA raised for vault ${vaultId}:`, error);
       // Don't throw - this is a secondary operation that shouldn't fail the main transaction
     }

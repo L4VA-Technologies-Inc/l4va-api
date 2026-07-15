@@ -284,7 +284,7 @@ export class VaultContributionService {
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
       };
-    } catch (error) {
+    } catch (error: any) {
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
 
       // Handle UTxO Insufficient error - not enough ADA to build transaction
@@ -350,7 +350,7 @@ export class VaultContributionService {
       await this.transactionsService.createAssets(signedTx.txId);
       await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
       return { txHash: result.txHash };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error submitting transaction', error);
       await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
 

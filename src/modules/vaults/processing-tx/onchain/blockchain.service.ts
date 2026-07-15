@@ -198,7 +198,7 @@ export class BlockchainService {
       }
 
       return buildResponse;
-    } catch (error) {
+    } catch (error: any) {
       if (
         error instanceof UTxOInsufficientException ||
         error instanceof MissingUtxoException ||
@@ -241,7 +241,7 @@ export class BlockchainService {
 
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
       return { txHash: response.data.txHash };
-    } catch (error) {
+    } catch (error: any) {
       if (error.response?.status === 422) {
         // Log full request and response for debugging 422 errors
         this.logger.error('=== 422 ERROR DETAILS ===');
@@ -347,7 +347,7 @@ export class BlockchainService {
 
       this.logger.log('Blueprint parameters applied successfully');
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error applying blueprint parameters', error);
       throw new Error(`Failed to apply blueprint parameters: ${error.message}`);
     }
@@ -369,7 +369,7 @@ export class BlockchainService {
       const result = await response.json();
       this.logger.log('Blueprint uploaded successfully');
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error uploading blueprint', error);
       throw new Error(`Failed to upload blueprint: ${error.message}`);
     }
@@ -415,7 +415,7 @@ export class BlockchainService {
         parameterizedHash: parameterizedScript.hash,
         fullResponse: applyParamsResult,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error applying dispatch parameters', error);
       throw new Error(`Failed to apply dispatch parameters: ${error.message}`);
     }
@@ -446,7 +446,7 @@ export class BlockchainService {
 
         // Wait before next check
         await new Promise(resolve => setTimeout(resolve, checkInterval));
-      } catch (error) {
+      } catch (error: any) {
         await new Promise(resolve => setTimeout(resolve, checkInterval));
       }
     }
@@ -480,7 +480,7 @@ export class BlockchainService {
 
       this.logger.log('WayUp transaction built successfully');
       return buildResponse;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error building WayUp transaction', error);
       throw new Error(`Failed to build WayUp transaction: ${error.message}`);
     }

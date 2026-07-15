@@ -60,7 +60,7 @@ export class TransactionHealthService {
       const failed = results.filter(r => r.status === 'rejected').length;
 
       this.logger.log(`Health check completed: ${successful} transactions verified, ${failed} failed to verify`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error during health check for stuck transactions', error);
     }
   }
@@ -98,7 +98,7 @@ export class TransactionHealthService {
         // Transaction exists but not yet in a block
         this.logger.warn(`Transaction ${transaction.tx_hash} found on-chain but not yet confirmed (no block height)`);
       }
-    } catch (error) {
+    } catch (error: any) {
       // Transaction not found on-chain or other error
       if (error.status_code === 404) {
         this.logger.error(

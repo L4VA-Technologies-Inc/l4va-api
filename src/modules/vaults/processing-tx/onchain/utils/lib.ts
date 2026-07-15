@@ -140,7 +140,7 @@ export const validateUtxoStillExists = async (
     const output = utxoDetails.outputs[outputIndex];
 
     return output && !output.consumed_by_tx;
-  } catch (error) {
+  } catch (error: any) {
     return false;
   }
 };
@@ -239,7 +239,7 @@ export const getUtxosExtract = async (
   let utxos: BlockfrostUtxo[] = [];
   try {
     utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
-  } catch (error) {
+  } catch (error: any) {
     // If address has never received transactions, Blockfrost returns 404
     if (error.status_code === 404 || error.message?.includes('not been found')) {
       // Return empty result for empty address
@@ -502,7 +502,7 @@ export function getPaymentKeyHashFromAddress(addressBech32: string): string {
     }
 
     return keyHash.to_hex();
-  } catch (error) {
+  } catch (error: any) {
     throw new Error(`Invalid Cardano address or cannot extract payment key hash: ${error.message}`);
   }
 }
@@ -523,7 +523,7 @@ export function convertAddressesToKeyHashes(addresses: string[]): string[] {
   return addresses.map((address, index) => {
     try {
       return getPaymentKeyHashFromAddress(address);
-    } catch (error) {
+    } catch (error: any) {
       throw new Error(`Invalid address at index ${index} (${address}): ${error.message}`);
     }
   });

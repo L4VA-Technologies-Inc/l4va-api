@@ -65,7 +65,7 @@ export class DexHunterPricingClient {
       const [priceStr] = value.split(':');
       const price = parseFloat(priceStr);
       return isNaN(price) ? null : price;
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis get price failed for ${tokenUnit.slice(0, 10)}...: ${errorMessage}`);
       return null;
@@ -105,7 +105,7 @@ export class DexHunterPricingClient {
         const price = parseFloat(priceStr);
         resultMap.set(tokenUnit, isNaN(price) ? null : price);
       });
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis batch get prices failed: ${errorMessage}`);
       tokenUnits.forEach(unit => resultMap.set(unit, null));
@@ -125,7 +125,7 @@ export class DexHunterPricingClient {
       const timestamp = Math.floor(Date.now() / 1000);
       const value = `${priceAda}:${timestamp}`;
       await this.redis.setex(key, this.PRICE_TTL_SECONDS, value);
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis set price failed for ${tokenUnit.slice(0, 10)}...: ${errorMessage}`);
     }
@@ -150,7 +150,7 @@ export class DexHunterPricingClient {
 
       await pipeline.exec();
       this.logger.debug(`Bulk cached ${pricesMap.size} token prices in Redis`);
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis batch set prices failed: ${errorMessage}`);
     }
@@ -271,7 +271,7 @@ export class DexHunterPricingClient {
               this.logger.debug(`DexHunter returned zero/null price for token ${tokenId.slice(0, 8)}...`);
               return { tokenId, price: null };
             }
-          } catch (error) {
+          } catch (error: any) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this.logger.warn(`DexHunter API failed for token ${tokenId.slice(0, 8)}...: ${errorMessage}`);
             return { tokenId, price: null };
@@ -422,7 +422,7 @@ export class DexHunterPricingClient {
       // Cache the result
       this.ohlcvCache.set(cacheKey, ohlcvData);
       return ohlcvData;
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`DexHunter OHLCV fetch failed for ${tokenUnit.slice(0, 16)}...: ${errorMessage}`);
       // Cache null result to avoid repeated failed requests
@@ -481,7 +481,7 @@ export class DexHunterPricingClient {
       this.ohlcvCache.flushAll();
 
       this.logger.log(`Cleared caches (Redis price keys: ${deletedPriceKeys}, OHLCV: ${ohlcvSize} entries)`);
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to clear caches: ${errorMessage}`);
     }
@@ -510,7 +510,7 @@ export class DexHunterPricingClient {
           keys: ohlcvStats.keys,
         },
       };
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to get cache stats: ${errorMessage}`);
       return {

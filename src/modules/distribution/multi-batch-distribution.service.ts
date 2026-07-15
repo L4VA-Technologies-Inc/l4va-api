@@ -262,7 +262,7 @@ export class MultiBatchDistributionService {
         newMultiplierCount: newMultipliers.length,
         newOnChainMultipliers: newMultipliers,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to manually update vault ${vaultId}:`, error);
       throw error;
     }

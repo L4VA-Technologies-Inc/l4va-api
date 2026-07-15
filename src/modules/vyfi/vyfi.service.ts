@@ -173,7 +173,7 @@ export class VyfiService {
         exists: true,
         data: response.data,
       };
-    } catch (error) {
+    } catch (error: any) {
       if (error.response?.status === 500 || error.response?.status === 404) {
         return {
           exists: false,
@@ -229,7 +229,7 @@ export class VyfiService {
     try {
       const response = await firstValueFrom(this.httpService.get(`${this.vyfiApiUrl}/pool/${poolId}`));
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       throw new Error(`Failed to get VyFi pool info: ${error.message}`);
     }
   }
@@ -270,7 +270,7 @@ export class VyfiService {
       // In the future, could implement a cache or registry of known pools
 
       return null;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to get pool by LP token: ${error.message}`);
       return null;
     }
@@ -298,7 +298,7 @@ export class VyfiService {
       const poolData: VyFiPoolData | undefined = Array.isArray(poolCheck.data) ? poolCheck.data[0] : poolCheck.data;
 
       return poolData || null;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to get VyFi pool data: ${error.message}`);
       return null;
     }
@@ -352,7 +352,7 @@ export class VyfiService {
         tokenAUnit: tokenAUnit,
         tokenBUnit: tokenBUnit,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to get pool by tokens: ${error.message}`);
       return null;
     }
@@ -1240,7 +1240,7 @@ export class VyfiService {
           withdrawnAmount: totalDispatchAda,
           skipped: false,
         };
-      } catch (error) {
+      } catch (error: any) {
         // Check if this is a MissingUtxoException and we can retry
         if (error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES) {
           const spentUtxoRef = error.getUtxoReference();
@@ -1389,7 +1389,7 @@ export class VyfiService {
         return {
           txHash: txHash,
         };
-      } catch (error) {
+      } catch (error: any) {
         // Check if this is a spent UTXO error and we can retry
         const errorMessage = error.message || String(error);
 

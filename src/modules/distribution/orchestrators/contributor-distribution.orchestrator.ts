@@ -283,7 +283,7 @@ export class ContributorDistributionOrchestrator {
         }
 
         testBatchSize++;
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Batch size ${testBatchSize} failed to build: ${error.message}`);
         break;
       }
@@ -426,7 +426,7 @@ export class ContributorDistributionOrchestrator {
 
         // Success - exit the retry loop
         return;
-      } catch (error) {
+      } catch (error: any) {
         // Check if this is a UTXO-related error (MissingUtxoException during build or UtxoSpentException during submission)
         const isMissingUtxo =
           error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES;

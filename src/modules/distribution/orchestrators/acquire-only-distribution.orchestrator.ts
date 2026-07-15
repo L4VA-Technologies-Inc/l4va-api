@@ -164,7 +164,7 @@ export class AcquireOnlyDistributionOrchestrator {
 
     try {
       await this.executeAcquireOnlyBatchExtraction(vault, claims, extractionTx, config);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Acquire-only batch extraction failed for ${claims.length} claims: ${error.message}`);
       await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
 

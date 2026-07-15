@@ -55,7 +55,7 @@ export class RewardEventProducer {
       const saved = await this.outboxRepository.save(event);
       this.logger.debug(`Outbox: ${input.eventType} event for ${input.walletAddress}`);
       return saved;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to write outbox event: ${error.message}`, error.stack);
       return null;
     }

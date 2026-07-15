@@ -124,7 +124,7 @@ export class TreasuryWalletService {
     let secretVersionName: string | undefined;
     try {
       secretVersionName = await this.storeWalletMnemonic(vaultId, walletData.mnemonic, vault.name);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to store mnemonic in Secret Manager: ${error.message}`);
       // Continue without failing - the encrypted private key is still available
     }
@@ -299,7 +299,7 @@ export class TreasuryWalletService {
       const stakePrivateKey = await this.googleKMSService.decryptStakeKey(encryptedStakePackage, vaultId);
 
       return { privateKey, stakePrivateKey };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to decrypt treasury wallet ${wallet.id}:`, error);
       throw new Error(`Failed to decrypt treasury wallet credentials: ${error.message}`);
     }
@@ -339,7 +339,7 @@ export class TreasuryWalletService {
       let utxos = [];
       try {
         utxos = await this.blockfrost.addressesUtxosAll(wallet.treasury_address);
-      } catch (error) {
+      } catch (error: any) {
         // If treasury wallet has never received transactions, Blockfrost returns 404
         if (error.status_code === 404 || error.message?.includes('not been found')) {
           this.logger.log(`Treasury wallet ${wallet.treasury_address} is empty (no transactions yet)`);
@@ -374,7 +374,7 @@ export class TreasuryWalletService {
         lovelace: totalLovelace,
         assets,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to fetch balance for treasury wallet ${wallet.treasury_address}:`, error);
       throw new Error(`Failed to fetch treasury wallet balance: ${error.message}`);
     }
@@ -650,7 +650,7 @@ export class TreasuryWalletService {
             this.logger.log(`✅ Created treasury wallet for vault ${vault.name} (${vault.id})`);
             successCount++;
           }
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(
             `❌ Failed to create treasury wallet for vault ${vault.name} (${vault.id}): ${error.message}`
           );
@@ -659,7 +659,7 @@ export class TreasuryWalletService {
       }
 
       this.logger.log(`Auto-create treasury wallets completed: ${successCount} succeeded, ${failureCount} failed`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Auto-create treasury wallets cron job failed:', error);
     }
   }

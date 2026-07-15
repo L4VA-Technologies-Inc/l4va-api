@@ -73,7 +73,7 @@ export class VaultMarketStatsService {
   async scheduledUpdateVaultTokensMarketStats(): Promise<void> {
     try {
       await this.updateVaultTokensMarketStats();
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         'Scheduled task: Failed to update vault tokens market stats',
         error instanceof Error ? error.stack : undefined
@@ -237,7 +237,7 @@ export class VaultMarketStatsService {
           await this.upsertMarketData(marketData);
 
           return { vault_id: vault.id, ...marketData, ...vaultUpdateData };
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(
             `Error fetching market data for vault ${vault.name} (${unit}):`,
             error instanceof Error ? error.message : String(error)
@@ -262,7 +262,7 @@ export class VaultMarketStatsService {
           `Market update complete: ${successfulUpdates}/${vaults.length} vaults processed, ` +
             `${withActiveLp} with active LP, ${vaultIdsWithPriceUpdates.length} user gains updated`
         );
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(
           `Error updating user gains after price updates:`,
           error instanceof Error ? error.stack : undefined

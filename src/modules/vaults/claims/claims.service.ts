@@ -236,7 +236,7 @@ export class ClaimsService {
           } else {
             this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
           }
-        } catch (error) {
+        } catch (error: any) {
           const noVtBalanceError =
             error.message?.includes('No VT balance found') ||
             error.message?.includes('no VT balance') ||
@@ -260,7 +260,7 @@ export class ClaimsService {
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       // Log but don't throw - this is a background operation
       this.logger.error(`Error auto-creating termination claims for user ${userId}:`, error.stack);
     }
@@ -525,7 +525,7 @@ export class ClaimsService {
 
         // UTXO is valid and unspent
         validClaims.push(claim);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error(`Error checking UTXO for claim ${claim.id}:`, error);
         invalidClaims.push({
           claim,
@@ -559,7 +559,7 @@ export class ClaimsService {
                 { transaction: { id: claim.transaction.id } },
                 { status: AssetStatus.DISTRIBUTED }
               );
-            } catch (error) {
+            } catch (error: any) {
               this.logger.error(`Failed to mark assets as distributed for claim ${claim.id}:`, error);
             }
           }
@@ -776,7 +776,7 @@ export class ClaimsService {
           processedClaims: validClaims.map(c => c.id),
         };
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to build/submit batch cancellation transaction: ${error.message}`);
       throw error;
     }

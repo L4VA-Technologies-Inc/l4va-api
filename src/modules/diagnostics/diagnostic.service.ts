@@ -251,7 +251,7 @@ export class DiagnosticService {
             totalValueAda,
             isNFT,
           });
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error processing asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
         }
       }
@@ -325,7 +325,7 @@ export class DiagnosticService {
           const priceAda = asset.floor_price || asset.dex_price || 0;
           const quantity = asset.quantity || 1;
           transactionValueAda += priceAda * quantity;
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error processing asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
         }
       }
@@ -435,7 +435,7 @@ export class DiagnosticService {
         `Transaction size for vault ${vault.id}: ${txSizeEstimate.txSizeBytes} bytes ` +
           `(${txSizeEstimate.percentOfMax}% of max)`
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to estimate transaction size for vault ${vault.id}:`, error);
       transactionSize = {
         txSizeBytes: 0,
@@ -1369,7 +1369,7 @@ export class DiagnosticService {
         multiplierCount: acquireMultiplier.length,
         adaDistributionCount: adaDistribution.length,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to estimate vault update tx size:', error);
       throw new Error(`Failed to estimate transaction size: ${error.message}`);
     }
@@ -1457,7 +1457,7 @@ export class DiagnosticService {
             cbor: rawDatumCbor,
             note: 'Decode this CBOR to see the full datum structure',
           };
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Could not retrieve datum by hash: ${error.message}`);
           datum = {
             type: 'hash',
@@ -1484,7 +1484,7 @@ export class DiagnosticService {
         assets,
         rawDatumCbor,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to inspect vault datum:', error);
       throw new Error(`Failed to inspect vault datum: ${error.message}`);
     }
@@ -1588,7 +1588,7 @@ export class DiagnosticService {
         },
         raw: this.plutusDataToJson(plutusData),
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to decode vault datum:', error);
       throw new Error(`Failed to decode vault datum: ${error.message}`);
     }
@@ -1639,7 +1639,7 @@ export class DiagnosticService {
       // VaultParams doesn't use maps at the top level
 
       return null;
-    } catch (error) {
+    } catch (error: any) {
       return null;
     }
   }

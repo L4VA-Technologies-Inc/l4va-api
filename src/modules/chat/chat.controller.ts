@@ -23,7 +23,7 @@ export class ChatController {
     try {
       const token = this.chatService.generateUserToken(userId);
       return { token };
-    } catch (error) {
+    } catch (error: any) {
       throw new HttpException('Failed to generate token', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -43,7 +43,7 @@ export class ChatController {
         channelType: channel.type,
         success: true,
       };
-    } catch (error) {
+    } catch (error: any) {
       throw new HttpException('Failed to create vault channel', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -59,7 +59,7 @@ export class ChatController {
     try {
       const user = await this.chatService.createOrUpdateUser(userId, userData);
       return { user, success: true };
-    } catch (error) {
+    } catch (error: any) {
       throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -75,7 +75,7 @@ export class ChatController {
     try {
       await this.chatService.addMembersToVaultChannel(vaultId, body.userIds);
       return { success: true };
-    } catch (error) {
+    } catch (error: any) {
       throw new HttpException('Failed to add members to vault channel', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }

@@ -108,7 +108,7 @@ export class AutomaticCancellationService {
       if (jobIndex > 0) {
         this.logger.log(`Queued ${jobIndex} batch jobs for processing`);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error processing pending cancellations:', error);
     } finally {
       await redisClient.del(lockKey);

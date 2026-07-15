@@ -120,7 +120,7 @@ export class GovernanceFeeService {
         presignedTx: txToSubmitOnChain.to_hex(),
         feeAmount,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to build governance fee transaction: ${error.message}`, error.stack);
       throw error;
     }
@@ -185,7 +185,7 @@ export class GovernanceFeeService {
         presignedTx: txToSubmitOnChain.to_hex(),
         feeAmount,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to build voting fee transaction: ${error.message}`, error.stack);
       throw error;
     }

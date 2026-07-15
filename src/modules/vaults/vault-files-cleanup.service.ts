@@ -95,7 +95,7 @@ export class VaultFilesCleanupService {
         try {
           await this.gcsService.deleteFile(file.file_key);
           this.logger.log(`Deleted vault file ${file.file_key} for vault ${vault.id}`);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Failed to delete vault file ${file.file_key}: ${error?.message ?? error}`);
         }
       }
@@ -134,7 +134,7 @@ export class VaultFilesCleanupService {
       try {
         await this.gcsService.deleteFile(fileKey);
         this.logger.log(`Deleted asset image ${fileKey} for vault ${vault.id}`);
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Failed to delete asset image ${fileKey}: ${error?.message ?? error}`);
       }
     }

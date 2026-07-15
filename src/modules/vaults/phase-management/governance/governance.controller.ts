@@ -301,11 +301,8 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get Relics NFTs eligible for external platform staking' })
   @ApiResponse({ status: 200, description: 'List of Relics NFTs ready to stake' })
-  async getAssetsToStakeRelics(
-    @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Query('platform') platform?: string
-  ): Promise<any> {
-    const assets = await this.governanceService.getAssetsToStakeRelics(vaultId, platform);
+  async getAssetsToStakeRelics(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any> {
+    const assets = await this.governanceService.getAssetsToStakeRelics(vaultId);
     return { assets, count: assets.length };
   }
 

@@ -214,7 +214,7 @@ export class MetadataRegistryApiService {
       }
 
       return await this.createMetadataRegistryPR(metadata, metadataInput.vaultId);
-    } catch (error) {
+    } catch (error: any) {
       if (
         error instanceof BadRequestException ||
         error instanceof ConflictException ||
@@ -251,7 +251,7 @@ export class MetadataRegistryApiService {
 
       // If we get here, file exists
       return true;
-    } catch (error) {
+    } catch (error: any) {
       // If 404, token not found in registry
       if (error.status === 404) {
         return false;
@@ -294,7 +294,7 @@ export class MetadataRegistryApiService {
 
       // Save the updated PR record
       return this.tokenRegistryRepository.save(pr);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
 
       // If PR not found, mark as failed
@@ -363,7 +363,7 @@ export class MetadataRegistryApiService {
 
       this.logger.log(`Successfully closed PR #${prNumber}`);
       return { success: true, message: `PR #${prNumber} closed successfully` };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to close PR #${prNumber}:`, error);
 
       // Map GitHub API errors to appropriate NestJS exceptions
@@ -405,7 +405,7 @@ export class MetadataRegistryApiService {
         if (prRecord.status === TokenRegistryStatus.PENDING) {
           await this.closePullRequest(prRecord.pr_number, 'Retrying submission due to validation failure');
         }
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(`Could not close old PR #${prRecord.pr_number}: ${error.message}`);
         // Continue with retry even if we can't close the old PR
       }
@@ -422,7 +422,7 @@ export class MetadataRegistryApiService {
       }
 
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to retry PR #${prRecord.pr_number}:`, error);
       return {
         success: false,
@@ -476,7 +476,7 @@ export class MetadataRegistryApiService {
       }
 
       return base64Image;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to convert image to byte string: ${error.message}`);
       return '';
     }
@@ -580,7 +580,7 @@ export class MetadataRegistryApiService {
           repo: this.repoName,
         });
         forked = true;
-      } catch (error) {
+      } catch (error: any) {
         if (error.status === 404) {
           forked = false;
         } else {
@@ -670,7 +670,7 @@ export class MetadataRegistryApiService {
         message: 'Pull request created successfully',
         prUrl: pr.html_url,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Failed to create token registry PR:', error);
 
       // Map GitHub API errors to appropriate NestJS exceptions

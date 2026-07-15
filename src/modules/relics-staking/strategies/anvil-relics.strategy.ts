@@ -297,7 +297,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
       const changeAddress = Buffer.from(Address.from_bech32(treasuryAddress).to_bytes()).toString('hex');
       const resp = await this.anvilApiClient.getStakesV2(STAKE_COLLECTION_ID, changeAddress);
       return resp.stakes ?? [];
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `getAnvilStakes failed: ${error instanceof Error ? error.message : String(error)}`,
         error instanceof Error ? error.stack : undefined

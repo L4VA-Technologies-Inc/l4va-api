@@ -69,7 +69,7 @@ export class BlockchainWebhookService {
         this.maxEventAge // Maximum allowed age of the webhook event in seconds
       );
       event = verifiedEvent as unknown as BlockchainWebhookDto;
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof SignatureVerificationError) {
         this.logger.error('Invalid webhook signature', {
           signatureHeader: error.detail?.signatureHeader,
@@ -149,7 +149,7 @@ export class BlockchainWebhookService {
             );
 
             this.logger.log(`WH: Updated status to CLAIMED for ${claimIds.length} claims`);
-          } catch (claimError) {
+          } catch (claimError: any) {
             this.logger.error(
               `WH: Failed to update claims for transaction ${tx.hash}: ${claimError.message}`,
               claimError.stack
@@ -185,7 +185,7 @@ export class BlockchainWebhookService {
               `WH: Processed extractDispatch for ${claimIds.length} acquirer claims ` +
                 `(${updateResult.affected || 0} claims updated)`
             );
-          } catch (extractError) {
+          } catch (extractError: any) {
             // Don't throw - this is expected if claims were already processed via UTXO validation
             this.logger.warn(
               `WH: Partial processing for extractDispatch transaction ${tx.hash}: ${extractError.message}`
@@ -214,13 +214,13 @@ export class BlockchainWebhookService {
             // Update user TVL by subtracting returned asset values
             try {
               await this.updateUserTvlForCancellations(claimIds);
-            } catch (tvlError) {
+            } catch (tvlError: any) {
               this.logger.error(
                 `WH: Failed to update user TVL after cancellation: ${tvlError.message}`,
                 tvlError.stack
               );
             }
-          } catch (releaseError) {
+          } catch (releaseError: any) {
             this.logger.error(
               `WH: Failed to release assets for cancellation tx ${tx.hash}: ${releaseError.message}`,
               releaseError.stack
@@ -231,7 +231,7 @@ export class BlockchainWebhookService {
 
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);
       return transaction.id;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`WH: Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
       return null;
     }
@@ -302,7 +302,7 @@ export class BlockchainWebhookService {
           },
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       // Non-blocking: reward indexing failure should not break webhook processing
       this.logger.warn(`Failed to index reward event for tx ${txHash}: ${error.message}`);
     }
@@ -469,7 +469,7 @@ export class BlockchainWebhookService {
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`WH: Failed to handle createVault confirmation for vault ${vaultId}: ${error.message}`);
       // Don't throw - the cron job will handle it as fallback
     }

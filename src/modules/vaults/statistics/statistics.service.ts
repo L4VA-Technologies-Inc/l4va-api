@@ -144,7 +144,7 @@ export class StatisticsService {
       return plainToInstance(VaultStatisticsResponse, statistics, {
         excludeExtraneousValues: true,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error retrieving vault statistics:', error);
       throw new InternalServerErrorException('Failed to retrieve vault statistics');
     }
@@ -209,7 +209,7 @@ export class StatisticsService {
       });
 
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error calculating vaults by stage:', error);
       // Return default object with zero values for all required statuses
       return {
@@ -281,7 +281,7 @@ export class StatisticsService {
       });
 
       return result;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error calculating vaults by type:', error);
       return {
         private: { percentage: 0, valueAda: 0, valueUsd: 0 },

@@ -170,7 +170,7 @@ export class TreasuryExtractionService {
             this.logger.debug(`Asset ${asset.asset_id} found in claim tx ${claimTx.tx_hash}`);
             break; // Found the asset, no need to check other claim txs
           }
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Failed to fetch UTXO for claim tx ${claimTx.tx_hash}: ${error.message}`);
           continue;
         }
@@ -199,7 +199,7 @@ export class TreasuryExtractionService {
           } else {
             this.logger.error(`Asset ${asset.asset_id} not found in any UTXO (contribution tx: ${contributionTxHash})`);
           }
-        } catch (error) {
+        } catch (error: any) {
           this.logger.warn(`Failed to fetch UTXO for contribution tx: ${error.message}`);
         }
       }

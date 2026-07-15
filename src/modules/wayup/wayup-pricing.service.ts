@@ -90,7 +90,7 @@ export class WayUpPricingService {
       const data: GetCollectionAssetsResponse = await response.json();
 
       return data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to fetch collection assets for policy ${query.policyId}`, error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to fetch collection assets: ${errorMessage}`);
@@ -139,7 +139,7 @@ export class WayUpPricingService {
         floorPriceAda,
         hasListings: tapToolsData.listings > 0,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`TapTools API failed for collection ${policyId}`, error);
       return null;
     }
@@ -213,7 +213,7 @@ export class WayUpPricingService {
       } else {
         this.logger.debug(`WayUp returned no listings for collection ${policyId}, trying TapTools fallback`);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`WayUp API failed for collection ${policyId}, trying TapTools fallback`, error);
     }
 
@@ -472,7 +472,7 @@ export class WayUpPricingService {
               break;
           }
         }
-      } catch (error) {
+      } catch (error: any) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.logger.error(
           `Failed to sync offer statuses for treasury ${treasuryAddress}: ${errorMessage}`,
@@ -552,7 +552,7 @@ export class WayUpPricingService {
             soldAssetIds.push(asset.id);
             this.logger.log(`Asset ${asset.name} (${asset.asset_id}) from policy ${asset.policy_id} has been sold`);
           }
-        } catch (error) {
+        } catch (error: any) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.logger.error(`Failed to check sale status for asset ${asset.name} (${asset.asset_id}): ${errorMessage}`);
           // Continue with next asset
@@ -568,7 +568,7 @@ export class WayUpPricingService {
       }
 
       this.logger.log('NFT sale tracking cron job completed successfully');
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`NFT sale tracking cron job failed: ${errorMessage}`, errorStack);
@@ -613,7 +613,7 @@ export class WayUpPricingService {
         `Offer status tracking completed: checked=${result.checked}, active=${result.stillActive}, ` +
           `accepted=${result.accepted}, cancelled=${result.cancelled}`
       );
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`Offer status tracking cron job failed: ${errorMessage}`, errorStack);
