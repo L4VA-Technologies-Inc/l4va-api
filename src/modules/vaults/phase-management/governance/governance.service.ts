@@ -1881,8 +1881,10 @@ export class GovernanceService {
       case ProposalType.UNSTAKE_ASSETS:
       case ProposalType.HARVEST_REWARDS: {
         // Support both old and new payload formats
-        const actions = createProposalReq.stakingActions || createProposalReq.relicsStakingActions || [];
-
+        const actions =
+          (createProposalReq.stakingActions?.length ? createProposalReq.stakingActions : undefined) ??
+          (createProposalReq.relicsStakingActions?.length ? createProposalReq.relicsStakingActions : undefined) ??
+          [];
         if (actions.length === 0) {
           throw new BadRequestException(
             'At least one staking action is required for staking/unstaking/harvest proposals'
