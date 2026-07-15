@@ -4,12 +4,13 @@ import { IsEnum, IsArray, IsBoolean, IsNumber, IsString, IsOptional } from 'clas
 export enum RelicsStakingAction {
   STAKE = 'stake',
   UNSTAKE = 'unstake',
+  HARVEST = 'harvest',
 }
 
 export class RelicsStakingActionDto {
   @ApiProperty({
     enum: RelicsStakingAction,
-    description: 'Action type: stake or unstake',
+    description: 'Action type: stake, unstake, or harvest',
     example: RelicsStakingAction.STAKE,
   })
   @IsEnum(RelicsStakingAction)

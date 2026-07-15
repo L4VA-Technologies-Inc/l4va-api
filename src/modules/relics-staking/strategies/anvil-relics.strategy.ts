@@ -83,17 +83,27 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
       const batch = batches[i];
       this.logger.log(`Staking batch ${i + 1}/${batches.length} (${batch.length} NFTs)`);
 
-      // Idempotency: skip batch if all assets in it are already staked with a tx hash
-      const alreadyDone = batch.filter(
+      // Idempotency: filter out assets that are already staked with a tx hash
+      const alreadyStaked = batch.filter(
         a => a.status === AssetStatus.STAKED && a.staking_platform === this.platform && a.stake_tx_hash
       );
-      if (alreadyDone.length === batch.length) {
-        this.logger.warn(`Batch ${i + 1} already fully staked, skipping`);
+      const assetsToStake = batch.filter(
+        a => !(a.status === AssetStatus.STAKED && a.staking_platform === this.platform && a.stake_tx_hash)
+      );
+
+      if (assetsToStake.length === 0) {
+        this.logger.warn(`Batch ${i + 1} already fully staked (${alreadyStaked.length} assets), skipping`);
         continue;
       }
 
+      if (alreadyStaked.length > 0) {
+        this.logger.warn(
+          `Batch ${i + 1} has ${alreadyStaked.length} already-staked assets, processing ${assetsToStake.length} remaining`
+        );
+      }
+
       // Build the unsigned transaction
-      const anvilAssets: AnvilStakeAsset[] = batch.map(a => ({
+      const anvilAssets: AnvilStakeAsset[] = assetsToStake.map(a => ({
         unit: `${a.policy_id}${a.asset_id}`,
         quantity: 1,
       }));
@@ -135,7 +145,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
         stake_id: String(buildResp.stakeId),
         status: VaultStakingPositionStatus.STAKED,
         stake_tx_hash: submitResp.txHash,
-        asset_ids: batch.map(a => a.id),
+        asset_ids: assetsToStake.map(a => a.id),
         started_at: new Date(),
         raw_stake_response: { stakeId: buildResp.stakeId, txHash: submitResp.txHash },
       });
@@ -143,7 +153,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
 
       // Update assets in DB (only after real txHash is available)
       await this.assetRepository.update(
-        { id: In(batch.map(a => a.id)) },
+        { id: In(assetsToStake.map(a => a.id)) },
         {
           status: AssetStatus.STAKED,
           staking_platform: this.platform,
@@ -158,7 +168,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
         batchIndex: i,
         stakeId: buildResp.stakeId,
         txHash: submitResp.txHash,
-        assetIds: batch.map(a => a.id),
+        assetIds: assetsToStake.map(a => a.id),
       });
     }
 
@@ -277,8 +287,8 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
           { stake_id: String(stakeId), vault_id: ctx.vaultId },
           {
             status: AssetStatus.EXTRACTED,
-            staking_platform: undefined as any,
-            stake_collection_id: undefined as any,
+            staking_platform: null as any,
+            stake_collection_id: null as any,
             // Keep stake_id for audit – only clear platform / collection
             unstake_tx_hash: submitResp.txHash,
             unstaked_at: new Date(),

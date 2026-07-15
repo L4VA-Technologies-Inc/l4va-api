@@ -3022,7 +3022,7 @@ export class GovernanceService {
   /**
    * Get vault's staked Relics NFTs
    */
-  async getVaultStakedAssets(vaultId: string, platform?: string) {
+  async getVaultStakedAssets(vaultId: string, platform?: string): Promise<Asset[]> {
     try {
       const whereClause: any = {
         vault: { id: vaultId },
@@ -3114,7 +3114,25 @@ export class GovernanceService {
    *  - pendingRewards: accumulated VLRM not yet claimed (from Anvil result.total)
    *  - claimedRewards: VLRM held as vault assets (origin_type=staking_reward)
    */
-  async getAnvilRelicsStakingRewards(vaultId: string) {
+  async getAnvilRelicsStakingRewards(vaultId: string): Promise<{
+    platform: string;
+    stakeCollectionId: number;
+    eligibleAssets: Asset[];
+    localStakedAssets: Asset[];
+    anvilStakes: any[];
+    pendingRewards: {
+      raw: string;
+      amount: string;
+      decimals: number;
+      unit: string;
+    };
+    claimedRewards: {
+      raw: string;
+      amount: string;
+      decimals: number;
+      unit: string;
+    };
+  }> {
     const PLATFORM = 'anvil-relics';
     const VLRM_UNIT = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
     const VLRM_DECIMALS = 4;
