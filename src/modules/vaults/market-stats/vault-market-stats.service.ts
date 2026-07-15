@@ -178,7 +178,7 @@ export class VaultMarketStatsService {
           const vaultUpdateData: Partial<Vault> = {};
           let hasMarketData = false;
 
-          // Check if TapTools or Charli3 provided a price
+          // Check if a pricing source provided a price
           if (mcapData?.price) {
             if (mcapData.fdv > 0) vaultUpdateData.fdv = mcapData.fdv;
             vaultUpdateData.vt_price = mcapData.price;

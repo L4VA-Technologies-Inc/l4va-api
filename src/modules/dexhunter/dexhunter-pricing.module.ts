@@ -14,7 +14,7 @@ import { DexHunterPricingService } from './dexhunter-pricing.service';
  *
  * Imports:
  * - HttpModule: For HTTP requests to external APIs
- * - TapToolsPricingModule: For TapToolsClient (Charli3 pricing fallback)
+ * - TapToolsPricingModule: For TapToolsClient interface helpers
  * - RedisModule: For VyFi bulk price caching
  * - ScheduleModule: For background cron tasks (VyFi price refresh every 10 minutes)
  *
