@@ -2670,24 +2670,14 @@ export class GovernanceExecutionService {
     // Separate LOCKED and EXTRACTED assets
     const lockedAssets = assets.filter(a => a.status === AssetStatus.LOCKED);
 
-    // Extract LOCKED assets to treasury first
+    // Extract LOCKED assets to treasury first (batched in chunks of 50 to handle large volumes)
     if (lockedAssets.length > 0) {
-      this.logger.log(`Extracting ${lockedAssets.length} LOCKED assets to treasury before staking`);
-
-      const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
-        vaultId: proposal.vaultId,
-        assetIds: lockedAssets.map(a => a.id),
-        treasuryAddress: treasuryWallet.address,
-        skipOnchain: false,
-        isBurn: false,
-      });
-
-      this.logger.log(
-        `Successfully extracted ${extractionResult.extractedAssets.length} assets to treasury in transaction ${extractionResult.txHash}`
+      await this.treasuryExtractionService.extractAssetsFromVaultBatched(
+        proposal.vaultId,
+        lockedAssets.map(a => a.id),
+        treasuryWallet.address,
+        50 // Batch size
       );
-
-      // Update status from LOCKED to EXTRACTED
-      await this.assetRepository.update({ id: In(lockedAssets.map(a => a.id)) }, { status: AssetStatus.EXTRACTED });
     }
 
     const strategy = this.relicsStakingService.getStrategy(platform);

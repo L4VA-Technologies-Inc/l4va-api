@@ -40,6 +40,16 @@ export interface ExtractionResult {
   txHash: string;
 }
 
+export interface BatchedExtractionResult {
+  totalAssets: number;
+  totalBatches: number;
+  batches: Array<{
+    batchIndex: number;
+    assetCount: number;
+    txHash: string;
+  }>;
+}
+
 interface UtxoGroup {
   txHash: string;
   outputIndex: number;
@@ -457,6 +467,91 @@ export class TreasuryExtractionService {
       extractedAssets: allExtractedAssets,
       treasuryAddress,
       txHash: response.txHash,
+    };
+  }
+
+  /**
+   * Extract LOCKED assets from vault to treasury in batches with confirmation
+   * Handles large volumes (1000+ assets) by batching extractions and waiting for confirmation between batches
+   *
+   * @param vaultId - Vault ID containing the assets
+   * @param assetIds - Array of asset IDs to extract
+   * @param treasuryAddress - Treasury wallet address
+   * @param batchSize - Number of assets per batch (default: 50)
+   * @returns Summary of all batched extractions
+   */
+  async extractAssetsFromVaultBatched(
+    vaultId: string,
+    assetIds: string[],
+    treasuryAddress: string,
+    batchSize: number = 50
+  ): Promise<BatchedExtractionResult> {
+    this.logger.log(
+      `Starting batched extraction of ${assetIds.length} assets from vault ${vaultId} (batch size: ${batchSize})`
+    );
+
+    // Create batches
+    const batches: string[][] = [];
+    for (let i = 0; i < assetIds.length; i += batchSize) {
+      batches.push(assetIds.slice(i, i + batchSize));
+    }
+
+    this.logger.log(`Processing ${batches.length} extraction batch(es)`);
+
+    const batchResults: BatchedExtractionResult['batches'] = [];
+
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+      const batch = batches[batchIdx];
+      this.logger.log(`Extracting batch ${batchIdx + 1}/${batches.length} (${batch.length} assets)`);
+
+      // Extract this batch
+      const extractionResult = await this.extractAssetsFromVault({
+        vaultId,
+        assetIds: batch,
+        treasuryAddress,
+        skipOnchain: false,
+        isBurn: false,
+      });
+
+      this.logger.log(
+        `Extraction batch ${batchIdx + 1}: submitted ${extractionResult.extractedAssets.length} assets in tx ${extractionResult.txHash}`
+      );
+
+      // Wait for transaction confirmation before proceeding to next batch
+      const confirmed = await this.blockchainService.waitForTransactionConfirmation(
+        extractionResult.txHash,
+        600000, // 10 minutes
+        20000 // 20 seconds between checks
+      );
+
+      if (!confirmed) {
+        this.logger.error(
+          `Extraction batch ${batchIdx + 1} transaction ${extractionResult.txHash} failed to confirm. ` +
+            `Stopping extraction to prevent issues.`
+        );
+        throw new Error(`Extraction transaction ${extractionResult.txHash} failed to confirm`);
+      }
+
+      this.logger.log(`Extraction batch ${batchIdx + 1}: confirmed on-chain, updating database`);
+
+      // Update status from LOCKED to EXTRACTED for this batch
+      await this.assetsRepository.update({ id: In(batch) }, { status: AssetStatus.EXTRACTED });
+
+      batchResults.push({
+        batchIndex: batchIdx,
+        assetCount: batch.length,
+        txHash: extractionResult.txHash,
+      });
+    }
+
+    this.logger.log(
+      `Successfully extracted all ${assetIds.length} LOCKED assets to treasury in ${batches.length} batches`
+    );
+
+    return {
+      totalAssets: assetIds.length,
+      totalBatches: batches.length,
+      batches: batchResults,
     };
   }
 }

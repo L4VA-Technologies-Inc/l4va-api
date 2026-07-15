@@ -139,6 +139,24 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
 
       this.logger.log(`Batch ${i + 1}: submitted, txHash=${submitResp.txHash}`);
 
+      // Wait for transaction confirmation before proceeding to next batch
+      // This prevents mempool double-spend errors and ensures UTxOs are properly settled
+      const confirmed = await this.blockchainService.waitForTransactionConfirmation(
+        submitResp.txHash,
+        600000, // 10 minutes
+        20000 // 20 seconds between checks
+      );
+
+      if (!confirmed) {
+        this.logger.error(
+          `Batch ${i + 1} transaction ${submitResp.txHash} failed to confirm within timeout. ` +
+            `Stopping batch processing to prevent double-spend errors.`
+        );
+        throw new Error(`Staking batch ${i + 1} transaction ${submitResp.txHash} failed to confirm`);
+      }
+
+      this.logger.log(`Batch ${i + 1}: confirmed on-chain, updating database`);
+
       // Persist staking position
       const position = this.positionRepository.create({
         vault_id: ctx.vaultId,
@@ -217,6 +235,23 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
       });
 
       this.logger.log(`Unstake submitted: stakeId=${stakeId}, txHash=${submitResp.txHash}`);
+
+      // Wait for transaction confirmation before proceeding to next stakeId
+      const confirmed = await this.blockchainService.waitForTransactionConfirmation(
+        submitResp.txHash,
+        600000, // 10 minutes
+        20000 // 20 seconds between checks
+      );
+
+      if (!confirmed) {
+        this.logger.error(
+          `Unstake transaction ${submitResp.txHash} for stakeId=${stakeId} failed to confirm. ` +
+            `Stopping unstake processing to prevent double-spend errors.`
+        );
+        throw new Error(`Unstake transaction ${submitResp.txHash} failed to confirm`);
+      }
+
+      this.logger.log(`Unstake confirmed on-chain for stakeId=${stakeId}`);
 
       // Parse VLRM rewards from transaction outputs (both unstake and harvest operations claim rewards)
       let claimedVlrmRaw: string | undefined;
