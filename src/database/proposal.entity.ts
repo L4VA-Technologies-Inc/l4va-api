@@ -151,6 +151,40 @@ export class Proposal {
       actualSlippage?: number;
     }>;
 
+    // Relics staking execution tracking
+    relicsStaking?: {
+      platform: string; // e.g., 'anvil-relics'
+      /** 'stake' | 'unstake' | 'harvest' */
+      action?: string;
+      stakeCollectionId?: number;
+      /** True if all eligible assets should be staked */
+      stakeAll?: boolean;
+      /** Governance-approved asset DB IDs to stake */
+      assetIds?: string[];
+      /** Governance-approved Anvil stakeIds to unstake */
+      stakeIds?: string[];
+      /** true = claim accrued VLRM rewards on unstake */
+      claimRewards?: boolean;
+      executedStakes?: Array<{
+        batchIndex: number;
+        stakeId: number;
+        txHash: string;
+        assetIds: string[];
+      }>;
+      executedUnstakes?: Array<{
+        stakeId: number;
+        txHash: string;
+        claimedVlrmRaw?: string;
+      }>;
+      executedHarvests?: Array<{
+        stakeId: number;
+        txHash: string;
+        claimedVlrmRaw?: string;
+      }>;
+      /** Total raw VLRM rewards (4 decimals) */
+      totalVlrmRewardsRaw?: string;
+    };
+
     // Execution retry tracking
     _executionRetry?: {
       count: number;

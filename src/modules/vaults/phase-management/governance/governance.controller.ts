@@ -296,4 +296,48 @@ export class GovernanceController {
       feeAmount: result.feeAmount,
     };
   }
+
+  @Get('vaults/:vaultId/governance/assets-to-stake-relics')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get Relics NFTs eligible for external platform staking' })
+  @ApiResponse({ status: 200, description: 'List of Relics NFTs ready to stake' })
+  async getAssetsToStakeRelics(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query('platform') platform?: string
+  ): Promise<any> {
+    const assets = await this.governanceService.getAssetsToStakeRelics(vaultId, platform);
+    return { assets, count: assets.length };
+  }
+
+  @Get('vaults/:vaultId/staked-assets')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get vault staked assets' })
+  @ApiResponse({ status: 200, description: 'List of staked assets with platform info' })
+  async getVaultStakedAssets(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query('platform') platform?: string
+  ): Promise<any> {
+    const assets = await this.governanceService.getVaultStakedAssets(vaultId, platform);
+    return { assets, count: assets.length };
+  }
+
+  @Get('vaults/:vaultId/staking-stats')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get vault staking statistics' })
+  @ApiResponse({ status: 200, description: 'Staking statistics including total staked and VLRM earned' })
+  async getVaultStakingStats(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any> {
+    return await this.governanceService.getVaultStakingStats(vaultId);
+  }
+
+  @Get('vaults/:vaultId/rewards/staking/anvil-relics')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get live Anvil Relics staking rewards for vault' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Eligible assets, local staked assets, live Anvil stakes, pending VLRM, and claimed VLRM for the vault',
+  })
+  async getAnvilRelicsStakingRewards(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any> {
+    return await this.governanceService.getAnvilRelicsStakingRewards(vaultId);
+  }
 }

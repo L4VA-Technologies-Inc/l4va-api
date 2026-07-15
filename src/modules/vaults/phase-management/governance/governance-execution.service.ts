@@ -21,6 +21,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
+import { RelicsStakingService } from '@/modules/relics-staking/relics-staking.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
@@ -28,7 +29,7 @@ import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
-import { AssetOriginType, AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -74,7 +75,8 @@ export class GovernanceExecutionService {
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly relicsStakingService: RelicsStakingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -166,7 +168,7 @@ export class GovernanceExecutionService {
       this.logger.log(
         `Proposal ${payload.proposalId}: EXECUTED successfully (termination complete for vault ${payload.vaultId})`
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Failed to mark termination proposal ${payload.proposalId} as executed: ${error.message}`,
         error.stack
@@ -262,12 +264,12 @@ export class GovernanceExecutionService {
           await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
 
           await this.executePassedProposal(proposal.id);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
           // Continue with next proposal - retry count already incremented
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error in retryPassedProposals: ${error.message}`, error.stack);
     }
   }
@@ -325,7 +327,7 @@ export class GovernanceExecutionService {
 
         this.logger.log(`Proposal ${proposalId} activated successfully`);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -439,7 +441,7 @@ export class GovernanceExecutionService {
 
       // Immediately trigger execution
       await this.executePassedProposal(proposalId);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -517,7 +519,7 @@ export class GovernanceExecutionService {
       } else {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for automatic retry`);
       }
-    } catch (error) {
+    } catch (error: any) {
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
       if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
         this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
@@ -660,11 +662,20 @@ export class GovernanceExecutionService {
         case ProposalType.ACQUIRE_EXPANSION:
           return await this.executeAcquireExpansionProposal(proposal);
 
+        case ProposalType.STAKE_ASSETS:
+          return await this.executeRelicsStakingProposal(proposal);
+
+        case ProposalType.UNSTAKE_ASSETS:
+          return await this.executeRelicsUnstakingProposal(proposal);
+
+        case ProposalType.HARVEST_REWARDS:
+          return await this.executeRelicsHarvestProposal(proposal);
+
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
       }
-    } catch (error) {
+    } catch (error: any) {
       if (
         error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND' ||
         error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
@@ -887,7 +898,7 @@ export class GovernanceExecutionService {
               { outputRef: o.outputRef, policyId: o.policyId, assetName: o.assetName },
             ])
           );
-        } catch (error) {
+        } catch (error: any) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.logger.error(
             `Failed to fetch WayUp offer state for cancel-offer execution in proposal ${proposal.id}: ${errorMessage}`,
@@ -965,7 +976,7 @@ export class GovernanceExecutionService {
       if (autoResolvedAcceptedOfferIds.length > 0) {
         try {
           await this.assetsService.markOffersAsAccepted(autoResolvedAcceptedOfferIds);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to mark accepted offers after WayUp check: ${statusError.message}`);
         }
       }
@@ -973,7 +984,7 @@ export class GovernanceExecutionService {
       if (autoResolvedCancelledOfferIds.length > 0) {
         try {
           await this.assetsService.markOffersAsCancelled(autoResolvedCancelledOfferIds);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to mark cancelled offers after WayUp check: ${statusError.message}`);
         }
       }
@@ -1087,7 +1098,7 @@ export class GovernanceExecutionService {
               skipped.offers.push(option.assetName || option.assetId);
               continue;
             }
-          } catch (lookupError) {
+          } catch (lookupError: any) {
             this.logger.warn(
               `Cannot place offer for ${option.assetName} - WayUp lookup failed: ${lookupError.message}`
             );
@@ -1123,7 +1134,7 @@ export class GovernanceExecutionService {
             nftName = exactAsset.name || nftName;
             nftImage = exactAsset.image;
             nftAttributes = exactAsset.attributes;
-          } catch (lookupError) {
+          } catch (lookupError: any) {
             this.logger.warn(
               `Cannot place offer for ${option.assetName} - WayUp lookup failed: ${lookupError.message}`
             );
@@ -1158,7 +1169,7 @@ export class GovernanceExecutionService {
               `Required ${totalRequiredAda} ADA, available: ${adaBalance.toFixed(2)} ADA.`;
             await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA');
           }
-        } catch (error) {
+        } catch (error: any) {
           if (error?.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
             throw error;
           }
@@ -1288,7 +1299,7 @@ export class GovernanceExecutionService {
             }
           }
           this.logger.log(`Found ${assetsInTreasury.size} unique asset(s) in treasury wallet`);
-        } catch (error) {
+        } catch (error: any) {
           // If treasury wallet has never received transactions, Blockfrost returns 404
           if (error.status_code === 404 || error.message?.includes('not been found')) {
             this.logger.log(`Treasury wallet ${treasuryAddress} is empty (no transactions yet)`);
@@ -1372,7 +1383,7 @@ export class GovernanceExecutionService {
             }))
           );
           this.logger.log(`Marked ${listingAssetInfos.length} asset(s) as LISTED`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update asset statuses to LISTED: ${statusError.message}`);
         }
       }
@@ -1382,7 +1393,7 @@ export class GovernanceExecutionService {
         try {
           await this.assetsService.markAssetsAsUnlisted(unlistedAssetIds);
           this.logger.log(`Marked ${unlistedAssetIds.length} asset(s) as EXTRACTED (unlisted)`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update asset statuses to EXTRACTED: ${statusError.message}`);
         }
       }
@@ -1392,7 +1403,7 @@ export class GovernanceExecutionService {
         try {
           await this.assetsService.markOffersAsCancelled(cancelledOfferAssetIds);
           this.logger.log(`Marked ${cancelledOfferAssetIds.length} asset(s) as CANCEL_OFFER`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update cancelled offer asset statuses: ${statusError.message}`);
         }
       }
@@ -1408,7 +1419,7 @@ export class GovernanceExecutionService {
             }))
           );
           this.logger.log(`Updated listing prices for ${updateAssetInfos.length} asset(s)`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update listing prices: ${statusError.message}`);
         }
       }
@@ -1431,7 +1442,7 @@ export class GovernanceExecutionService {
             this.logger.log(
               `Recorded bought asset "${purchase.name}" (${purchase.policyId}) to vault ${proposal.vaultId}`
             );
-          } catch (recordError) {
+          } catch (recordError: any) {
             this.logger.warn(`Failed to record bought asset "${purchase.name}": ${recordError.message}`);
           }
         }
@@ -1469,7 +1480,7 @@ export class GovernanceExecutionService {
             this.logger.log(
               `Recorded offered asset "${offer.name}" (${offer.policyId}) to vault ${proposal.vaultId} with offer tx: ${result.txHash}`
             );
-          } catch (recordError) {
+          } catch (recordError: any) {
             this.logger.warn(`Failed to record offered asset "${offer.name}": ${recordError.message}`);
           }
         }
@@ -1484,7 +1495,7 @@ export class GovernanceExecutionService {
       });
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing marketplace proposal ${proposal.id}: ${error.message}`, error.stack);
 
       const errorMessage = error.message || '';
@@ -1612,7 +1623,7 @@ export class GovernanceExecutionService {
             treasuryBalances.set(amount.unit, parseInt(amount.quantity));
           }
         }
-      } catch (error) {
+      } catch (error: any) {
         // If treasury wallet has never received transactions, Blockfrost returns 404
         // Treat this as an empty wallet
         if (error.status_code === 404 || error.message?.includes('not been found')) {
@@ -1938,7 +1949,7 @@ export class GovernanceExecutionService {
       this.logger.log(`DexHunter swap proposal ${proposal.id} completed successfully with ${swapResults.length} swaps`);
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing DexHunter swap proposal ${proposal.id}: ${error.message}`, error.stack);
 
       // Handle pool_not_found error on retry - this means token has no liquidity
@@ -2076,7 +2087,7 @@ export class GovernanceExecutionService {
 
       this.logger.log(`Successfully executed staking proposal ${proposal.id}`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing staking proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
       throw error;
@@ -2140,7 +2151,7 @@ export class GovernanceExecutionService {
       }
 
       return success;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
       throw error;
@@ -2236,7 +2247,7 @@ export class GovernanceExecutionService {
 
       this.logger.log(`Successfully executed burning proposal ${proposal.id}`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing burning proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
       throw error;
@@ -2279,7 +2290,7 @@ export class GovernanceExecutionService {
       // Return false to keep proposal in PASSED status during the multi-step termination process
       // It will be marked as EXECUTED after treasury cleanup completes
       return false;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing termination proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
@@ -2292,7 +2303,7 @@ export class GovernanceExecutionService {
   async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
     try {
       return await this.expansionService.executeExpansion(proposal);
-    } catch (error) {
+    } catch (error: any) {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
@@ -2356,7 +2367,7 @@ export class GovernanceExecutionService {
           insertedCount += 1;
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
@@ -2377,7 +2388,7 @@ export class GovernanceExecutionService {
   async executeAcquireExpansionProposal(proposal: Proposal): Promise<boolean> {
     try {
       return await this.expansionService.executeAcquireExpansion(proposal);
-    } catch (error) {
+    } catch (error: any) {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
@@ -2417,7 +2428,7 @@ export class GovernanceExecutionService {
       );
 
       this.logger.log(`Stored execution error for proposal ${proposal.id}: [${errorCode}] ${userFriendlyMessage}`);
-    } catch (metadataError) {
+    } catch (metadataError: any) {
       this.logger.error(
         `Failed to store execution error for proposal ${proposal.id}: ${metadataError.message}`,
         metadataError.stack
@@ -2608,6 +2619,270 @@ export class GovernanceExecutionService {
 
     // Default to generic execution error
     return 'EXECUTION_ERROR';
+  }
+
+  /**
+   * Execute Relics Staking proposal
+   * Stakes approved Relics NFTs on Anvil platform.
+   * Uses assetIds or stakeAll flag from governance-approved metadata.
+   * Mainnet only – blocked on testnet (Anvil is mainnet-only).
+   */
+  private async executeRelicsStakingProposal(proposal: Proposal): Promise<boolean> {
+    if (!this.isMainnet) {
+      throw new Error('Anvil Relics staking is mainnet-only. This proposal cannot be executed on testnet.');
+    }
+
+    const relicsMeta = proposal.metadata?.relicsStaking;
+    const platform = relicsMeta?.platform || 'anvil-relics';
+
+    this.logger.log(`executeRelicsStakingProposal: proposal=${proposal.id}, platform=${platform}`);
+
+    // Resolve assets from governance-approved action only
+    let assets: Asset[];
+    if (relicsMeta?.stakeAll) {
+      assets = await this.relicsStakingService.getEligibleAssets(proposal.vaultId, platform);
+    } else if (relicsMeta?.assetIds?.length) {
+      assets = await this.assetRepository.find({
+        where: { id: In(relicsMeta.assetIds), vault_id: proposal.vaultId },
+      });
+    } else {
+      this.logger.warn(`Relics staking proposal ${proposal.id} has no assetIds and stakeAll is not set`);
+      return false;
+    }
+
+    if (assets.length === 0) {
+      this.logger.warn(`No eligible Relics assets found for vault ${proposal.vaultId}`);
+      return false;
+    }
+
+    this.logger.log(`Staking ${assets.length} Relics NFTs`);
+
+    // Get treasury wallet for signing
+    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
+    if (!treasuryWallet) {
+      throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
+    }
+
+    const strategy = this.relicsStakingService.getStrategy(platform);
+    const results = await strategy.executeStake(assets, {
+      vaultId: proposal.vaultId,
+      treasuryAddress: treasuryWallet.address,
+    });
+
+    this.logger.log(`Relics staking executed: ${results.length} batches`);
+
+    // Persist execution details in proposal metadata
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          relicsStaking: {
+            ...proposal.metadata.relicsStaking,
+            executedStakes: results.map(r => ({
+              batchIndex: r.batchIndex,
+              stakeId: r.stakeId,
+              txHash: r.txHash,
+              assetIds: r.assetIds,
+            })),
+            totalVlrmRewardsRaw: '0',
+          },
+        },
+      }
+    );
+
+    this.logger.log(`Relics staking proposal ${proposal.id} executed successfully`);
+    return results.length > 0;
+  }
+
+  /**
+   * Execute Relics Unstaking proposal
+   * Unstakes Relics NFTs from Anvil platform and creates VLRM reward assets
+   */
+  private async executeRelicsUnstakingProposal(proposal: Proposal): Promise<boolean> {
+    if (!this.isMainnet) {
+      throw new Error('Anvil Relics unstaking is mainnet-only. This proposal cannot be executed on testnet.');
+    }
+
+    const relicsMeta = proposal.metadata?.relicsStaking;
+    const platform = relicsMeta?.platform || 'anvil-relics';
+    const stakeIds: number[] = (relicsMeta?.stakeIds ?? []).map(Number).filter((n: number) => !isNaN(n));
+    const claimRewards = relicsMeta?.claimRewards !== false; // default true
+
+    if (stakeIds.length === 0) {
+      this.logger.warn(`Relics unstaking proposal ${proposal.id} has no stakeIds in metadata`);
+      return false;
+    }
+
+    this.logger.log(
+      `executeRelicsUnstakingProposal: proposal=${proposal.id}, stakeIds=[${stakeIds.join(',')}], claim=${claimRewards}`
+    );
+
+    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
+    if (!treasuryWallet) {
+      throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
+    }
+
+    const strategy = this.relicsStakingService.getStrategy(platform);
+    const results = await strategy.executeUnstake(
+      stakeIds,
+      { vaultId: proposal.vaultId, treasuryAddress: treasuryWallet.address },
+      claimRewards
+    );
+
+    this.logger.log(`Relics unstaking executed: ${results.length} positions`);
+
+    // Calculate total VLRM rewards and create Asset records
+    let totalVlrmRewards = 0;
+    if (claimRewards) {
+      for (const result of results) {
+        if (result.claimedVlrmRaw && result.claimedVlrmRaw !== '0') {
+          const vlrmAmount = parseInt(result.claimedVlrmRaw, 10);
+          if (!isNaN(vlrmAmount) && vlrmAmount > 0) {
+            totalVlrmRewards += vlrmAmount;
+
+            // Create VLRM Asset record with origin_type=STAKING_REWARD
+            const vlrmAsset = this.assetRepository.create({
+              vault_id: proposal.vaultId,
+              policy_id: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0',
+              asset_id: '56616c6f72756d', // "Valorum" in hex
+              type: AssetType.FT,
+              name: 'Valorum',
+              quantity: vlrmAmount,
+              decimals: 4,
+              status: AssetStatus.EXTRACTED,
+              origin_type: AssetOriginType.STAKING_REWARD,
+              metadata: {
+                ticker: 'VLRM',
+                description: `VLRM rewards from unstaking Relics (stakeId: ${result.stakeId})`,
+                sourceStakeId: result.stakeId,
+                sourceTxHash: result.txHash,
+              },
+            });
+            await this.assetRepository.save(vlrmAsset);
+
+            this.logger.log(
+              `Created VLRM reward asset: ${vlrmAmount} units (${(vlrmAmount / 10000).toFixed(4)} VLRM) from stakeId ${result.stakeId}`
+            );
+          }
+        }
+      }
+    }
+
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          relicsStaking: {
+            ...relicsMeta,
+            executedUnstakes: results.map(r => ({
+              stakeId: r.stakeId,
+              txHash: r.txHash,
+              claimedVlrmRaw: r.claimedVlrmRaw ?? '0',
+            })),
+            totalVlrmRewardsRaw: totalVlrmRewards.toString(),
+          },
+        },
+      }
+    );
+
+    this.logger.log(
+      `Relics unstaking proposal ${proposal.id} executed successfully. Total VLRM rewards: ${totalVlrmRewards} (${(totalVlrmRewards / 10000).toFixed(4)} VLRM)`
+    );
+    return results.length > 0;
+  }
+
+  private async executeRelicsHarvestProposal(proposal: Proposal): Promise<boolean> {
+    if (!this.isMainnet) {
+      throw new Error('Anvil Relics harvest is mainnet-only. This proposal cannot be executed on testnet.');
+    }
+
+    const relicsMeta = proposal.metadata?.relicsStaking;
+    const platform = relicsMeta?.platform || 'anvil-relics';
+    const stakeIds: number[] = (relicsMeta?.stakeIds ?? []).map(Number).filter((n: number) => !isNaN(n));
+
+    if (stakeIds.length === 0) {
+      this.logger.warn(`Relics harvest proposal ${proposal.id} has no stakeIds in metadata`);
+      return false;
+    }
+
+    this.logger.log(`executeRelicsHarvestProposal: proposal=${proposal.id}, stakeIds=[${stakeIds.join(',')}]`);
+
+    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(proposal.vaultId);
+    if (!treasuryWallet) {
+      throw new Error(`No treasury wallet found for vault ${proposal.vaultId}`);
+    }
+
+    const strategy = this.relicsStakingService.getStrategy(platform);
+
+    // For harvest: claim=false means "harvest only" (claim rewards without unstaking)
+    // This is the Anvil API's terminology: claim=true means "unstake+claim", claim=false means "harvest only"
+    const results = await strategy.executeUnstake(
+      stakeIds,
+      { vaultId: proposal.vaultId, treasuryAddress: treasuryWallet.address },
+      false // claim=false = harvest only (no unstaking)
+    );
+
+    this.logger.log(`Relics harvest executed: ${results.length} positions, rewards claimed`);
+
+    // Calculate total VLRM rewards and create Asset records (same as unstaking)
+    let totalVlrmRewards = 0;
+    for (const result of results) {
+      if (result.claimedVlrmRaw && result.claimedVlrmRaw !== '0') {
+        const vlrmAmount = parseInt(result.claimedVlrmRaw, 10);
+        if (!isNaN(vlrmAmount) && vlrmAmount > 0) {
+          totalVlrmRewards += vlrmAmount;
+
+          // Create VLRM Asset record with origin_type=STAKING_REWARD
+          const vlrmAsset = this.assetRepository.create({
+            vault_id: proposal.vaultId,
+            policy_id: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0',
+            asset_id: '56616c6f72756d', // "Valorum" in hex
+            type: AssetType.FT,
+            name: 'Valorum',
+            quantity: vlrmAmount,
+            decimals: 4,
+            status: AssetStatus.EXTRACTED,
+            origin_type: AssetOriginType.STAKING_REWARD,
+            metadata: {
+              ticker: 'VLRM',
+              description: `VLRM rewards from harvesting Relics (stakeId: ${result.stakeId})`,
+              sourceStakeId: result.stakeId,
+              sourceTxHash: result.txHash,
+            },
+          });
+          await this.assetRepository.save(vlrmAsset);
+
+          this.logger.log(
+            `Created VLRM reward asset: ${vlrmAmount} units (${(vlrmAmount / 10000).toFixed(4)} VLRM) from stakeId ${result.stakeId}`
+          );
+        }
+      }
+    }
+
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          relicsStaking: {
+            ...relicsMeta,
+            executedHarvests: results.map(r => ({
+              stakeId: r.stakeId,
+              txHash: r.txHash,
+              claimedVlrmRaw: r.claimedVlrmRaw ?? '0',
+            })),
+            totalVlrmRewardsRaw: totalVlrmRewards.toString(),
+          },
+        },
+      }
+    );
+
+    this.logger.log(
+      `Relics harvest proposal ${proposal.id} executed successfully. Total VLRM rewards: ${totalVlrmRewards} (${(totalVlrmRewards / 10000).toFixed(4)} VLRM)`
+    );
+    return results.length > 0;
   }
 
   onModuleDestroy(): void {

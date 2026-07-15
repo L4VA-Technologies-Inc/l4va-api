@@ -45,6 +45,8 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { RelicsStakingService } from '@/modules/relics-staking/relics-staking.service';
+import { AnvilRelicsStakingStrategy } from '@/modules/relics-staking/strategies/anvil-relics.strategy';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
@@ -142,7 +144,9 @@ export class GovernanceService {
     private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly snapshotService: SnapshotService
+    private readonly snapshotService: SnapshotService,
+    private readonly relicsStakingService: RelicsStakingService,
+    private readonly anvilRelicsStakingStrategy: AnvilRelicsStakingStrategy
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -1872,6 +1876,62 @@ export class GovernanceService {
 
         break;
       }
+
+      case ProposalType.STAKE_ASSETS:
+      case ProposalType.UNSTAKE_ASSETS:
+      case ProposalType.HARVEST_REWARDS: {
+        // Support both old and new payload formats
+        const actions = createProposalReq.stakingActions || createProposalReq.relicsStakingActions || [];
+
+        if (actions.length === 0) {
+          throw new BadRequestException(
+            'At least one staking action is required for staking/unstaking/harvest proposals'
+          );
+        }
+
+        const action = actions[0];
+
+        // Determine action type from proposal type
+        const actionType =
+          createProposalReq.type === ProposalType.STAKE_ASSETS
+            ? 'stake'
+            : createProposalReq.type === ProposalType.HARVEST_REWARDS
+              ? 'harvest'
+              : 'unstake';
+
+        const isStake = actionType === 'stake';
+        const isHarvest = actionType === 'harvest';
+
+        if (isStake) {
+          // stake: must have stakeAll=true OR at least one assetId
+          if (!action.stakeAll && (!action.assetIds || action.assetIds.length === 0)) {
+            throw new BadRequestException('Staking proposal must set stakeAll=true or provide at least one assetId');
+          }
+        } else {
+          // unstake/harvest: must have at least one stakeId
+          if (!action.stakeIds || action.stakeIds.length === 0) {
+            throw new BadRequestException(
+              `${isHarvest ? 'Harvest' : 'Unstaking'} proposal must provide at least one stakeId`
+            );
+          }
+        }
+
+        // Store the full governance-approved action in metadata
+        proposal.metadata.relicsStaking = {
+          platform: action.platform || 'anvil-relics',
+          action: actionType,
+          stakeCollectionId: action.stakeCollectionId ?? 54,
+          stakeAll: action.stakeAll ?? false,
+          assetIds: action.assetIds ?? [],
+          stakeIds: (action.stakeIds ?? []).map(String),
+          claimRewards: isHarvest ? false : action.claimRewards !== false, // harvest is claim-only
+          executedStakes: [],
+          executedUnstakes: [],
+          totalVlrmRewardsRaw: '0',
+        };
+
+        break;
+      }
     }
 
     // Check if governance fee is required for this proposal type
@@ -2930,6 +2990,193 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  /**
+   * Get Relics NFTs eligible for external platform staking (extracted to treasury)
+   */
+  async getAssetsToStakeRelics(vaultId: string, platform: string = 'anvil-relics'): Promise<Asset[]> {
+    try {
+      const RELICS_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
+      const RELICS_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
+
+      return await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          type: AssetType.NFT,
+          status: AssetStatus.EXTRACTED,
+          policy_id: In([RELICS_VITA_POLICY, RELICS_PORTA_POLICY]),
+          staking_platform: IsNull(),
+        },
+        order: {
+          policy_id: 'ASC',
+        },
+      });
+    } catch (error) {
+      this.logger.error(`Error getting Relics assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting Relics assets to stake');
+    }
+  }
+
+  /**
+   * Get vault's staked Relics NFTs
+   */
+  async getVaultStakedAssets(vaultId: string, platform?: string) {
+    try {
+      const whereClause: any = {
+        vault: { id: vaultId },
+        status: AssetStatus.STAKED,
+      };
+
+      if (platform) {
+        whereClause.staking_platform = platform;
+      }
+
+      const assets = await this.assetRepository.find({
+        where: whereClause,
+        order: {
+          staked_at: 'DESC',
+        },
+      });
+
+      return assets;
+    } catch (error) {
+      this.logger.error(`Error getting staked assets for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting staked assets');
+    }
+  }
+
+  /**
+   * Get staking statistics for a vault
+   */
+  async getVaultStakingStats(vaultId: string) {
+    try {
+      const stakedAssets = await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          status: AssetStatus.STAKED,
+        },
+      });
+
+      const rewardAssets = await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          origin_type: AssetOriginType.STAKING_REWARD,
+        },
+      });
+
+      // Group by platform
+      const platformStats = stakedAssets.reduce(
+        (acc, asset) => {
+          const platform = asset.staking_platform || 'unknown';
+          if (!acc[platform]) {
+            acc[platform] = {
+              platform,
+              totalStaked: 0,
+              assets: [],
+            };
+          }
+          acc[platform].totalStaked++;
+          acc[platform].assets.push(asset.id);
+          return acc;
+        },
+        {} as Record<string, any>
+      );
+
+      // Calculate total VLRM earned
+      const totalVlrmEarned = rewardAssets.reduce((sum, asset) => {
+        return sum + (parseFloat(asset.quantity.toString()) || 0);
+      }, 0);
+
+      return {
+        totalStaked: stakedAssets.length,
+        totalVlrmEarned: totalVlrmEarned.toString(),
+        platforms: Object.values(platformStats),
+      };
+    } catch (error) {
+      this.logger.error(`Error getting staking stats for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting staking stats');
+    }
+  }
+
+  /**
+   * Get live Anvil Relics staking data for vault rewards UI.
+   *
+   * Returns:
+   *  - eligibleAssets: EXTRACTED Relics NFTs not yet staked
+   *  - localStakedAssets: DB assets with status=STAKED, platform=anvil-relics
+   *  - anvilStakes: live positions from Anvil getStakesV2
+   *  - pendingRewards: accumulated VLRM not yet claimed (from Anvil result.total)
+   *  - claimedRewards: VLRM held as vault assets (origin_type=staking_reward)
+   */
+  async getAnvilRelicsStakingRewards(vaultId: string) {
+    const PLATFORM = 'anvil-relics';
+    const VLRM_UNIT = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
+    const VLRM_DECIMALS = 4;
+
+    try {
+      const [eligibleAssets, localStakedAssets, rewardAssets, treasuryWallet] = await Promise.all([
+        this.relicsStakingService.getEligibleAssets(vaultId, PLATFORM),
+        this.assetRepository.find({
+          where: { vault_id: vaultId, status: AssetStatus.STAKED, staking_platform: PLATFORM },
+        }),
+        this.assetRepository.find({
+          where: { vault_id: vaultId, origin_type: AssetOriginType.STAKING_REWARD },
+        }),
+        this.treasuryWalletService.getTreasuryWallet(vaultId),
+      ]);
+
+      // Fetch live Anvil stakes (only if treasury wallet exists)
+      let anvilStakes: any[] = [];
+      if (treasuryWallet?.address) {
+        anvilStakes = await this.anvilRelicsStakingStrategy.getAnvilStakes(treasuryWallet.address);
+      }
+
+      // Aggregate pending VLRM from live Anvil stakes
+      let pendingVlrmRaw = BigInt(0);
+      for (const stake of anvilStakes) {
+        const total = stake.result?.total ?? [];
+        for (const t of total) {
+          if (t.unit === VLRM_UNIT) {
+            pendingVlrmRaw += BigInt(Math.round(t.quantity));
+          }
+        }
+      }
+
+      // Aggregate claimed VLRM from DB reward assets
+      let claimedVlrmRaw = BigInt(0);
+      const VLRM_POLICY_ID = VLRM_UNIT.slice(0, 56);
+      const VLRM_ASSET_ID = VLRM_UNIT.slice(56);
+      for (const a of rewardAssets) {
+        if (a.policy_id === VLRM_POLICY_ID && a.asset_id === VLRM_ASSET_ID) {
+          claimedVlrmRaw += BigInt(Math.round(parseFloat(a.quantity.toString())));
+        }
+      }
+
+      const divisor = BigInt(10 ** VLRM_DECIMALS);
+      const formatVlrm = (raw: bigint) => ({
+        raw: raw.toString(),
+        amount: (Number(raw) / 10 ** VLRM_DECIMALS).toFixed(VLRM_DECIMALS),
+        decimals: VLRM_DECIMALS,
+        unit: VLRM_UNIT,
+      });
+
+      return {
+        platform: PLATFORM,
+        stakeCollectionId: 54,
+        eligibleAssets,
+        localStakedAssets,
+        anvilStakes,
+        pendingRewards: formatVlrm(pendingVlrmRaw),
+        claimedRewards: formatVlrm(claimedVlrmRaw),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error getting Anvil Relics staking rewards for vault ${vaultId}: ${error.message}`,
+        error.stack
+      );
+      throw new InternalServerErrorException('Error getting Anvil Relics staking rewards');
     }
   }
 

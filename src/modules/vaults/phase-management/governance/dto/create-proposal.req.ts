@@ -15,6 +15,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 
+import { RelicsStakingActionDto } from '@/modules/relics-staking/dto/relics-staking-action.dto';
 import { AssetWhitelistDto } from '@/modules/vaults/dto/assetWhitelist.dto';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
@@ -544,6 +545,30 @@ export class CreateProposalReq {
   @Type(() => AssetWhitelistProposalDto)
   @Expose()
   assetsWhitelist?: AssetWhitelistProposalDto[];
+
+  @ApiProperty({
+    description: 'Relics staking actions (stake or unstake NFTs on Anvil platform)',
+    type: 'array',
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RelicsStakingActionDto)
+  @Expose()
+  relicsStakingActions?: RelicsStakingActionDto[];
+
+  @ApiProperty({
+    description: 'Staking actions (stake, unstake, or harvest on various platforms)',
+    type: 'array',
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RelicsStakingActionDto)
+  @Expose()
+  stakingActions?: RelicsStakingActionDto[];
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

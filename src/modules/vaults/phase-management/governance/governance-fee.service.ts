@@ -205,6 +205,10 @@ export class GovernanceFeeService {
       buy_sell: 'Marketplace Action',
       acquire_expansion: 'Acquire Expansion',
       asset_whitelist_update: 'Asset Whitelist Update',
+      // New staking operations
+      stake_assets: 'Stake Assets',
+      unstake_assets: 'Unstake Assets',
+      harvest_rewards: 'Harvest Rewards',
     };
     return labels[proposalType] || proposalType;
   }
