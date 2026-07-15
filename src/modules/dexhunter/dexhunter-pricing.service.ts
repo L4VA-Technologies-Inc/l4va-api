@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type Redis from 'ioredis';
 
-import { DexHunterPoolItem, TapToolsClient } from '../taptools/taptools.client';
+import { DexHunterPoolItem } from '../taptools/taptools.client';
 
 import { DexHunterPricingClient } from './dexhunter-pricing.client';
 
@@ -14,8 +14,7 @@ import { REDIS_CLIENT } from '@/modules/redis/redis.module';
  * Pricing Strategy (VyFi-first with multi-source fallback):
  * 1. Check Redis cache (populated by VyFi bulk refresh every 10 minutes)
  * 2. If cache miss, try DexHunter API for individual token
- * 3. If DexHunter fails, try TapTools (Charli3) as last resort
- * 4. Return null only if all sources fail
+ * 3. Return null only if both sources fail
  *
  * VyFi bulk pricing: ~500 tokens cached in Redis, refreshed by background cron task
  * This provides fast lookups for most tokens without per-token API calls.
@@ -37,7 +36,6 @@ export class DexHunterPricingService {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly tapToolsClient: TapToolsClient,
     private readonly dexHunterClient: DexHunterPricingClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
@@ -189,7 +187,7 @@ export class DexHunterPricingService {
 
   /**
    * Get current token price in ADA.
-   * Strategy: VyFi Redis cache → DexHunter API → TapTools (Charli3) → null
+   * Strategy: VyFi Redis cache → DexHunter API → null
    *
    * @param tokenId - The token identifier (policyId + assetName in hex)
    * @returns Token price in ADA, or null if not found
@@ -209,23 +207,13 @@ export class DexHunterPricingService {
       return dexHunterPrice;
     }
 
-    // 3. Last resort: TapTools (Charli3)
-    this.logger.debug(`DexHunter returned no price for ${tokenId.slice(0, 10)}..., trying TapTools`);
-    const tapToolsResult = await this.tapToolsClient.getTokenPrices([tokenId]);
-    const tapToolsPrice = tapToolsResult.get(tokenId);
-
-    if (tapToolsPrice !== null && tapToolsPrice !== undefined && tapToolsPrice > 0) {
-      this.logger.debug(`TapTools price for ${tokenId.slice(0, 10)}...: ${tapToolsPrice} ADA`);
-      return tapToolsPrice;
-    }
-
-    this.logger.debug(`No price available from any source for ${tokenId.slice(0, 10)}...`);
+    this.logger.debug(`No price available from VyFi cache or DexHunter for ${tokenId.slice(0, 10)}...`);
     return null;
   }
 
   /**
    * Get prices for multiple tokens in ADA.
-   * Strategy: VyFi Redis cache → DexHunter API batch → TapTools batch → null
+   * Strategy: VyFi Redis cache → DexHunter API batch → null
    *
    * @param tokenIds - Array of token identifiers
    * @returns Map of tokenId to price in ADA (null if not found)
@@ -250,26 +238,11 @@ export class DexHunterPricingService {
 
     // 2. Fallback: DexHunter API for cache misses
     const dexHunterResults = await this.dexHunterClient.getTokenPrices(tokensNeedingFallback);
-    const tokensStillMissing: string[] = [];
-
     dexHunterResults.forEach((price, tokenId) => {
       if (price !== null && price !== undefined && price > 0) {
         cachedResults.set(tokenId, price);
-      } else {
-        tokensStillMissing.push(tokenId);
       }
     });
-
-    // 3. Last resort: TapTools (Charli3) for remaining misses
-    if (tokensStillMissing.length > 0) {
-      this.logger.debug(`${tokensStillMissing.length}/${tokenIds.length} tokens still missing, trying TapTools`);
-      const tapToolsResults = await this.tapToolsClient.getTokenPrices(tokensStillMissing);
-      tapToolsResults.forEach((price, tokenId) => {
-        if (price !== null && price !== undefined && price > 0) {
-          cachedResults.set(tokenId, price);
-        }
-      });
-    }
 
     return cachedResults;
   }
