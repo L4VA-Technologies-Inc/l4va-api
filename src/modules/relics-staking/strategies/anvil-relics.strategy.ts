@@ -73,7 +73,6 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
       throw new Error(`Assets not eligible for Anvil staking: ${invalidAssets.map(a => a.id).join(', ')}`);
     }
 
-    const { changeAddress, utxos } = await this.getTreasuryContext(ctx.treasuryAddress);
     const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(ctx.vaultId);
 
     const batches = this.chunk(assets, MAX_NFTS_PER_BATCH);
@@ -82,6 +81,9 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
       this.logger.log(`Staking batch ${i + 1}/${batches.length} (${batch.length} NFTs)`);
+
+      // Refresh UTxOs for each batch to avoid double-spend errors
+      const { changeAddress, utxos } = await this.getTreasuryContext(ctx.treasuryAddress);
 
       // Idempotency: filter out assets that are already staked with a tx hash
       const alreadyStaked = batch.filter(
@@ -182,13 +184,15 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
   ): Promise<UnstakeExecutionResult[]> {
     this.logger.log(`executeUnstake: stakeIds=[${stakeIds.join(',')}], claim=${claim}, vault=${ctx.vaultId}`);
 
-    const { changeAddress, utxos } = await this.getTreasuryContext(ctx.treasuryAddress);
     const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(ctx.vaultId);
 
     const results: UnstakeExecutionResult[] = [];
 
     for (const stakeId of stakeIds) {
       this.logger.log(`Harvesting stakeId=${stakeId}, claim=${claim}`);
+
+      // Refresh UTxOs for each stakeId to avoid double-spend errors
+      const { changeAddress, utxos } = await this.getTreasuryContext(ctx.treasuryAddress);
 
       const buildResp = await this.anvilApiClient.harvestStakeV2({
         stakeId,
@@ -329,7 +333,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
     // Anvil expects raw address bytes as hex (same format as captured API examples)
     const changeAddress = Buffer.from(addr.to_bytes()).toString('hex');
 
-    const { utxos } = await getUtxosExtract(addr, this.blockfrost, { maxUtxos: 20 });
+    const { utxos } = await getUtxosExtract(addr, this.blockfrost, { maxUtxos: 100 });
 
     if (utxos.length === 0) {
       throw new Error(
