@@ -168,7 +168,7 @@ export class GovernanceExecutionService {
       this.logger.log(
         `Proposal ${payload.proposalId}: EXECUTED successfully (termination complete for vault ${payload.vaultId})`
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Failed to mark termination proposal ${payload.proposalId} as executed: ${error.message}`,
         error.stack
@@ -264,12 +264,12 @@ export class GovernanceExecutionService {
           await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
 
           await this.executePassedProposal(proposal.id);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
           // Continue with next proposal - retry count already incremented
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error in retryPassedProposals: ${error.message}`, error.stack);
     }
   }
@@ -327,7 +327,7 @@ export class GovernanceExecutionService {
 
         this.logger.log(`Proposal ${proposalId} activated successfully`);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -441,7 +441,7 @@ export class GovernanceExecutionService {
 
       // Immediately trigger execution
       await this.executePassedProposal(proposalId);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -519,7 +519,7 @@ export class GovernanceExecutionService {
       } else {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for automatic retry`);
       }
-    } catch (error) {
+    } catch (error: any) {
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
       if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
         this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
@@ -675,7 +675,7 @@ export class GovernanceExecutionService {
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
       }
-    } catch (error) {
+    } catch (error: any) {
       if (
         error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND' ||
         error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
@@ -898,7 +898,7 @@ export class GovernanceExecutionService {
               { outputRef: o.outputRef, policyId: o.policyId, assetName: o.assetName },
             ])
           );
-        } catch (error) {
+        } catch (error: any) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.logger.error(
             `Failed to fetch WayUp offer state for cancel-offer execution in proposal ${proposal.id}: ${errorMessage}`,
@@ -976,7 +976,7 @@ export class GovernanceExecutionService {
       if (autoResolvedAcceptedOfferIds.length > 0) {
         try {
           await this.assetsService.markOffersAsAccepted(autoResolvedAcceptedOfferIds);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to mark accepted offers after WayUp check: ${statusError.message}`);
         }
       }
@@ -984,7 +984,7 @@ export class GovernanceExecutionService {
       if (autoResolvedCancelledOfferIds.length > 0) {
         try {
           await this.assetsService.markOffersAsCancelled(autoResolvedCancelledOfferIds);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to mark cancelled offers after WayUp check: ${statusError.message}`);
         }
       }
@@ -1098,7 +1098,7 @@ export class GovernanceExecutionService {
               skipped.offers.push(option.assetName || option.assetId);
               continue;
             }
-          } catch (lookupError) {
+          } catch (lookupError: any) {
             this.logger.warn(
               `Cannot place offer for ${option.assetName} - WayUp lookup failed: ${lookupError.message}`
             );
@@ -1134,7 +1134,7 @@ export class GovernanceExecutionService {
             nftName = exactAsset.name || nftName;
             nftImage = exactAsset.image;
             nftAttributes = exactAsset.attributes;
-          } catch (lookupError) {
+          } catch (lookupError: any) {
             this.logger.warn(
               `Cannot place offer for ${option.assetName} - WayUp lookup failed: ${lookupError.message}`
             );
@@ -1169,7 +1169,7 @@ export class GovernanceExecutionService {
               `Required ${totalRequiredAda} ADA, available: ${adaBalance.toFixed(2)} ADA.`;
             await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA');
           }
-        } catch (error) {
+        } catch (error: any) {
           if (error?.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
             throw error;
           }
@@ -1299,7 +1299,7 @@ export class GovernanceExecutionService {
             }
           }
           this.logger.log(`Found ${assetsInTreasury.size} unique asset(s) in treasury wallet`);
-        } catch (error) {
+        } catch (error: any) {
           // If treasury wallet has never received transactions, Blockfrost returns 404
           if (error.status_code === 404 || error.message?.includes('not been found')) {
             this.logger.log(`Treasury wallet ${treasuryAddress} is empty (no transactions yet)`);
@@ -1383,7 +1383,7 @@ export class GovernanceExecutionService {
             }))
           );
           this.logger.log(`Marked ${listingAssetInfos.length} asset(s) as LISTED`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update asset statuses to LISTED: ${statusError.message}`);
         }
       }
@@ -1393,7 +1393,7 @@ export class GovernanceExecutionService {
         try {
           await this.assetsService.markAssetsAsUnlisted(unlistedAssetIds);
           this.logger.log(`Marked ${unlistedAssetIds.length} asset(s) as EXTRACTED (unlisted)`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update asset statuses to EXTRACTED: ${statusError.message}`);
         }
       }
@@ -1403,7 +1403,7 @@ export class GovernanceExecutionService {
         try {
           await this.assetsService.markOffersAsCancelled(cancelledOfferAssetIds);
           this.logger.log(`Marked ${cancelledOfferAssetIds.length} asset(s) as CANCEL_OFFER`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update cancelled offer asset statuses: ${statusError.message}`);
         }
       }
@@ -1419,7 +1419,7 @@ export class GovernanceExecutionService {
             }))
           );
           this.logger.log(`Updated listing prices for ${updateAssetInfos.length} asset(s)`);
-        } catch (statusError) {
+        } catch (statusError: any) {
           this.logger.warn(`Failed to update listing prices: ${statusError.message}`);
         }
       }
@@ -1442,7 +1442,7 @@ export class GovernanceExecutionService {
             this.logger.log(
               `Recorded bought asset "${purchase.name}" (${purchase.policyId}) to vault ${proposal.vaultId}`
             );
-          } catch (recordError) {
+          } catch (recordError: any) {
             this.logger.warn(`Failed to record bought asset "${purchase.name}": ${recordError.message}`);
           }
         }
@@ -1480,7 +1480,7 @@ export class GovernanceExecutionService {
             this.logger.log(
               `Recorded offered asset "${offer.name}" (${offer.policyId}) to vault ${proposal.vaultId} with offer tx: ${result.txHash}`
             );
-          } catch (recordError) {
+          } catch (recordError: any) {
             this.logger.warn(`Failed to record offered asset "${offer.name}": ${recordError.message}`);
           }
         }
@@ -1495,7 +1495,7 @@ export class GovernanceExecutionService {
       });
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing marketplace proposal ${proposal.id}: ${error.message}`, error.stack);
 
       const errorMessage = error.message || '';
@@ -1623,7 +1623,7 @@ export class GovernanceExecutionService {
             treasuryBalances.set(amount.unit, parseInt(amount.quantity));
           }
         }
-      } catch (error) {
+      } catch (error: any) {
         // If treasury wallet has never received transactions, Blockfrost returns 404
         // Treat this as an empty wallet
         if (error.status_code === 404 || error.message?.includes('not been found')) {
@@ -1949,7 +1949,7 @@ export class GovernanceExecutionService {
       this.logger.log(`DexHunter swap proposal ${proposal.id} completed successfully with ${swapResults.length} swaps`);
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing DexHunter swap proposal ${proposal.id}: ${error.message}`, error.stack);
 
       // Handle pool_not_found error on retry - this means token has no liquidity
@@ -2087,7 +2087,7 @@ export class GovernanceExecutionService {
 
       this.logger.log(`Successfully executed staking proposal ${proposal.id}`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing staking proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
       throw error;
@@ -2151,7 +2151,7 @@ export class GovernanceExecutionService {
       }
 
       return success;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
       throw error;
@@ -2247,7 +2247,7 @@ export class GovernanceExecutionService {
 
       this.logger.log(`Successfully executed burning proposal ${proposal.id}`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing burning proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
       throw error;
@@ -2290,7 +2290,7 @@ export class GovernanceExecutionService {
       // Return false to keep proposal in PASSED status during the multi-step termination process
       // It will be marked as EXECUTED after treasury cleanup completes
       return false;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error executing termination proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
@@ -2303,7 +2303,7 @@ export class GovernanceExecutionService {
   async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
     try {
       return await this.expansionService.executeExpansion(proposal);
-    } catch (error) {
+    } catch (error: any) {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
@@ -2367,7 +2367,7 @@ export class GovernanceExecutionService {
           insertedCount += 1;
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
@@ -2388,7 +2388,7 @@ export class GovernanceExecutionService {
   async executeAcquireExpansionProposal(proposal: Proposal): Promise<boolean> {
     try {
       return await this.expansionService.executeAcquireExpansion(proposal);
-    } catch (error) {
+    } catch (error: any) {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
@@ -2428,7 +2428,7 @@ export class GovernanceExecutionService {
       );
 
       this.logger.log(`Stored execution error for proposal ${proposal.id}: [${errorCode}] ${userFriendlyMessage}`);
-    } catch (metadataError) {
+    } catch (metadataError: any) {
       this.logger.error(
         `Failed to store execution error for proposal ${proposal.id}: ${metadataError.message}`,
         metadataError.stack
