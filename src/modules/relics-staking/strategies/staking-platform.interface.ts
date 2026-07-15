@@ -69,11 +69,7 @@ export interface IStakingPlatformStrategy {
    * @param stakeIds  Anvil numeric stake IDs to unstake
    * @param claim     true = also claim accrued VLRM rewards
    */
-  executeUnstake(
-    stakeIds: number[],
-    ctx: StakingExecutionContext,
-    claim: boolean
-  ): Promise<UnstakeExecutionResult[]>;
+  executeUnstake(stakeIds: number[], ctx: StakingExecutionContext, claim: boolean): Promise<UnstakeExecutionResult[]>;
 
   /**
    * Fetch live staking data from the external platform for a treasury address.

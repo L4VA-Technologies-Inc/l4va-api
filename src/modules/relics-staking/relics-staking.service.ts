@@ -65,7 +65,7 @@ export class RelicsStakingService {
   /**
    * Get staked assets for a vault (optionally filtered by platform)
    */
-  async getVaultStakedAssets(vaultId: string, platform?: string) {
+  async getVaultStakedAssets(vaultId: string, platform?: string): Promise<Asset[]> {
     const where: any = {
       vault_id: vaultId,
       status: AssetStatus.STAKED,
@@ -79,7 +79,11 @@ export class RelicsStakingService {
   /**
    * Get staking statistics for a vault
    */
-  async getVaultStakingStats(vaultId: string) {
+  async getVaultStakingStats(vaultId: string): Promise<{
+    totalStaked: number;
+    totalVlrmEarned: string;
+    platforms: any[];
+  }> {
     const stakedAssets = await this.assetRepository.find({
       where: {
         vault_id: vaultId,

@@ -208,6 +208,19 @@ export class TreasuryWalletService {
    * Gets treasury wallet for a vault
    */
   async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfoDto | null> {
+    // Check for hardcoded test wallet (for testing only)
+    const testAddress = this.configService.get<string>('TREASURY_TEST_ADDRESS');
+    if (testAddress) {
+      this.logger.warn(`Using hardcoded test treasury wallet for vault ${vaultId}`);
+      return {
+        id: 'test-wallet-id',
+        vaultId: vaultId,
+        address: testAddress,
+        publicKeyHash: 'test-pkh',
+        createdAt: new Date(),
+      };
+    }
+
     if (!this.isMainnet && !this.systemSettingsService.autoCreateTreasuryWalletsTestnet) {
       return null;
     }
@@ -237,6 +250,18 @@ export class TreasuryWalletService {
     privateKey: PrivateKey;
     stakePrivateKey: PrivateKey;
   }> {
+    // Check for hardcoded test wallet keys (for testing only)
+    const testPaymentSkey = this.configService.get<string>('TREASURY_TEST_PAYMENT_SKEY');
+    const testStakeSkey = this.configService.get<string>('TREASURY_TEST_STAKE_SKEY');
+
+    if (testPaymentSkey && testStakeSkey) {
+      this.logger.warn(`Using hardcoded test treasury wallet keys for vault ${vaultId}`);
+      return {
+        privateKey: PrivateKey.from_bech32(testPaymentSkey),
+        stakePrivateKey: PrivateKey.from_bech32(testStakeSkey),
+      };
+    }
+
     const wallet = await this.treasuryWalletRepository.findOne({
       where: { vault_id: vaultId },
     });

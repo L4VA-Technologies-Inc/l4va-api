@@ -47,6 +47,7 @@ export class AssetsService {
     AssetStatus.RELEASED,
     AssetStatus.LISTED,
     AssetStatus.OFFERED,
+    AssetStatus.STAKED,
   ];
 
   /** Asset statuses shown in acquired assets list (locked, released, and distributed) */

@@ -204,6 +204,61 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
 
       this.logger.log(`Unstake submitted: stakeId=${stakeId}, txHash=${submitResp.txHash}`);
 
+      // Parse VLRM rewards from transaction outputs (both unstake and harvest operations claim rewards)
+      let claimedVlrmRaw: string | undefined;
+      try {
+        const tx = FixedTransaction.from_bytes(Buffer.from(buildResp.transaction, 'hex'));
+        const txBody = tx.body();
+        const outputs = txBody.outputs();
+
+        // Find VLRM tokens in outputs going to treasury address
+        for (let i = 0; i < outputs.len(); i++) {
+          const output = outputs.get(i);
+          const outputAddr = output.address().to_bech32();
+
+          // Check if output goes to treasury
+          if (outputAddr === ctx.treasuryAddress) {
+            const multiAsset = output.amount()?.multiasset();
+            if (!multiAsset) continue;
+
+            // Look for VLRM token (policyId + assetName)
+            const vlrmPolicyId = VLRM_UNIT.slice(0, 56);
+            const vlrmAssetName = VLRM_UNIT.slice(56);
+            const scriptHash = multiAsset.keys();
+
+            for (let j = 0; j < scriptHash.len(); j++) {
+              const policyId = scriptHash.get(j);
+              const policyIdHex = Buffer.from(policyId.to_bytes()).toString('hex');
+
+              if (policyIdHex === vlrmPolicyId) {
+                const assets = multiAsset.get(policyId);
+                if (!assets) continue;
+
+                const assetNames = assets.keys();
+                for (let k = 0; k < assetNames.len(); k++) {
+                  const assetName = assetNames.get(k);
+                  const assetNameHex = Buffer.from(assetName.name()).toString('hex');
+
+                  if (assetNameHex === vlrmAssetName) {
+                    const amount = assets.get(assetName);
+                    if (amount) {
+                      claimedVlrmRaw = amount.to_str();
+                      this.logger.log(`Parsed VLRM reward: ${claimedVlrmRaw} (raw amount with 4 decimals)`);
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (parseError) {
+        this.logger.error(
+          `Failed to parse VLRM rewards from tx: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+        );
+        // Continue without rewards - don't block execution
+      }
+
       // Invalidate getStakesV2 Redis cache so the next read reflects the change
       await this.anvilApiClient.invalidateStakesCache(STAKE_COLLECTION_ID, changeAddress);
 
@@ -212,7 +267,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
         status: claim ? VaultStakingPositionStatus.UNSTAKED : VaultStakingPositionStatus.HARVESTING,
         unstake_tx_hash: submitResp.txHash,
         ended_at: claim ? new Date() : undefined,
-        raw_harvest_response: { txHash: submitResp.txHash } as any,
+        raw_harvest_response: { txHash: submitResp.txHash, claimedVlrmRaw } as any,
       };
       await this.positionRepository.update({ stake_id: String(stakeId), vault_id: ctx.vaultId }, positionUpdate);
 
@@ -231,7 +286,7 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
         );
       }
 
-      results.push({ stakeId, txHash: submitResp.txHash });
+      results.push({ stakeId, txHash: submitResp.txHash, claimedVlrmRaw });
     }
 
     return results;
@@ -243,7 +298,10 @@ export class AnvilRelicsStakingStrategy implements IStakingPlatformStrategy {
       const resp = await this.anvilApiClient.getStakesV2(STAKE_COLLECTION_ID, changeAddress);
       return resp.stakes ?? [];
     } catch (error) {
-      this.logger.error(`getAnvilStakes failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `getAnvilStakes failed: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined
+      );
       return [];
     }
   }

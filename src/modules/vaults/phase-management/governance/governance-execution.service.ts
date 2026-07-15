@@ -29,7 +29,7 @@ import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
-import { AssetOriginType, AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -2732,6 +2732,43 @@ export class GovernanceExecutionService {
 
     this.logger.log(`Relics unstaking executed: ${results.length} positions`);
 
+    // Calculate total VLRM rewards and create Asset records
+    let totalVlrmRewards = 0;
+    if (claimRewards) {
+      for (const result of results) {
+        if (result.claimedVlrmRaw && result.claimedVlrmRaw !== '0') {
+          const vlrmAmount = parseInt(result.claimedVlrmRaw, 10);
+          if (!isNaN(vlrmAmount) && vlrmAmount > 0) {
+            totalVlrmRewards += vlrmAmount;
+
+            // Create VLRM Asset record with origin_type=STAKING_REWARD
+            const vlrmAsset = this.assetRepository.create({
+              vault_id: proposal.vaultId,
+              policy_id: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0',
+              asset_id: '56616c6f72756d', // "Valorum" in hex
+              type: AssetType.FT,
+              name: 'Valorum',
+              quantity: vlrmAmount,
+              decimals: 4,
+              status: AssetStatus.EXTRACTED,
+              origin_type: AssetOriginType.STAKING_REWARD,
+              metadata: {
+                ticker: 'VLRM',
+                description: `VLRM rewards from unstaking Relics (stakeId: ${result.stakeId})`,
+                sourceStakeId: result.stakeId,
+                sourceTxHash: result.txHash,
+              },
+            });
+            await this.assetRepository.save(vlrmAsset);
+
+            this.logger.log(
+              `Created VLRM reward asset: ${vlrmAmount} units (${(vlrmAmount / 10000).toFixed(4)} VLRM) from stakeId ${result.stakeId}`
+            );
+          }
+        }
+      }
+    }
+
     await this.proposalRepository.update(
       { id: proposal.id },
       {
@@ -2744,12 +2781,15 @@ export class GovernanceExecutionService {
               txHash: r.txHash,
               claimedVlrmRaw: r.claimedVlrmRaw ?? '0',
             })),
+            totalVlrmRewardsRaw: totalVlrmRewards.toString(),
           },
         },
       }
     );
 
-    this.logger.log(`Relics unstaking proposal ${proposal.id} executed successfully`);
+    this.logger.log(
+      `Relics unstaking proposal ${proposal.id} executed successfully. Total VLRM rewards: ${totalVlrmRewards} (${(totalVlrmRewards / 10000).toFixed(4)} VLRM)`
+    );
     return results.length > 0;
   }
 
@@ -2786,6 +2826,41 @@ export class GovernanceExecutionService {
 
     this.logger.log(`Relics harvest executed: ${results.length} positions, rewards claimed`);
 
+    // Calculate total VLRM rewards and create Asset records (same as unstaking)
+    let totalVlrmRewards = 0;
+    for (const result of results) {
+      if (result.claimedVlrmRaw && result.claimedVlrmRaw !== '0') {
+        const vlrmAmount = parseInt(result.claimedVlrmRaw, 10);
+        if (!isNaN(vlrmAmount) && vlrmAmount > 0) {
+          totalVlrmRewards += vlrmAmount;
+
+          // Create VLRM Asset record with origin_type=STAKING_REWARD
+          const vlrmAsset = this.assetRepository.create({
+            vault_id: proposal.vaultId,
+            policy_id: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0',
+            asset_id: '56616c6f72756d', // "Valorum" in hex
+            type: AssetType.FT,
+            name: 'Valorum',
+            quantity: vlrmAmount,
+            decimals: 4,
+            status: AssetStatus.EXTRACTED,
+            origin_type: AssetOriginType.STAKING_REWARD,
+            metadata: {
+              ticker: 'VLRM',
+              description: `VLRM rewards from harvesting Relics (stakeId: ${result.stakeId})`,
+              sourceStakeId: result.stakeId,
+              sourceTxHash: result.txHash,
+            },
+          });
+          await this.assetRepository.save(vlrmAsset);
+
+          this.logger.log(
+            `Created VLRM reward asset: ${vlrmAmount} units (${(vlrmAmount / 10000).toFixed(4)} VLRM) from stakeId ${result.stakeId}`
+          );
+        }
+      }
+    }
+
     await this.proposalRepository.update(
       { id: proposal.id },
       {
@@ -2798,12 +2873,15 @@ export class GovernanceExecutionService {
               txHash: r.txHash,
               claimedVlrmRaw: r.claimedVlrmRaw ?? '0',
             })),
+            totalVlrmRewardsRaw: totalVlrmRewards.toString(),
           },
         },
       }
     );
 
-    this.logger.log(`Relics harvest proposal ${proposal.id} executed successfully`);
+    this.logger.log(
+      `Relics harvest proposal ${proposal.id} executed successfully. Total VLRM rewards: ${totalVlrmRewards} (${(totalVlrmRewards / 10000).toFixed(4)} VLRM)`
+    );
     return results.length > 0;
   }
 
