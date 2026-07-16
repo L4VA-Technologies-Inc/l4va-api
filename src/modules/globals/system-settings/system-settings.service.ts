@@ -64,7 +64,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   acquire_enabled: true,
   governance_enabled: true,
   // Governance fees (in lovelace)
-  governance_fee_proposal_staking: 5000000, // 5 ADA
+  governance_fee_proposal_staking: 10000000, // 10 ADA
   governance_fee_proposal_distribution: 5000000, // 5 ADA
   governance_fee_proposal_termination: 10000000, // 10 ADA
   governance_fee_proposal_burning: 3000000, // 3 ADA

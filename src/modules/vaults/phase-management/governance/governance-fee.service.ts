@@ -14,6 +14,7 @@ export interface BuildGovernanceFeeTransactionParams {
   userAddress: string;
   proposalType: string;
   vaultId: string;
+  nftCount?: number; // Number of NFTs being staked (for tiered staking fee calculation)
 }
 
 export interface GovernanceFeeTransactionResponse {
@@ -46,9 +47,32 @@ export class GovernanceFeeService {
   }
 
   /**
-   * Get the fee amount for a specific proposal type
+   * Calculate the governance fee for staking based on NFT count
+   * Uses configurable fee per batch of up to 50 NFTs
+   * @param nftCount - Number of NFTs being staked
+   * @returns Fee amount in lovelace
    */
-  getProposalFee(proposalType: string): number {
+  calculateStakingFee(nftCount: number): number {
+    if (!nftCount || nftCount <= 0) {
+      return 0;
+    }
+    // Calculate number of batches (ceiling division)
+    const batches = Math.ceil(nftCount / 50);
+    // Fee per batch from system settings (governance_fee_proposal_staking)
+    const feePerBatch = this.systemSettingsService.governanceFeeProposalStaking;
+    return batches * feePerBatch;
+  }
+
+  /**
+   * Get the fee amount for a specific proposal type
+   * @param proposalType - The type of proposal
+   * @param nftCount - Optional NFT count for staking proposals
+   */
+  getProposalFee(proposalType: string, nftCount?: number): number {
+    // For staking-related proposals, use tiered fee based on NFT count
+    if ((proposalType === 'stake_assets' || proposalType === 'staking') && nftCount) {
+      return this.calculateStakingFee(nftCount);
+    }
     return this.systemSettingsService.getGovernanceFeeForProposalType(proposalType);
   }
 
@@ -67,7 +91,7 @@ export class GovernanceFeeService {
     params: BuildGovernanceFeeTransactionParams
   ): Promise<GovernanceFeeTransactionResponse> {
     try {
-      const feeAmount = this.getProposalFee(params.proposalType);
+      const feeAmount = this.getProposalFee(params.proposalType, params.nftCount);
 
       // If fee is 0, return empty response - no transaction needed
       if (feeAmount <= 0) {

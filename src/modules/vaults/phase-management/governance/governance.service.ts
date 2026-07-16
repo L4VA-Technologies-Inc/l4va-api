@@ -1941,7 +1941,19 @@ export class GovernanceService {
     }
 
     // Check if governance fee is required for this proposal type
-    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
+    // For staking proposals, calculate NFT count for tiered fee
+    let nftCount: number | undefined;
+    if (createProposalReq.type === ProposalType.STAKE_ASSETS) {
+      const actions =
+        (createProposalReq.stakingActions?.length ? createProposalReq.stakingActions : undefined) ??
+        (createProposalReq.relicsStakingActions?.length ? createProposalReq.relicsStakingActions : undefined) ??
+        [];
+      if (actions.length > 0 && actions[0].assetIds) {
+        nftCount = actions[0].assetIds.length;
+      }
+    }
+
+    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type, nftCount);
     const requiresPayment = feeAmount > 0;
 
     // If payment is required, set status to UNPAID and clear dates
@@ -1967,6 +1979,7 @@ export class GovernanceService {
           userAddress: user.address,
           proposalType: createProposalReq.type,
           vaultId,
+          nftCount,
         });
 
         return {
