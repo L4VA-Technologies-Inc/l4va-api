@@ -1,6 +1,7 @@
+import { ChainType } from '@/types/vault.types';
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsObject, ValidateNested } from 'class-validator';
+import { IsNotEmpty, IsString, IsObject, ValidateNested, ValidateIf } from 'class-validator';
 
 export class SignatureData {
   @Expose()
@@ -26,6 +27,17 @@ export class SignatureData {
 export class LoginReq {
   @Expose()
   @IsNotEmpty()
+  @IsString()
+  @ApiProperty({
+    description: 'Wallet address for the wallet',
+    example: 'addr1q934ccfkwy292....',
+  })
+  chainType: ChainType;
+
+  
+  @Expose()
+  @ValidateIf((o: LoginReq) => o.chainType === ChainType.cardano)
+  @IsNotEmpty()
   @IsObject()
   @ValidateNested()
   @Type(() => SignatureData)
@@ -36,6 +48,7 @@ export class LoginReq {
   signature: SignatureData;
 
   @Expose()
+  @ValidateIf((o: LoginReq) => o.chainType === ChainType.cardano)
   @IsNotEmpty()
   @IsString()
   @ApiProperty({
