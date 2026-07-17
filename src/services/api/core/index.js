@@ -2,11 +2,12 @@ import { CoreConfigProvider } from '@/services/api/core/config';
 import { axiosInstance } from '@/services/api';
 
 export class CoreApiProvider {
-  static async login({ signature, stakeAddress, walletAddress }) {
+  static async login({ signature, stakeAddress, walletAddress, chainType }) {
     const response = await axiosInstance.post(CoreConfigProvider.login(), {
       signature,
       stakeAddress,
       walletAddress,
+      chainType,
     });
     return response;
   }

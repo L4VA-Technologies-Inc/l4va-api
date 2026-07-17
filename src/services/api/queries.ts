@@ -250,7 +250,7 @@ export const usePublicProfile = (userId: string) => {
 // Core Mutations
 export const useLogin = () => {
   return useMutation({
-    mutationFn: (credentials: { signature: string; stakeAddress: string; walletAddress: string }) =>
+    mutationFn: (credentials: { signature: string; stakeAddress: string; walletAddress: string; chainType: string }) =>
       CoreApiProvider.login(credentials),
   });
 };

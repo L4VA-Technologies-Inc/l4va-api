@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useWallet } from '@ada-anvil/weld/react';
 
 import { useAuth } from '@/lib/auth/auth';
+import { useNetwork } from '@/hooks/useNetwork';
 
 const checkWeldCookies = () => {
   const requiredCookies = ['weld_connected-wallet', 'weld_connected-stake', 'weld_connected-change'];
@@ -14,6 +15,7 @@ const checkWeldCookies = () => {
 export const useWalletChangeListener = () => {
   const wallet = useWallet('isConnected', 'stakeAddressBech32');
   const { user, logout, isAuthenticated } = useAuth();
+  const { isRobinHood } = useNetwork();
   const previousStakeAddressRef = useRef(null);
 
   // Proactively clear DexHunter localStorage when auth/wallet becomes invalid
@@ -24,7 +26,8 @@ export const useWalletChangeListener = () => {
   }, [isAuthenticated, wallet.isConnected]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user) {
+    // Weld/Cardano-only watchdog — EVM (Robinhood) has no Weld wallet/stake address.
+    if (isRobinHood || !isAuthenticated || !user) {
       previousStakeAddressRef.current = null;
       return;
     }
@@ -53,10 +56,11 @@ export const useWalletChangeListener = () => {
       logout('Wallet changed. Please login again.');
       previousStakeAddressRef.current = null;
     }
-  }, [wallet.isConnected, wallet.stakeAddressBech32, user, isAuthenticated, logout]);
+  }, [wallet.isConnected, wallet.stakeAddressBech32, user, isAuthenticated, logout, isRobinHood]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user) {
+    // Weld cookie check would fire for EVM logins (no Weld cookies) and wrongly log them out.
+    if (isRobinHood || !isAuthenticated || !user) {
       return;
     }
 
@@ -74,5 +78,5 @@ export const useWalletChangeListener = () => {
     const intervalId = setInterval(checkCookies, 5000);
 
     return () => clearInterval(intervalId);
-  }, [isAuthenticated, user, logout]);
+  }, [isAuthenticated, user, logout, isRobinHood]);
 };

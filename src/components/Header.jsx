@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import L4vaIcon from '@/icons/l4va.svg?react';
 import { LavaSteelSelect } from '@/components/shared/LavaSelect.jsx';
 import { useCurrency } from '@/hooks/useCurrency';
+import { useNetwork } from '@/hooks/useNetwork';
 
 const navLinks = [
   { to: '/create', label: 'Create', isAuth: true },
@@ -41,10 +42,16 @@ export const Header = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const { currency: selectedCurrency, updateCurrency } = useCurrency();
+  const { network: selectedNetwork, updateNetwork } = useNetwork();
 
   const currencyOptions = [
     { label: 'ADA', value: 'ada' },
     { label: 'USD', value: 'usdt' },
+  ];
+
+  const networkOptions = [
+    { label: 'Cardano', value: 'cardano' },
+    { label: 'Robinhood', value: 'robinhood' },
   ];
 
   const { notifications, fetching, readAll, hasMore, isLoading, fetchMore, refetch } = useNotifications();
@@ -206,6 +213,16 @@ export const Header = () => {
             </div>
             <div className="flex-1" />
             <div className="flex gap-2">
+              <div className="hidden lg:block">
+                <LavaSteelSelect
+                  options={networkOptions}
+                  value={selectedNetwork}
+                  disabled={isAuthenticated}
+                  onChange={val => {
+                    updateNetwork(val);
+                  }}
+                />
+              </div>
               <div className="hidden lg:block">
                 <LavaSteelSelect
                   options={currencyOptions}
