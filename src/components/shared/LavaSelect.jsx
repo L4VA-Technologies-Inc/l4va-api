@@ -200,11 +200,15 @@ export const LavaSteelSelect = ({
   placeholder = 'Select an option',
   className,
   transparent = false,
+  disabled = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
-  const toggleDropdown = () => setIsOpen(!isOpen);
+  const toggleDropdown = () => {
+    if (disabled) return;
+    setIsOpen(!isOpen);
+  };
 
   const handleOptionClick = optionValue => {
     const option = options.find(opt => opt.value === optionValue);
@@ -225,11 +229,13 @@ export const LavaSteelSelect = ({
     <div ref={dropdownRef} className="relative">
       <button
         className={`
-          flex items-center justify-between w-full px-4 py-2 ${transparent ? 'bg-transparent' : 'bg-steel-850'} rounded-lg 
+          flex items-center justify-between w-full px-4 py-2 ${transparent ? 'bg-transparent' : 'bg-steel-850'} rounded-lg
           border border-steel-750
+          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
           ${className}
         `}
         type="button"
+        disabled={disabled}
         onClick={toggleDropdown}
       >
         <span className="truncate mr-2">{selectedOption}</span>

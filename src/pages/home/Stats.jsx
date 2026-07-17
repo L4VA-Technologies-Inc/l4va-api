@@ -125,7 +125,7 @@ const Stats = () => {
       }))
     : [];
 
-  const totalAmount = statistics
+  const totalAmount = statistics?.vaultsByType
     ? getTotalValue(
         Object.values(statistics.vaultsByStage).reduce((sum, stage) => sum + stage.valueAda, 0),
         Object.values(statistics.vaultsByStage).reduce((sum, stage) => sum + stage.valueUsd, 0)

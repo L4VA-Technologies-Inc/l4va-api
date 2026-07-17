@@ -3,6 +3,10 @@ import { useRouter, useSearch } from '@tanstack/react-router';
 
 import { VaultList } from '@/components/vaults/VaultsList';
 import { useVaults } from '@/services/api/queries';
+import { useNetwork } from '@/hooks/useNetwork';
+
+// Vaults without an explicit network are treated as Cardano.
+const getVaultNetwork = vault => vault?.network || 'cardano';
 
 const VAULT_TABS = [
   { id: 'all', label: 'All', filter: 'all' },
@@ -69,8 +73,10 @@ export const CommunityVaultsList = ({ className = '' }) => {
     }
   };
 
+  const { network } = useNetwork();
+
   const { data, isLoading, error } = useVaults(appliedFilters);
-  const vaults = data?.data?.items || [];
+  const vaults = (data?.data?.items || []).filter(vault => getVaultNetwork(vault) === network);
 
   const pagination = data?.data
     ? {

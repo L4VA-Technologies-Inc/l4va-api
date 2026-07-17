@@ -17,12 +17,13 @@ export const AuthProvider = ({ children }) => {
     }
   }, [queryClient]);
 
-  const login = async (signature, stakeAddress, walletAddress) => {
+  const login = async (signature, stakeAddress, walletAddress, chainType) => {
     try {
       const response = await loginMutation.mutateAsync({
         signature,
         stakeAddress,
         walletAddress,
+        chainType,
       });
       localStorage.setItem('jwt', response.data.accessToken);
       localStorage.setItem('authenticated_stake_address', stakeAddress);
