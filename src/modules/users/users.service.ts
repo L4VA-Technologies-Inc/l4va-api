@@ -36,10 +36,19 @@ export class UsersService {
     private readonly priceService: PriceService
   ) {}
 
-  async findByAddress(address: string): Promise<User | undefined> {
+  async findByStakeAddress(address: string): Promise<User | undefined> {
     return this.usersRepository.findOne({
       where: {
         stake_address: address,
+      },
+      relations: ['profile_image', 'banner_image', 'social_links'],
+    });
+  }
+
+  async findByAddress(address: string): Promise<User | undefined> {
+    return this.usersRepository.findOne({
+      where: {
+        address: address,
       },
       relations: ['profile_image', 'banner_image', 'social_links'],
     });

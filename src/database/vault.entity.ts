@@ -16,6 +16,7 @@ import {
 
 import {
   ApplyParamsResult,
+  ChainType,
   ContributionWindowType,
   InvestmentWindowType,
   SmartContractVaultStatus,
@@ -775,6 +776,15 @@ export class Vault {
   @Expose({ name: 'isOfficialPartner' })
   @Column({ name: 'is_official_partner', type: 'boolean', default: false })
   is_official_partner: boolean;
+
+  @Expose({ name: 'chainType' })
+  @Column({
+    name: 'chain_type',
+    type: 'varchar',
+    default: ChainType.cardano,
+    nullable: false,
+  })
+  chain_type: ChainType;
 
   @BeforeInsert()
   setDate(): void {

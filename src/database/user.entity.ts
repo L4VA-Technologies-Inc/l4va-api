@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 
 import { transformImageToUrl } from '../helpers';
+import { ChainType } from '../types/vault.types';
 
 import { Claim } from './claim.entity';
 import { FileEntity } from './file.entity';
@@ -89,6 +90,15 @@ export class User {
 
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
   deleted: boolean;
+
+  @Expose({ name: 'chainType' })
+  @Column({
+    name: 'chain_type',
+    type: 'varchar',
+    default: ChainType.cardano,
+    nullable: false,
+  })
+  chain_type: ChainType;
 
   @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
