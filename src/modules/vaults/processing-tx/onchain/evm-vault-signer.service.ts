@@ -277,7 +277,7 @@ export class EvmVaultSignerService {
 
     return {
       dbVaultId,
-      evmVaultConfig: cfg,
+      evmVaultConfig: this.serializeBigInts(cfg) as EvmVaultConfig,
       adminNonce: adminNonce.toString(),
       deadline: Number(deadline),
       adminSignature,
@@ -397,9 +397,26 @@ export class EvmVaultSignerService {
   }
 
   // --------------------------------------------------------------------------
-  // DB helpers
+  // Serialization helpers
   // --------------------------------------------------------------------------
 
+  /** Recursively convert BigInt values to strings so Express can JSON.stringify the response.
+   *  The frontend's normalizeBigInts() in useCreateEvmVault.js converts them back before wagmi. */
+  private serializeBigInts(obj: unknown): unknown {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'bigint') return obj.toString();
+    if (Array.isArray(obj)) return obj.map(v => this.serializeBigInts(v));
+    if (typeof obj === 'object') {
+      return Object.fromEntries(
+        Object.entries(obj as Record<string, unknown>).map(([k, v]) => [k, this.serializeBigInts(v)])
+      );
+    }
+    return obj;
+  }
+
+  // --------------------------------------------------------------------------
+  // DB helpers
+  // --------------------------------------------------------------------------
   private async saveDraftVault(userId: string, cfg: EvmVaultConfig, data: CreateVaultReq): Promise<string> {
     const vault = this.vaultsRepository.create({
       name: data.name,
