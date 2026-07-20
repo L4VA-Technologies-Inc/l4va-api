@@ -9,6 +9,7 @@ import { TransactionsModule } from '../offchain-tx/transactions.module';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
+import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
 import { VaultManagingService } from './vault-managing.service';
@@ -40,6 +41,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     BlockchainService,
     VaultContributionService,
     BlockchainWebhookService,
+    EvmWebhookService,
     VaultManagingService,
   ],
   exports: [
