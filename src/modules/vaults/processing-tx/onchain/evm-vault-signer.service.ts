@@ -4,7 +4,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, createPublicClient, http, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
@@ -292,12 +292,41 @@ export class EvmVaultSignerService {
     if (!vault) throw new BadRequestException('Vault not found');
     if (vault.owner.id !== userId) throw new BadRequestException('Not the vault owner');
 
+    // Parse the VaultCreated event from the receipt to get the actual deployed Vault address.
+    // VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
+    // topics[0] = event selector, topics[1] = vaultId, topics[2] = vault address, topics[3] = creator
+    let deployedVaultAddress: string | undefined;
+    try {
+      const client = createPublicClient({
+        transport: http(this.configService.get<string>('EVM_RPC_URL') ?? 'https://rpc.testnet.chain.robinhood.com'),
+      });
+      const receipt = await client.getTransactionReceipt({ hash: txHash as Hex });
+      const VAULT_CREATED_TOPIC = keccak256(
+        new TextEncoder().encode('VaultCreated(bytes32,address,address,address,address)')
+      );
+      const log = receipt.logs.find(
+        l => l.topics[0]?.toLowerCase() === VAULT_CREATED_TOPIC.toLowerCase() && l.topics.length === 4
+      );
+      if (log?.topics[2]) {
+        // topics[2] is the indexed vault address — last 40 hex chars = 20 bytes
+        deployedVaultAddress = '0x' + log.topics[2].slice(-40);
+        this.logger.log(`VaultCreated event found — vault address: ${deployedVaultAddress}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Could not parse VaultCreated event from receipt: ${(err as Error).message}`);
+    }
+
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = txHash;
     vault.last_update_tx_hash = txHash;
+    if (deployedVaultAddress) {
+      vault.contract_address = deployedVaultAddress;
+    }
     await this.vaultsRepository.save(vault);
 
-    this.logger.log(`EVM vault confirmed — dbId=${dbVaultId} txHash=${txHash}`);
+    this.logger.log(
+      `EVM vault confirmed — dbId=${dbVaultId} txHash=${txHash} vaultAddr=${deployedVaultAddress ?? 'unknown'}`
+    );
   }
 
   // --------------------------------------------------------------------------
