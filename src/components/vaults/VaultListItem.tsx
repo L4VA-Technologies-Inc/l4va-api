@@ -5,7 +5,7 @@ import { VaultCountdown } from '@/components/vault-profile/VaultCountdown';
 import { SocialPlatformIcon } from '@/components/shared/SocialPlatformIcon';
 import { InfoRow } from '@/components/ui/infoRow';
 import { formatCompactNumber, formatVaultStatus } from '@/utils/core.utils';
-import { VaultShortResponse } from '@/utils/types';
+import { ChainTypeLabels, VaultShortResponse } from '@/utils/types';
 import L4vaIcon from '@/icons/l4va.svg?react';
 
 type VaultListItemProps = {
@@ -52,7 +52,14 @@ const VaultListItem = ({ vault }: VaultListItemProps) => {
         <div className="flex md:ml-[120px] items-center justify-between gap-4 mb-3">
           <div className="flex items-center gap-4">
             <div>
-              <h3 className="font-bold text-xl">{name || 'No name'}</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-xl">{name || 'No name'}</h3>
+                {vault.chainType && (
+                  <span className="rounded-full bg-steel-850 px-3 py-0.5 text-xs font-medium text-white">
+                    {ChainTypeLabels[vault.chainType] ?? vault.chainType}
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-dark-100">{description || 'No description'}</p>
             </div>
           </div>

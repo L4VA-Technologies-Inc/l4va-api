@@ -5,7 +5,7 @@ import { VaultCountdown } from '@/components/vault-profile/VaultCountdown';
 import { GoldenVerifiedBadge, OFFICIAL_PARTNER_BADGE_HINT } from '@/components/shared/GoldenVerifiedBadge';
 import { SocialPlatformIcon } from '@/components/shared/SocialPlatformIcon';
 import { formatCompactNumber, formatString, formatVaultStatus } from '@/utils/core.utils';
-import { VaultShortResponse } from '@/utils/types';
+import { ChainTypeLabels, VaultShortResponse } from '@/utils/types';
 import { useCurrency } from '@/hooks/useCurrency';
 import L4vaIcon from '@/icons/l4va.svg?react';
 
@@ -49,6 +49,11 @@ export const VaultCard = ({ vault }: VaultCardProps) => {
             <div className="h-full w-full bg-steel-850 flex items-center justify-center">
               <L4vaIcon className="h-8 w-8 text-white" />
             </div>
+          )}
+          {vault.chainType && (
+            <span className="absolute top-3 right-3 rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
+              {ChainTypeLabels[vault.chainType] ?? vault.chainType}
+            </span>
           )}
           {shouldShowCountdown && (
             <div className="absolute bottom-0 left-0 w-3/4">

@@ -75,6 +75,16 @@ export enum ClaimStatus {
   CLAIMED = 'claimed',
 }
 
+export enum ChainType {
+  CARDANO = 'cardano',
+  ROBINHOOD = 'robinhood',
+}
+
+export const ChainTypeLabels: Record<ChainType, string> = {
+  [ChainType.CARDANO]: 'Cardano',
+  [ChainType.ROBINHOOD]: 'Robinhood',
+};
+
 // Type interfaces based on @Expose annotations
 export interface IUser {
   id: string;
@@ -209,6 +219,7 @@ export interface VaultShortResponse {
   ftTokenImg?: string;
   vaultTokenTicker?: string;
   isOfficialPartner?: boolean;
+  chainType?: ChainType;
 }
 
 export interface PaginatedResponse<T> {
