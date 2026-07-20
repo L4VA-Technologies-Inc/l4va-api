@@ -104,13 +104,30 @@ export class BlockchainWebhookService {
    * Process individual transaction from webhook
    */
   private async processTransaction({ tx }: BlockfrostTransactionEvent): Promise<string> {
+    const internalStatus = this.determineInternalTransactionStatus(tx);
+    return this.applyTransactionStatus(tx.hash, tx.index, internalStatus);
+  }
+
+  /**
+   * Update a local transaction status by hash and run the chain-agnostic
+   * post-confirmation side effects (locking assets, indexing rewards,
+   * claim/cancel handling, createVault transition).
+   *
+   * Shared between the Cardano (Blockfrost) and EVM (Alchemy) webhooks so that
+   * both chains converge on identical downstream logic.
+   *
+   * @param txHash On-chain transaction hash
+   * @param txIndex Transaction index within its block
+   * @param internalStatus Resolved internal transaction status
+   * @returns Updated local transaction id, or null if no matching transaction
+   */
+  async applyTransactionStatus(
+    txHash: string,
+    txIndex: number,
+    internalStatus: TransactionStatus
+  ): Promise<string | null> {
     try {
-      const internalStatus = this.determineInternalTransactionStatus(tx);
-      const transaction = await this.transactionsService.updateTransactionStatusByHash(
-        tx.hash,
-        tx.index,
-        internalStatus
-      );
+      const transaction = await this.transactionsService.updateTransactionStatusByHash(txHash, txIndex, internalStatus);
 
       if (!transaction) {
         return null;
@@ -119,10 +136,10 @@ export class BlockchainWebhookService {
       if (internalStatus === TransactionStatus.confirmed) {
         if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
           const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
-          this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
+          this.logger.log(`Locked ${lockedCount} assets for transaction ${txHash}`);
 
           // Index reward activity events for confirmed on-chain transactions
-          await this.indexRewardEvent(transaction, tx.hash);
+          await this.indexRewardEvent(transaction, txHash);
         }
 
         // NOTE: Token metadata PR submission has been moved to lifecycle.service.ts
@@ -151,7 +168,7 @@ export class BlockchainWebhookService {
             this.logger.log(`WH: Updated status to CLAIMED for ${claimIds.length} claims`);
           } catch (claimError) {
             this.logger.error(
-              `WH: Failed to update claims for transaction ${tx.hash}: ${claimError.message}`,
+              `WH: Failed to update claims for transaction ${txHash}: ${claimError.message}`,
               claimError.stack
             );
           }
@@ -188,7 +205,7 @@ export class BlockchainWebhookService {
           } catch (extractError) {
             // Don't throw - this is expected if claims were already processed via UTXO validation
             this.logger.warn(
-              `WH: Partial processing for extractDispatch transaction ${tx.hash}: ${extractError.message}`
+              `WH: Partial processing for extractDispatch transaction ${txHash}: ${extractError.message}`
             );
           }
         }
@@ -222,17 +239,17 @@ export class BlockchainWebhookService {
             }
           } catch (releaseError) {
             this.logger.error(
-              `WH: Failed to release assets for cancellation tx ${tx.hash}: ${releaseError.message}`,
+              `WH: Failed to release assets for cancellation tx ${txHash}: ${releaseError.message}`,
               releaseError.stack
             );
           }
         }
       }
 
-      this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);
+      this.logger.log(`WH: Transaction ${txHash} status updated to ${internalStatus}`);
       return transaction.id;
     } catch (error) {
-      this.logger.error(`WH: Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
+      this.logger.error(`WH: Failed to process transaction ${txHash}: ${error.message}`, error.stack);
       return null;
     }
   }

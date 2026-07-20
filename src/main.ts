@@ -44,6 +44,11 @@ async function bootstrap(): Promise<void> {
   // Raw body parser for signature verification on webhook
   app.use('/blockchain/tx-webhook', bodyParser.raw({ type: 'application/json', limit: '50mb' }));
 
+  // Raw body parser for the EVM (Alchemy) webhook so the x-alchemy-signature
+  // HMAC can be verified against the exact request bytes. Uses the full
+  // prefixed path since this middleware runs before Nest routing/versioning.
+  app.use('/api/v1/blockchain/evm-tx-webhook', bodyParser.raw({ type: 'application/json', limit: '50mb' }));
+
   // JSON body parser for all other routes with increased limit
   app.use(bodyParser.json({ limit: '50mb' }));
   app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));

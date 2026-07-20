@@ -9,15 +9,17 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags, ApiParam } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BuildTransactionRes } from './dto/build-transaction.res';
+import { EvmWebhookDto } from './dto/evm-webhook.dto';
 import { HandleWebhookRes } from './dto/handle-webhook.res';
 import { BuildTransactionDto, SubmitTransactionDto, TransactionSubmitResponseDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
 
@@ -31,6 +33,7 @@ export class BlockchainController {
   constructor(
     private readonly vaultContributionService: VaultContributionService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
+    private readonly evmWebhookService: EvmWebhookService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
@@ -99,6 +102,51 @@ export class BlockchainController {
       return {
         status: 'success',
         details: txSummary,
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        details: error.message,
+      };
+    }
+  }
+
+  @Post('evm-tx-webhook')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Webhook endpoint for EVM (Robinhood) blockchain events via Alchemy' })
+  @ApiBody({ type: EvmWebhookDto })
+  @ApiResponse({
+    status: 200,
+    description: 'EVM blockchain event processed successfully',
+    type: HandleWebhookRes,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid webhook signature',
+  })
+  // NOTE: no @Body() DTO param — this route is served the raw request body as a
+  // Buffer (see main.ts) so the Alchemy HMAC signature can be verified against
+  // the exact bytes. The payload is parsed inside EvmWebhookService.
+  async handleEvmWebhook(
+    @Request() req: { headers: Record<string, string>; body: unknown }
+  ): Promise<HandleWebhookRes> {
+    const signatureHeader = req.headers['x-alchemy-signature'];
+
+    // Get raw body from the request for signature verification
+    let rawBody: string;
+    if (Buffer.isBuffer(req.body)) {
+      // If body-parser.raw() was used
+      rawBody = req.body.toString('utf8');
+    } else {
+      // Fallback to stringifying the parsed body
+      rawBody = JSON.stringify(req.body);
+    }
+
+    try {
+      const details = await this.evmWebhookService.handleEvmEvent(rawBody, signatureHeader);
+      return {
+        status: 'success',
+        details,
       };
     } catch (error) {
       return {
