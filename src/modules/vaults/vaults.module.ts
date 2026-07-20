@@ -8,6 +8,7 @@ import { TaptoolsModule } from '../taptools/taptools.module';
 import { WayUpPricingModule } from '../wayup/wayup-pricing.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { TokenVerificationRefreshService } from './token-verification-refresh.service';
 import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
@@ -74,6 +75,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
     VaultFilesCleanupService,
     TokenVerificationRefreshService,
     VaultsAdminService,
+    EvmVaultSignerService,
   ],
   controllers: [VaultsController, VaultsAdminController],
   exports: [VaultsService, DraftVaultsService],

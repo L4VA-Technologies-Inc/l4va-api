@@ -29,6 +29,7 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
+import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
@@ -64,6 +65,7 @@ import {
   VaultStatus,
   VaultFailureReason,
   SmartContractVaultStatus,
+  ChainType,
 } from '@/types/vault.types';
 
 /**
@@ -130,7 +132,8 @@ export class VaultsService {
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly dexHunterService: DexHunterService,
-    private readonly claimsService: ClaimsService
+    private readonly claimsService: ClaimsService,
+    private readonly evmVaultSignerService: EvmVaultSignerService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -197,9 +200,26 @@ export class VaultsService {
     data: CreateVaultReq
   ): Promise<{
     vaultId: string;
-    presignedTx: string;
-    txId: string;
+    presignedTx?: string;
+    txId?: string;
+    adminSignature?: string;
+    adminNonce?: string;
+    deadline?: number;
+    evmVaultConfig?: Record<string, unknown>;
   }> {
+    // ---- EVM (Robinhood) path -----------------------------------------------
+    if (data.chainType === ChainType.robinhood) {
+      const payload = await this.evmVaultSignerService.prepareVaultCreation(userId, data);
+      return {
+        vaultId: payload.dbVaultId,
+        adminSignature: payload.adminSignature,
+        adminNonce: payload.adminNonce,
+        deadline: payload.deadline,
+        evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
+      };
+    }
+
+    // ---- Cardano path (original) --------------------------------------------
     let newVault: Vault | null = null;
     try {
       // Check vault creation kill switch
@@ -770,6 +790,14 @@ export class VaultsService {
    * @returns Full vault response
    */
   async publishVault(userId: string, signedTx: PublishVaultDto): Promise<VaultFullResponse> {
+    // ---- EVM (Robinhood) path -----------------------------------------------
+    if (signedTx.chainType === ChainType.robinhood) {
+      if (!signedTx.txHash) throw new BadRequestException('txHash is required for EVM vault publishing');
+      await this.evmVaultSignerService.confirmVaultCreation(userId, signedTx.vaultId, signedTx.txHash);
+      return this.getVaultById(signedTx.vaultId, userId);
+    }
+
+    // ---- Cardano path (original) --------------------------------------------
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
@@ -1473,6 +1501,7 @@ export class VaultsService {
       filter,
       reserveMet,
       isOfficialPartner,
+      chainType,
       search,
       page = 1,
       limit = 10,
@@ -1723,6 +1752,10 @@ export class VaultsService {
 
     if (isOfficialPartner !== undefined) {
       queryBuilder.andWhere('vault.is_official_partner = :isOfficialPartner', { isOfficialPartner });
+    }
+
+    if (chainType) {
+      queryBuilder.andWhere('vault.chain_type = :chainType', { chainType });
     }
 
     // Apply sorting

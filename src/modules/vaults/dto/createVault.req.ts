@@ -31,14 +31,14 @@ import {
   ValueMethod,
   VaultPrivacy,
   VaultType,
+  ChainType,
 } from '@/types/vault.types';
 
 export class CreateVaultReq {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  @Expose()
-  id?: string;
+  @Expose()  id?: string;
 
   @ApiProperty({ required: true })
   @IsNotEmpty()
@@ -451,4 +451,10 @@ export class CreateVaultReq {
   @IsBoolean()
   @Expose()
   isExpandableAssetWhitelist?: boolean;
+
+  @ApiProperty({ description: 'Chain to deploy vault on', enum: ChainType, required: false })
+  @IsOptional()
+  @IsEnum(ChainType)
+  @Expose()
+  chainType?: ChainType;
 }

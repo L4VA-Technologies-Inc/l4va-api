@@ -4,6 +4,8 @@ import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString,
 
 import { PaginationDto } from './pagination.dto';
 
+import { ChainType } from '@/types/vault.types';
+
 export enum VaultFilter {
   open = 'open',
   locked = 'locked',
@@ -397,4 +399,14 @@ export class GetVaultsDto extends PaginationDto {
   @Expose()
   @IsOptional()
   search?: string;
+
+  @IsEnum(ChainType)
+  @IsOptional()
+  @ApiProperty({
+    enum: ChainType,
+    required: false,
+    description: 'Filter by chain type (cardano or robinhood)',
+  })
+  @Expose()
+  chainType?: ChainType;
 }
