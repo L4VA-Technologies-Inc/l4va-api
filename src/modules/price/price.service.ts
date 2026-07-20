@@ -11,6 +11,8 @@ export class PriceService {
   private cache = new NodeCache({ stdTTL: 600 });
   private readonly dexHunterApiKey: string;
   private readonly dexHunterBaseUrl: string;
+  private readonly coinGeckoApiKey: string;
+  private readonly coinGeckoApiUrl: string;
 
   constructor(
     private readonly configService: ConfigService,
@@ -18,6 +20,8 @@ export class PriceService {
   ) {
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
+    this.coinGeckoApiKey = this.configService.get<string>('COINGECKO_API_KEY');
+    this.coinGeckoApiUrl = this.configService.get<string>('COINGECKO_API_URL');
   }
 
   async getAdaPrice(): Promise<number> {
@@ -92,6 +96,71 @@ export class PriceService {
 
       // Use fallback price as last resort
       this.logger.warn(`Using fallback ADA price: $${fallbackPrice}`);
+      return fallbackPrice;
+    }
+  }
+
+  async getEthPrice(): Promise<number> {
+    const cacheKey = 'eth_price_usd';
+    const cachedPrice = this.cache.get<number>(cacheKey);
+
+    if (cachedPrice !== undefined) {
+      return cachedPrice;
+    }
+
+    const fallbackPrice = 3000;
+
+    try {
+      const now = Date.now();
+      const lastCallKey = 'last_eth_price_api_call';
+      const lastCall = this.cache.get<number>(lastCallKey) || 0;
+
+      // Rate limiting: don't call API more than once per 10 seconds
+      if (now - lastCall < 10000) {
+        const lastKnownGoodPrice = this.cache.get<number>('last_known_good_eth_price');
+        this.logger.log(`lastKnownGoodPrice: ${lastKnownGoodPrice}`);
+        return lastKnownGoodPrice || fallbackPrice;
+      }
+
+      this.cache.set(lastCallKey, now);
+
+      // Call CoinGecko API
+      const response = await axios.get(`${this.coinGeckoApiUrl}/v3/simple/price`, {
+        params: {
+          ids: 'ethereum',
+          vs_currencies: 'usd',
+        },
+        headers: {
+          'x-cg-demo-api-key': this.coinGeckoApiKey,
+        },
+        timeout: 5000,
+      });
+
+      const ethPrice = Number(response.data?.ethereum?.usd);
+
+      if (!ethPrice || Number.isNaN(ethPrice)) {
+        throw new Error('Invalid price data from CoinGecko API');
+      }
+
+      // Cache price for 15 minutes
+      this.cache.set(cacheKey, ethPrice, 900);
+      this.cache.set('last_known_good_eth_price', ethPrice, 86400);
+
+      this.logger.log(`Successfully fetched ETH price from CoinGecko: $${ethPrice.toFixed(2)}`);
+      this.logger.log(`ethPrice: ${ethPrice}`);
+      return ethPrice;
+    } catch (error) {
+      this.logger.error(`Failed to fetch ETH price: ${error.message}`);
+
+      // If we have a last known good price, use that
+      const lastKnownGoodPrice = this.cache.get<number>('last_known_good_eth_price');
+      if (lastKnownGoodPrice !== undefined) {
+        this.logger.warn(`Using last known good ETH price: $${lastKnownGoodPrice.toFixed(2)}`);
+        return lastKnownGoodPrice;
+      }
+
+      // Use fallback price as last resort
+      this.logger.warn(`Using fallback ETH price: $${fallbackPrice}`);
       return fallbackPrice;
     }
   }

@@ -1174,6 +1174,7 @@ export class VaultsService {
       adaPrice,
       totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
       totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
+      totalValueEth: Number(vault.total_assets_cost_eth ?? 0),
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
       assetsByPolicy,
@@ -1698,6 +1699,8 @@ export class VaultsService {
         queryBuilder.andWhere('vault.total_assets_cost_usd >= :minTvl', { minTvl });
       } else if (tvlCurrency === TVLCurrency.ADA) {
         queryBuilder.andWhere('vault.total_assets_cost_ada >= :minTvl', { minTvl });
+      } else if (tvlCurrency === TVLCurrency.ETH) {
+        queryBuilder.andWhere('vault.total_assets_cost_eth >= :minTvl', { minTvl });
       }
     }
 
@@ -1706,11 +1709,23 @@ export class VaultsService {
         queryBuilder.andWhere('vault.total_assets_cost_usd <= :maxTvl', { maxTvl });
       } else if (tvlCurrency === TVLCurrency.ADA) {
         queryBuilder.andWhere('vault.total_assets_cost_ada <= :maxTvl', { maxTvl });
+      } else if (tvlCurrency === TVLCurrency.ETH) {
+        queryBuilder.andWhere('vault.total_assets_cost_eth <= :maxTvl', { maxTvl });
       }
     }
 
     if (minFdv || maxFdv) {
-      const fdvDivider = fdvCurrency === TVLCurrency.USD ? await this.priceService.getAdaPrice() : 1;
+      let fdvDivider = 1;
+      if (fdvCurrency === TVLCurrency.USD) {
+        fdvDivider = await this.priceService.getAdaPrice();
+      } else if (fdvCurrency === TVLCurrency.ETH) {
+        // fdv is stored in ADA; convert ETH input to ADA: ethUsd / adaUsd
+        const [adaPrice, ethPrice] = await Promise.all([
+          this.priceService.getAdaPrice(),
+          this.priceService.getEthPrice(),
+        ]);
+        fdvDivider = ethPrice > 0 ? adaPrice / ethPrice : 1;
+      }
       const effectiveFdvDivider = fdvDivider > 0 ? fdvDivider : 1;
 
       if (minFdv) {
@@ -1789,6 +1804,7 @@ export class VaultsService {
         const assetsPrices = {
           totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
           totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
+          totalValueEth: Number(vault.total_assets_cost_eth ?? 0),
           totalAcquiredAda: Number(vault.total_acquired_value_ada ?? 0),
         };
 
@@ -1807,6 +1823,7 @@ export class VaultsService {
           ...plainVault,
           totalValueUsd: assetsPrices.totalValueUsd,
           totalValueAda: assetsPrices.totalValueAda,
+          totalValueEth: assetsPrices.totalValueEth,
           invested: vault.total_acquired_value_ada,
           phaseStartTime: phaseStartTime ? phaseStartTime.toISOString() : null,
           phaseEndTime: phaseEndTime ? phaseEndTime.toISOString() : null,

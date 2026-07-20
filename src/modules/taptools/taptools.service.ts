@@ -988,7 +988,9 @@ export class TaptoolsService {
    */
   async updateAssetPrices(
     vaultIds: string[]
-  ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
+  ): Promise<
+    Map<string, { totalValueAda: number; totalValueUsd: number; totalValueEth: number; totalAcquiredAda: number }>
+  > {
     try {
       // Build query to get unique assets across specified vaults
       const assets: Array<
@@ -1394,9 +1396,11 @@ export class TaptoolsService {
     }
 
     // Create and return the summary
+    const ethPrice = await this.priceService.getEthPrice();
     return {
       totalValueAda: +totalValueAda.toFixed(6),
       totalValueUsd: +totalValueUsd.toFixed(2),
+      totalValueEth: +(totalValueUsd / ethPrice).toFixed(6),
       totalAssets: assetsWithValues.length,
       nfts: assetsWithValues.filter(a => a.isNft).length,
       tokens: assetsWithValues.filter(a => !a.isNft).length,
@@ -1417,8 +1421,13 @@ export class TaptoolsService {
    */
   async calculateVaultsTvl(
     vaultIds: string[]
-  ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
-    const resultMap = new Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>();
+  ): Promise<
+    Map<string, { totalValueAda: number; totalValueUsd: number; totalValueEth: number; totalAcquiredAda: number }>
+  > {
+    const resultMap = new Map<
+      string,
+      { totalValueAda: number; totalValueUsd: number; totalValueEth: number; totalAcquiredAda: number }
+    >();
 
     if (vaultIds.length === 0) {
       return resultMap;
@@ -1442,12 +1451,16 @@ export class TaptoolsService {
         })
       );
 
-      const adaPrice = await this.priceService.getAdaPrice();
+      const [adaPrice, ethPrice] = await Promise.all([
+        this.priceService.getAdaPrice(),
+        this.priceService.getEthPrice(),
+      ]);
 
       // Process each vault
       for (const vault of vaults) {
         let totalValueAda = 0;
         let totalValueUsd = 0;
+        let totalValueEth = 0;
         let totalAcquiredAda = 0;
 
         const vaultCustomPrices = customPricesMap.get(vault.id);
@@ -1605,10 +1618,12 @@ export class TaptoolsService {
           // Treasury wallet doesn't exist or error fetching - continue without it
           this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
         }
+        totalValueEth = totalValueUsd / ethPrice;
 
         resultMap.set(vault.id, {
           totalValueAda: +totalValueAda.toFixed(6),
           totalValueUsd: +totalValueUsd.toFixed(2),
+          totalValueEth: +totalValueEth.toFixed(6),
           totalAcquiredAda,
         });
       }
@@ -1667,6 +1682,7 @@ export class TaptoolsService {
       const updateData: Partial<Vault> = {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
+        total_assets_cost_eth: summary.totalValueEth,
         last_valuation_update: new Date(),
       };
 

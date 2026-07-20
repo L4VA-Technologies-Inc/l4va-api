@@ -642,6 +642,7 @@ export class TransactionsService {
       require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
       total_assets_cost_ada: assetsPrices.totalValueAda,
       total_assets_cost_usd: assetsPrices.totalValueUsd,
+      total_assets_cost_eth: assetsPrices.totalValueEth,
       total_acquired_value_ada: assetsPrices.totalAcquiredAda,
     });
 
@@ -729,6 +730,7 @@ export class TransactionsService {
             require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
             total_assets_cost_ada: assetsPrices.totalValueAda,
             total_assets_cost_usd: assetsPrices.totalValueUsd,
+            total_assets_cost_eth: assetsPrices.totalValueEth,
             total_acquired_value_ada: assetsPrices.totalAcquiredAda,
           });
 

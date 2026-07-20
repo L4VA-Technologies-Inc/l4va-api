@@ -99,6 +99,16 @@ export class VaultShortResponse {
   })
   totalValueAda: number;
 
+  @ApiProperty({
+    description: 'Total value of locked vaults in ETH',
+    example: 3500000,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  totalValueEth: number;
+
   @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
