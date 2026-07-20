@@ -10,6 +10,7 @@ import {
   InvestmentWindowType,
   TerminationType,
   VaultFailureReason,
+  ChainType,
 } from '../../../types/vault.types';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -187,6 +188,13 @@ export class VaultShortResponse {
     expose: { name: 'isOfficialPartner' },
   })
   isOfficialPartner: boolean;
+
+  @ApiProperty({ description: 'Blockchain the vault belongs to', enum: ChainType })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'chainType' },
+  })
+  chainType: ChainType;
 }
 
 export class VaultFullResponse extends VaultShortResponse {
