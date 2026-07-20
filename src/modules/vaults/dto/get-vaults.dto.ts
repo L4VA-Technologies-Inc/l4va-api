@@ -65,6 +65,7 @@ export enum VaultTagFilter {
 export enum TVLCurrency {
   ADA = 'ADA',
   USD = 'USD',
+  ETH = 'ETH',
 }
 
 export class DateRangeDto {
@@ -290,7 +291,7 @@ export class GetVaultsDto extends PaginationDto {
     enum: TVLCurrency,
     required: false,
     default: TVLCurrency.USD,
-    description: 'Currency for TVL filtering (ADA or USD)',
+    description: 'Currency for TVL filtering (ADA, USD or ETH)',
   })
   @Expose()
   tvlCurrency?: TVLCurrency = TVLCurrency.USD;
@@ -328,7 +329,7 @@ export class GetVaultsDto extends PaginationDto {
     enum: TVLCurrency,
     required: false,
     default: TVLCurrency.USD,
-    description: 'Currency for FDV filtering (ADA or USD)',
+    description: 'Currency for FDV filtering (ADA, USD or ETH)',
   })
   @Expose()
   fdvCurrency?: TVLCurrency = TVLCurrency.USD;

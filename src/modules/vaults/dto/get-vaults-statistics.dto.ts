@@ -31,6 +31,13 @@ export class VaultStatisticsResponse {
   totalValueAda: number;
 
   @ApiProperty({
+    description: 'Total value of locked vaults in ETH',
+    example: 400,
+  })
+  @Expose()
+  totalValueEth: number;
+
+  @ApiProperty({
     description: 'Total number of contributed assets in usd across all vaults',
     example: 750,
   })
@@ -43,6 +50,13 @@ export class VaultStatisticsResponse {
   })
   @Expose()
   totalContributedAda: number;
+
+  @ApiProperty({
+    description: 'Total number of contributed assets in eth across all vaults',
+    example: 0.32,
+  })
+  @Expose()
+  totalContributedEth: number;
 
   @ApiProperty({
     description: 'Total number of assets ever contributed to any vault',
@@ -66,6 +80,13 @@ export class VaultStatisticsResponse {
   totalAcquiredUsd: number;
 
   @ApiProperty({
+    description: 'Total ETH value ever acquired across all vaults',
+    example: 560,
+  })
+  @Expose()
+  totalAcquiredEth: number;
+
+  @ApiProperty({
     description: 'Distribution of vaults by stage (draft, contribution, acquire, locked, terminated)',
     example: {
       draft: {
@@ -82,6 +103,7 @@ export class VaultStatisticsResponse {
       percentage: number;
       valueAda: number;
       valueUsd: number;
+      valueEth: number;
     }
   >;
 
@@ -112,6 +134,7 @@ export class VaultStatisticsResponse {
       percentage: number;
       valueAda: number;
       valueUsd: number;
+      valueEth: number;
     }
   >;
 }

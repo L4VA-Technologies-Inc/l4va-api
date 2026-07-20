@@ -15,6 +15,9 @@ export class VaultAssetsSummaryDto {
   @ApiProperty({ description: 'Total value of all assets in USD' })
   totalValueUsd: number;
 
+  @ApiProperty({ description: 'Total value of all assets in ETH' })
+  totalValueEth: number;
+
   @ApiProperty({ description: 'Total acquired ADA' })
   totalAcquiredAda: number;
 

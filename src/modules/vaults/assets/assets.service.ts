@@ -198,12 +198,18 @@ export class AssetsService {
         const totalValueAda = assets.reduce((sum, asset) => sum + asset.valueAda, 0);
 
         // Update vault TVL
+        const [adaPrice, ethPrice] = await Promise.all([
+          this.priceService.getAdaPrice(),
+          this.priceService.getEthPrice(),
+        ]);
         vault.total_assets_cost_ada = totalValueAda;
-        vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
+        vault.total_assets_cost_usd = totalValueAda * adaPrice;
+        vault.total_assets_cost_eth = ethPrice > 0 ? vault.total_assets_cost_usd / ethPrice : 0;
 
         await this.vaultsRepository.update(vault.id, {
           total_assets_cost_ada: vault.total_assets_cost_ada,
           total_assets_cost_usd: vault.total_assets_cost_usd,
+          total_assets_cost_eth: vault.total_assets_cost_eth,
         });
       } catch (error) {
         this.logger.error(`Failed to update vault totals after VLRM asset creation for vault ${vault.id}:`, error);
@@ -781,12 +787,16 @@ export class AssetsService {
 
       if (vaultCosts.size === 0) return; // No vaults with valid pricing
 
-      // Get current ADA price in USD
-      const adaPriceUsd = await this.priceService.getAdaPrice();
+      // Get current ADA and ETH prices in USD
+      const [adaPriceUsd, ethPriceUsd] = await Promise.all([
+        this.priceService.getAdaPrice(),
+        this.priceService.getEthPrice(),
+      ]);
 
       // Update each vault's cost fields to reflect the newly acquired assets
       for (const [vaultId, totalCostAda] of vaultCosts.entries()) {
         const totalCostUsd = totalCostAda * adaPriceUsd;
+        const totalCostEth = ethPriceUsd > 0 ? totalCostUsd / ethPriceUsd : 0;
 
         await this.vaultsRepository
           .createQueryBuilder()
@@ -794,6 +804,7 @@ export class AssetsService {
           .set({
             total_assets_cost_ada: () => `total_assets_cost_ada + ${totalCostAda}`,
             total_assets_cost_usd: () => `total_assets_cost_usd + ${totalCostUsd}`,
+            total_assets_cost_eth: () => `total_assets_cost_eth + ${totalCostEth}`,
             last_valuation_update: new Date(),
           })
           .where('id = :vaultId', { vaultId })

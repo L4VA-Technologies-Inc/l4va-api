@@ -398,6 +398,16 @@ export class Vault {
   })
   total_assets_cost_ada: number;
 
+  @Expose({ name: 'totalAssetsCostEth' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'total_assets_cost_eth',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  total_assets_cost_eth: number;
+
   @Expose({ name: 'lastValuationUpdate' })
   @Transform(({ value }) => (value ? new Date(value).getTime() : null))
   @Column({

@@ -36,11 +36,12 @@ export class MarketService implements OnModuleInit {
   async getMarkets(query: GetMarketsDto): Promise<GetMarketsResponse> {
     const { page = 1, limit = 10 } = query;
     const adaPrice = await this.priceService.getAdaPrice();
+    const ethPrice = await this.priceService.getEthPrice();
 
     const queryBuilder = this.createBaseQuery();
 
     this.applyVisibilityFilters(queryBuilder);
-    this.applySearchAndRangeFilters(queryBuilder, query, adaPrice);
+    this.applySearchAndRangeFilters(queryBuilder, query, adaPrice, ethPrice);
     this.applySorting(queryBuilder, query.sortBy, query.sortOrder, query.currency);
 
     queryBuilder.skip((page - 1) * limit).take(limit);
@@ -145,7 +146,8 @@ export class MarketService implements OnModuleInit {
   private applySearchAndRangeFilters(
     queryBuilder: SelectQueryBuilder<Market>,
     query: GetMarketsDto,
-    adaPrice: number
+    adaPrice: number,
+    ethPrice: number
   ): void {
     const { ticker, currency = Currency.ADA } = query;
 
@@ -153,12 +155,33 @@ export class MarketService implements OnModuleInit {
       queryBuilder.andWhere('vault.vault_token_ticker ILIKE :ticker', { ticker: `%${ticker}%` });
     }
 
-    const priceDivider = currency === Currency.USD && adaPrice > 0 ? adaPrice : 1;
-    const tvlField = currency === Currency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
+    // Price columns (vt_price, fdv, fdv_per_asset) are stored in ADA.
+    // priceDivider converts the requested-currency input back to ADA.
+    // tvlDivider converts the requested-currency TVL input to the tvlField's currency.
+    let priceDivider = 1;
+    let tvlField = 'vault.total_assets_cost_ada';
+    const tvlDivider = 1;
+
+    switch (currency) {
+      case Currency.USD:
+        priceDivider = adaPrice > 0 ? adaPrice : 1;
+        tvlField = 'vault.total_assets_cost_usd';
+        break;
+      case Currency.ETH:
+        // Price columns are ADA-denominated with no ETH column; convert ETH input back to ADA.
+        priceDivider = ethPrice > 0 && adaPrice > 0 ? adaPrice / ethPrice : 1;
+        // TVL has a dedicated ETH column, so the input is compared directly.
+        tvlField = 'vault.total_assets_cost_eth';
+        break;
+      case Currency.ADA:
+      default:
+        // Defaults already set: priceDivider = 1, tvlField = ADA column.
+        break;
+    }
 
     this.addRangeCondition(queryBuilder, 'vault.vt_price', 'Price', query.minPrice, query.maxPrice, priceDivider);
     this.addRangeCondition(queryBuilder, 'vault.fdv', 'Fdv', query.minFdv, query.maxFdv, priceDivider);
-    this.addRangeCondition(queryBuilder, tvlField, 'Tvl', query.minTvl, query.maxTvl);
+    this.addRangeCondition(queryBuilder, tvlField, 'Tvl', query.minTvl, query.maxTvl, tvlDivider);
     this.addRangeCondition(queryBuilder, 'vault.fdv_tvl', 'Delta', query.minDelta, query.maxDelta);
     this.addRangeCondition(
       queryBuilder,

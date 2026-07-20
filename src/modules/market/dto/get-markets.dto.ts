@@ -7,6 +7,7 @@ import { PaginationDto } from '../../vaults/dto/pagination.dto';
 export enum Currency {
   ADA = 'ada',
   USD = 'usd',
+  ETH = 'eth',
 }
 
 export enum MarketSortField {
@@ -188,7 +189,7 @@ export class GetMarketsDto extends PaginationDto {
     enum: Currency,
     required: false,
     default: Currency.ADA,
-    description: 'Currency for filtering and sorting (ada or usd)',
+    description: 'Currency for filtering and sorting (ada, usd or eth)',
   })
   @Expose()
   currency?: Currency = Currency.ADA;
