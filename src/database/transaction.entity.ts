@@ -110,4 +110,41 @@ export class Transaction {
   @Expose({ name: 'createdAt' })
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   created_at: Date;
+
+  // ---------------------------------------------------------------------------
+  // EVM-specific fields — null for Cardano rows.
+  // Cardano uses utxo_input / utxo_output / utxo_ref for the same concepts.
+  // ---------------------------------------------------------------------------
+
+  /** EVM: wallet or contract that originated the transaction (msg.sender). */
+  @Expose({ name: 'fromAddress' })
+  @Column({ name: 'from_address', nullable: true })
+  from_address?: string;
+
+  /** EVM: target contract or recipient address. */
+  @Expose({ name: 'toAddress' })
+  @Column({ name: 'to_address', nullable: true })
+  to_address?: string;
+
+  /** EVM: block number in which the transaction was included. */
+  @Expose({ name: 'blockNumber' })
+  @Column({ name: 'block_number', type: 'bigint', nullable: true })
+  block_number?: number;
+
+  /**
+   * Numeric EVM chain ID (e.g. 46630 for Robinhood testnet).
+   * Allows chain discrimination without joining through the vault.
+   */
+  @Expose({ name: 'chainId' })
+  @Column({ name: 'chain_id', type: 'bigint', nullable: true })
+  chain_id?: number;
+
+  /**
+   * Index of the event log within the block.
+   * Used when a transaction emits multiple relevant events
+   * (e.g. VaultCreated + Transfer) and each needs a distinct record.
+   */
+  @Expose({ name: 'logIndex' })
+  @Column({ name: 'log_index', type: 'integer', nullable: true })
+  log_index?: number;
 }

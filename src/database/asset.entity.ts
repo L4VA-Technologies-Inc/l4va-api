@@ -204,6 +204,18 @@ export class Asset {
   @Column({ name: 'listed_at', type: 'timestamptz', nullable: true })
   listed_at?: Date;
 
+  /**
+   * Numeric EVM chain ID (e.g. 46630 for Robinhood testnet).
+   * Null for Cardano assets.
+   *
+   * EVM field mapping:
+   *   policy_id → ERC-20 / ERC-721 / ERC-1155 contract address
+   *   asset_id  → tokenId as string (ERC-721/1155); null for ERC-20 / native ETH
+   */
+  @Expose({ name: 'chainId' })
+  @Column({ name: 'chain_id', type: 'bigint', nullable: true })
+  chain_id?: number;
+
   @Expose({ name: 'transaction' })
   @ManyToOne(() => Transaction, (transaction: Transaction) => transaction.id)
   @JoinColumn({ name: 'transaction_id' })
