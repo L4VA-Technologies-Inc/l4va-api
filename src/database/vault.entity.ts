@@ -786,6 +786,23 @@ export class Vault {
   })
   chain_type: ChainType;
 
+  /**
+   * Numeric EVM chain ID (e.g. 46630 for Robinhood testnet, 1 for Ethereum mainnet).
+   * Null for Cardano vaults.
+   */
+  @Expose({ name: 'chainId' })
+  @Column({ name: 'chain_id', type: 'bigint', nullable: true })
+  chain_id?: number;
+
+  /**
+   * The bytes32 vaultId registered in the EVM VaultFactory contract.
+   * Null for Cardano vaults.
+   * For EVM: maps to VaultFactory.vaults(evmVaultId) → vault address.
+   */
+  @Expose({ name: 'evmVaultId' })
+  @Column({ name: 'evm_vault_id', nullable: true })
+  evm_vault_id?: string;
+
   @BeforeInsert()
   setDate(): void {
     const now = new Date();
