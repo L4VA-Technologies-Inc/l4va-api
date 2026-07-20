@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import { Brackets, In, Not, Repository } from 'typeorm';
+import { keccak256, encodePacked } from 'viem';
 
 import { DexHunterService } from '../dexhunter/dexhunter.service';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
@@ -202,26 +203,17 @@ export class VaultsService {
     vaultId: string;
     presignedTx?: string;
     txId?: string;
+    transactionId?: string;
     adminSignature?: string;
     adminNonce?: string;
     deadline?: number;
     evmVaultConfig?: Record<string, unknown>;
   }> {
-    // ---- EVM (Robinhood) path -----------------------------------------------
-    if (data.chainType === ChainType.robinhood) {
-      const payload = await this.evmVaultSignerService.prepareVaultCreation(userId, data);
-      return {
-        vaultId: payload.dbVaultId,
-        adminSignature: payload.adminSignature,
-        adminNonce: payload.adminNonce,
-        deadline: payload.deadline,
-        evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
-      };
-    }
-
-    // ---- Cardano path (original) --------------------------------------------
     let newVault: Vault | null = null;
     try {
+      // ========================================================================
+      // SHARED VALIDATIONS (all chains)
+      // ========================================================================
       // Check vault creation kill switch
       if (!this.systemSettingsService.vaultCreationEnabled) {
         throw new BadRequestException(
@@ -293,11 +285,14 @@ export class VaultsService {
         }
       }
 
+      // ========================================================================
+      // CARDANO-SPECIFIC: Asset whitelist validation
+      // ========================================================================
       const uniqueWhitelistItems = Array.from(
         new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
       );
       const collectionNameByPolicyId = new Map<string, string>();
-      if (uniqueWhitelistItems.length > 0) {
+      if (data.chainType !== ChainType.robinhood && uniqueWhitelistItems.length > 0) {
         const whitelistCollections = await this.getCollections(
           uniqueWhitelistItems.map(item => ({
             policyId: item.policyId,
@@ -324,7 +319,9 @@ export class VaultsService {
         }
       }
 
-      // Process image files - allow reuse of existing files
+      // ========================================================================
+      // SHARED: Process image files - allow reuse of existing files
+      // ========================================================================
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
@@ -339,26 +336,85 @@ export class VaultsService {
         this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
-      // Same for whitelist CSVs
+      // ========================================================================
+      // CARDANO-SPECIFIC: Process whitelist CSVs
+      // ========================================================================
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
-      if (acquirerWhitelistCsvKey) {
+      if (data.chainType !== ChainType.robinhood && acquirerWhitelistCsvKey) {
         acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
         this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
       }
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
-      const contributorWhitelistFile = contributorWhitelistCsvKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: contributorWhitelistCsvKey },
-          })
-        : null;
+      const contributorWhitelistFile =
+        data.chainType !== ChainType.robinhood && contributorWhitelistCsvKey
+          ? await this.filesRepository.findOne({
+              where: { file_key: contributorWhitelistCsvKey },
+            })
+          : null;
 
       const contributionOpenWindowTime = data.contributionOpenWindowTime
         ? new Date(data.contributionOpenWindowTime)
         : null;
       const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
 
+      // ========================================================================
+      // VAULT CREATION - Chain-specific branch
+      // ========================================================================
+      if (data.chainType === ChainType.robinhood) {
+        // ---- EVM (Robinhood) path -------------------------------------------
+        // Create vault entity with EVM-specific fields
+        const evmVaultId = keccak256(
+          encodePacked(['address', 'uint256'], [owner.address as `0x${string}`, BigInt(Date.now())])
+        );
+
+        const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630); // Robinhood testnet
+
+        const vaultData = transformToSnakeCase({
+          ...data,
+          owner: owner,
+          contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
+          acquireWindowDuration: data.acquireWindowDuration,
+          acquireOpenWindowTime,
+          contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
+          timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
+          vaultStatus: VaultStatus.draft,
+          chainType: ChainType.robinhood,
+          chainId: chainId,
+          evmVaultId: evmVaultId,
+          vaultImage: vaultImg,
+          ftTokenImg: ftTokenImg,
+        });
+
+        delete vaultData.assets_whitelist;
+        delete vaultData.acquirer_whitelist;
+        delete vaultData.contributor_whitelist;
+        delete vaultData.tags;
+        delete vaultData.acquirer_whitelist_csv;
+        delete vaultData.contributor_whitelist_csv;
+
+        newVault = await this.vaultsRepository.save(vaultData as Vault);
+
+        // Create EVM vault config and transaction
+        const payload = await this.evmVaultSignerService.prepareVaultCreationWithExistingVault(
+          userId,
+          newVault.id,
+          evmVaultId,
+          data
+        );
+
+        return {
+          vaultId: newVault.id,
+          transactionId: payload.transactionId,
+          adminSignature: payload.adminSignature,
+          adminNonce: payload.adminNonce,
+          deadline: payload.deadline,
+          evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
+        };
+      }
+
+      // ---- Cardano path (original) ------------------------------------------
       // Prepare vault data
       // For acquire-only vaults, exclude contribution-related fields (they skip contribution phase)
       const vaultData = transformToSnakeCase({
@@ -793,7 +849,9 @@ export class VaultsService {
     // ---- EVM (Robinhood) path -----------------------------------------------
     if (signedTx.chainType === ChainType.robinhood) {
       if (!signedTx.txHash) throw new BadRequestException('txHash is required for EVM vault publishing');
-      await this.evmVaultSignerService.confirmVaultCreation(userId, signedTx.vaultId, signedTx.txHash);
+      if (!signedTx.txId)
+        throw new BadRequestException('txId (transaction record ID) is required for EVM vault publishing');
+      await this.evmVaultSignerService.confirmVaultCreation(userId, signedTx.vaultId, signedTx.txHash, signedTx.txId);
       return this.getVaultById(signedTx.vaultId, userId);
     }
 

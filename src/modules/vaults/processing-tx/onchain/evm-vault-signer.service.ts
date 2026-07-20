@@ -1,17 +1,17 @@
-import { randomBytes } from 'node:crypto';
-
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, createPublicClient, http, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
+import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 // ---------------------------------------------------------------------------
 // ABI parameter definitions — mirrors VaultTypes.sol exactly.
@@ -213,6 +213,7 @@ export interface EvmVaultConfig {
 
 export interface EvmCreationPayload {
   dbVaultId: string;
+  transactionId: string;
   evmVaultConfig: EvmVaultConfig;
   adminNonce: string;
   deadline: number;
@@ -239,7 +240,8 @@ export class EvmVaultSignerService {
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.factoryAddress = this.configService.get<string>('EVM_FACTORY_ADDRESS') as Address;
     this.adminAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS') as Address;
@@ -253,30 +255,43 @@ export class EvmVaultSignerService {
   // Public API
   // --------------------------------------------------------------------------
 
-  async prepareVaultCreation(userId: string, data: CreateVaultReq): Promise<EvmCreationPayload> {
+  /**
+   * Prepare EVM vault creation with an existing vault entity (vault already saved in DB).
+   * Vault creation is now handled by vaults.service.ts to consolidate all vault creation logic.
+   */
+  async prepareVaultCreationWithExistingVault(
+    userId: string,
+    dbVaultId: string,
+    evmVaultId: Hex,
+    data: CreateVaultReq
+  ): Promise<Omit<EvmCreationPayload, 'dbVaultId'>> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       select: ['id', 'address'],
     });
     if (!user) throw new BadRequestException('User not found');
 
-    // Generate a unique bytes32 vault ID (random 32 bytes)
-    const evmVaultId = `0x${randomBytes(32).toString('hex')}` as Hex;
-
     const cfg = this.buildVaultConfig(evmVaultId, user.address as Address, data);
 
-    const adminNonce = BigInt(Date.now()); // monotonic; usedAdminNonces[admin][nonce] prevents replay
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour window
+    const adminNonce = BigInt(Date.now());
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
     const adminSignature = await this.signCreationAuthorization(cfg, adminNonce, deadline);
 
-    // Save a draft vault row so the db vault ID is available for the confirm step
-    const dbVaultId = await this.saveDraftVault(userId, cfg, data);
+    // Create transaction record for vault creation
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: dbVaultId,
+      type: TransactionType.createVault,
+      userId,
+      assets: [],
+    });
 
-    this.logger.log(`EVM vault prepared — dbId=${dbVaultId} evmVaultId=${cfg.vaultId}`);
+    this.logger.log(
+      `EVM vault prepared (existing) — dbId=${dbVaultId} evmVaultId=${cfg.vaultId} txId=${transaction.id}`
+    );
 
     return {
-      dbVaultId,
+      transactionId: transaction.id,
       evmVaultConfig: this.serializeBigInts(cfg) as EvmVaultConfig,
       adminNonce: adminNonce.toString(),
       deadline: Number(deadline),
@@ -284,7 +299,7 @@ export class EvmVaultSignerService {
     };
   }
 
-  async confirmVaultCreation(userId: string, dbVaultId: string, txHash: string): Promise<void> {
+  async confirmVaultCreation(userId: string, dbVaultId: string, txHash: string, transactionId: string): Promise<void> {
     const vault = await this.vaultsRepository.findOne({
       where: { id: dbVaultId },
       relations: ['owner'],
@@ -292,40 +307,58 @@ export class EvmVaultSignerService {
     if (!vault) throw new BadRequestException('Vault not found');
     if (vault.owner.id !== userId) throw new BadRequestException('Not the vault owner');
 
-    // Parse the VaultCreated event from the receipt to get the actual deployed Vault address.
-    // VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
-    // topics[0] = event selector, topics[1] = vaultId, topics[2] = vault address, topics[3] = creator
-    let deployedVaultAddress: string | undefined;
     try {
-      const client = createPublicClient({
-        transport: http(this.configService.get<string>('EVM_RPC_URL') ?? 'https://rpc.testnet.chain.robinhood.com'),
-      });
-      const receipt = await client.getTransactionReceipt({ hash: txHash as Hex });
-      const VAULT_CREATED_TOPIC = keccak256(
-        new TextEncoder().encode('VaultCreated(bytes32,address,address,address,address)')
-      );
-      const log = receipt.logs.find(
-        l => l.topics[0]?.toLowerCase() === VAULT_CREATED_TOPIC.toLowerCase() && l.topics.length === 4
-      );
-      if (log?.topics[2]) {
-        // topics[2] is the indexed vault address — last 40 hex chars = 20 bytes
-        deployedVaultAddress = '0x' + log.topics[2].slice(-40);
-        this.logger.log(`VaultCreated event found — vault address: ${deployedVaultAddress}`);
-      }
-    } catch (err) {
-      this.logger.warn(`Could not parse VaultCreated event from receipt: ${(err as Error).message}`);
+      // Update transaction record with the tx hash
+      await this.transactionsService.updateTransactionHash(transactionId, txHash);
+
+      // Mark vault as published. The actual vault contract address will be filled
+      // when the VaultCreated event arrives via webhook (see updateVaultFromCreatedEvent).
+      vault.vault_status = VaultStatus.published;
+      vault.publication_hash = txHash;
+      vault.last_update_tx_hash = txHash;
+      // Note: contract_address remains null/factory until webhook updates it
+      await this.vaultsRepository.save(vault);
+
+      this.logger.log(`EVM vault confirmed — dbId=${dbVaultId} txHash=${txHash} txId=${transactionId}`);
+    } catch (error) {
+      // Update transaction status to failed on error
+      await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
+      this.logger.error(`Failed to confirm vault creation: ${(error as Error).message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Update vault contract address from VaultCreated event (called by webhook handler).
+   * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
+   * topics[0] = event signature, topics[1] = vaultId, topics[2] = vault address, topics[3] = creator
+   * data = abi.encode(admin, vaultToken)
+   */
+  async updateVaultFromCreatedEvent(txHash: string, topics: string[], _data: string): Promise<void> {
+    if (topics.length < 4) {
+      this.logger.warn(`VaultCreated event has insufficient topics: ${topics.length}`);
+      return;
     }
 
-    vault.vault_status = VaultStatus.published;
-    vault.publication_hash = txHash;
-    vault.last_update_tx_hash = txHash;
-    if (deployedVaultAddress) {
-      vault.contract_address = deployedVaultAddress;
+    const evmVaultId = topics[1]; // indexed bytes32
+    const vaultAddress = '0x' + topics[2].slice(-40); // indexed address (last 20 bytes)
+
+    const vault = await this.vaultsRepository.findOne({
+      where: { evm_vault_id: evmVaultId },
+    });
+
+    if (!vault) {
+      this.logger.debug(`VaultCreated event for unknown evmVaultId=${evmVaultId} (might be external vault)`);
+      return;
     }
+
+    // Update the vault contract address
+    vault.contract_address = vaultAddress.toLowerCase();
     await this.vaultsRepository.save(vault);
 
     this.logger.log(
-      `EVM vault confirmed — dbId=${dbVaultId} txHash=${txHash} vaultAddr=${deployedVaultAddress ?? 'unknown'}`
+      `Vault contract address updated from VaultCreated event — ` +
+        `dbId=${vault.id} evmVaultId=${evmVaultId} vaultAddr=${vaultAddress} txHash=${txHash}`
     );
   }
 
@@ -441,23 +474,5 @@ export class EvmVaultSignerService {
       );
     }
     return obj;
-  }
-
-  // --------------------------------------------------------------------------
-  // DB helpers
-  // --------------------------------------------------------------------------
-  private async saveDraftVault(userId: string, cfg: EvmVaultConfig, data: CreateVaultReq): Promise<string> {
-    const vault = this.vaultsRepository.create({
-      name: data.name,
-      description: data.description,
-      vault_status: VaultStatus.draft,
-      chain_type: ChainType.robinhood,
-      chain_id: this.chainId,
-      evm_vault_id: cfg.vaultId,
-      contract_address: this.factoryAddress,
-      owner: { id: userId },
-    });
-    const saved = await this.vaultsRepository.save(vault);
-    return saved.id;
   }
 }
