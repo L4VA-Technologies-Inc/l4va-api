@@ -1501,6 +1501,7 @@ export class VaultsService {
       filter,
       reserveMet,
       isOfficialPartner,
+      chainType,
       search,
       page = 1,
       limit = 10,
@@ -1751,6 +1752,10 @@ export class VaultsService {
 
     if (isOfficialPartner !== undefined) {
       queryBuilder.andWhere('vault.is_official_partner = :isOfficialPartner', { isOfficialPartner });
+    }
+
+    if (chainType) {
+      queryBuilder.andWhere('vault.chain_type = :chainType', { chainType });
     }
 
     // Apply sorting
