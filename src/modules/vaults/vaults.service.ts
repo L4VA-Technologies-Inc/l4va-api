@@ -214,7 +214,6 @@ export class VaultsService {
       // ========================================================================
       // SHARED VALIDATIONS (all chains)
       // ========================================================================
-      // Check vault creation kill switch
       if (!this.systemSettingsService.vaultCreationEnabled) {
         throw new BadRequestException(
           'Vault creation is temporarily unavailable. Please try again later or contact support if this persists.'
@@ -280,19 +279,23 @@ export class VaultsService {
             ]),
           },
         });
-        if (existingVaultWithTicker) {
-          throw new BadRequestException('Ticker is already in use by another active vault');
-        }
+        if (existingVaultWithTicker) throw new BadRequestException('Ticker is already in use by another active vault');
       }
 
       // ========================================================================
-      // CARDANO-SPECIFIC: Asset whitelist validation
+      // CARDANO-ONLY: Asset whitelist LP token validation + collection names
+      // EVM:         skipped — no LP concept, no on-chain verification gate
       // ========================================================================
-      const uniqueWhitelistItems = Array.from(
-        new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
+      const uniquePolicyIds = Array.from(
+        new Map((data.assetsWhitelist || []).map(obj => [obj.policyId, obj])).values()
       );
       const collectionNameByPolicyId = new Map<string, string>();
-      if (data.chainType !== ChainType.robinhood && uniqueWhitelistItems.length > 0) {
+      let lpTokenMap = new Map<string, { onchainId: string | null; isLp: boolean }>();
+
+      if (data.chainType !== ChainType.robinhood && uniquePolicyIds.length > 0) {
+        const uniqueWhitelistItems = Array.from(
+          new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
+        );
         const whitelistCollections = await this.getCollections(
           uniqueWhitelistItems.map(item => ({
             policyId: item.policyId,
@@ -301,26 +304,44 @@ export class VaultsService {
             count: item.count || 1,
           }))
         );
-
         const unverifiedCollections = whitelistCollections.filter(item => !item.is_verified);
         if (unverifiedCollections.length > 0) {
-          const unverifiedPolicies = unverifiedCollections.map(item => item.policy_id);
           throw new BadRequestException(
-            `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedPolicies.join(', ')}`
+            `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedCollections.map(c => c.policy_id).join(', ')}`
           );
         }
-
-        // Build a fallback map for collection names. This prevents saving null collection_name
-        // when the client doesn't send collectionName but verification lookup knows it.
         for (const c of whitelistCollections) {
-          if (c?.policy_id && c.collection_name) {
-            collectionNameByPolicyId.set(c.policy_id, c.collection_name);
+          if (c?.policy_id && c.collection_name) collectionNameByPolicyId.set(c.policy_id, c.collection_name);
+        }
+
+        const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
+        const lpTokensData = await this.tokenVerificationRepository.find({
+          where: { policy_id: In(policyIds) },
+          select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+        });
+        lpTokenMap = new Map(
+          lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+        );
+
+        for (const assetItem of uniquePolicyIds) {
+          const lpData = lpTokenMap.get(assetItem.policyId);
+          if (lpData?.isLp) {
+            if (!lpData.onchainId) {
+              throw new BadRequestException(
+                `Policy ${assetItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications.`
+              );
+            }
+            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+          } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method.`
+            );
           }
         }
       }
 
       // ========================================================================
-      // SHARED: Process image files - allow reuse of existing files
+      // SHARED: Process image files
       // ========================================================================
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
@@ -337,22 +358,23 @@ export class VaultsService {
       }
 
       // ========================================================================
-      // CARDANO-SPECIFIC: Process whitelist CSVs
+      // CARDANO-ONLY: Process whitelist CSV files
       // ========================================================================
-      const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
-      if (data.chainType !== ChainType.robinhood && acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
-        this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
+      let contributorWhitelistFile = null;
+      if (data.chainType !== ChainType.robinhood) {
+        const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
+        if (acquirerWhitelistCsvKey) {
+          acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+          this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
+        }
+        const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
+        if (contributorWhitelistCsvKey) {
+          contributorWhitelistFile = await this.filesRepository.findOne({
+            where: { file_key: contributorWhitelistCsvKey },
+          });
+        }
       }
-
-      const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
-      const contributorWhitelistFile =
-        data.chainType !== ChainType.robinhood && contributorWhitelistCsvKey
-          ? await this.filesRepository.findOne({
-              where: { file_key: contributorWhitelistCsvKey },
-            })
-          : null;
 
       const contributionOpenWindowTime = data.contributionOpenWindowTime
         ? new Date(data.contributionOpenWindowTime)
@@ -360,20 +382,18 @@ export class VaultsService {
       const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
 
       // ========================================================================
-      // VAULT CREATION - Chain-specific branch
+      // CHAIN-SPECIFIC: Build and save the vault entity
       // ========================================================================
+      let evmVaultId: `0x${string}` | undefined;
+
       if (data.chainType === ChainType.robinhood) {
-        // ---- EVM (Robinhood) path -------------------------------------------
-        // Create vault entity with EVM-specific fields
-        const evmVaultId = keccak256(
+        evmVaultId = keccak256(
           encodePacked(['address', 'uint256'], [owner.address as `0x${string}`, BigInt(Date.now())])
         );
-
-        const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630); // Robinhood testnet
-
+        const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
         const vaultData = transformToSnakeCase({
           ...data,
-          owner: owner,
+          owner,
           contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
           acquireWindowDuration: data.acquireWindowDuration,
           acquireOpenWindowTime,
@@ -381,29 +401,156 @@ export class VaultsService {
           timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
           vaultStatus: VaultStatus.draft,
           chainType: ChainType.robinhood,
-          chainId: chainId,
-          evmVaultId: evmVaultId,
+          chainId,
+          evmVaultId,
           vaultImage: vaultImg,
-          ftTokenImg: ftTokenImg,
+          ftTokenImg,
         });
-
         delete vaultData.assets_whitelist;
         delete vaultData.acquirer_whitelist;
         delete vaultData.contributor_whitelist;
         delete vaultData.tags;
         delete vaultData.acquirer_whitelist_csv;
         delete vaultData.contributor_whitelist_csv;
-
         newVault = await this.vaultsRepository.save(vaultData as Vault);
+      } else {
+        const vaultData = transformToSnakeCase({
+          ...data,
+          owner,
+          contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
+          acquireWindowDuration: data.acquireWindowDuration,
+          acquireOpenWindowTime,
+          contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
+          timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
+          vaultStatus: VaultStatus.created,
+          vaultImage: vaultImg,
+          ftTokenImg,
+          acquirerWhitelistCsv: acquirerWhitelistFile,
+          contributorWhitelistCsv: contributorWhitelistFile,
+        });
+        delete vaultData.assets_whitelist;
+        delete vaultData.acquirer_whitelist;
+        delete vaultData.contributor_whitelist;
+        delete vaultData.tags;
+        try {
+          newVault = await this.vaultsRepository.save(vaultData as Vault);
+          newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
+        } catch (error) {
+          if ((error as any).code === '23505' && (error as any).detail?.includes('already exists')) {
+            this.logger.warn(
+              'Duplicate key constraint violation during vault creation, retrying without file relations:',
+              (error as any).detail
+            );
+            const vaultDataWithoutFiles = { ...vaultData };
+            delete vaultDataWithoutFiles.vaultImage;
+            delete vaultDataWithoutFiles.ftTokenImg;
+            delete vaultDataWithoutFiles.acquirerWhitelistCsv;
+            delete vaultDataWithoutFiles.contributorWhitelistCsv;
+            try {
+              newVault = await this.vaultsRepository.save(vaultDataWithoutFiles as Vault);
+              this.logger.log('Vault creation succeeded without file relations');
+            } catch (retryError) {
+              this.logger.error('Vault creation failed even without file relations:', retryError);
+              throw new BadRequestException('Failed to create vault due to file conflicts. Please try again.');
+            }
+          } else {
+            throw error;
+          }
+        }
+      }
 
-        // Create EVM vault config and transaction
+      // ========================================================================
+      // SHARED: Save all related entities (same for both chains)
+      // ========================================================================
+
+      // Social links
+      if (data.socialLinks?.length > 0) {
+        await this.linksRepository.save(
+          data.socialLinks.map(link => this.linksRepository.create({ vault: newVault, name: link.name, url: link.url }))
+        );
+      }
+
+      // Assets whitelist
+      // - Cardano: lpTokenMap and collectionNameByPolicyId are populated above
+      // - EVM:     both maps are empty → lp_pool_onchain_id saves as null, names fall back to client-provided values
+      let maxCountOf = 0;
+      await Promise.all(
+        uniquePolicyIds.map(async assetItem => {
+          if (!assetItem.policyId) return;
+          const lpData = lpTokenMap.get(assetItem.policyId);
+          const rawName =
+            assetItem.collectionName ||
+            collectionNameByPolicyId.get(assetItem.policyId) ||
+            assetItem.name ||
+            assetItem.policyName ||
+            null;
+          const result = await this.assetsWhitelistRepository
+            .createQueryBuilder()
+            .insert()
+            .values({
+              vault: newVault,
+              policy_id: assetItem.policyId,
+              collection_name: rawName ? rawName.slice(0, 255) : null,
+              asset_count_cap_min: assetItem.countCapMin,
+              asset_count_cap_max: assetItem.countCapMax,
+              valuation_method: assetItem.valuationMethod || 'market',
+              custom_price_ada: assetItem.customPriceAda || null,
+              lp_pool_onchain_id: lpData?.onchainId || null,
+            })
+            .orIgnore()
+            .execute();
+          if (result.identifiers.length > 0 && assetItem.countCapMax) maxCountOf += Number(assetItem.countCapMax);
+        })
+      );
+      newVault.max_contribute_assets = maxCountOf;
+      await this.vaultsRepository.save(newVault);
+
+      // Acquirer whitelist
+      // - Cardano: merges CSV addresses + inline list
+      // - EVM:     inline list only (no CSV)
+      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromGCS(acquirerWhitelistFile.file_key) : [];
+      const allAcquirer = new Set([...(data.acquirerWhitelist?.map(i => i.walletAddress) ?? []), ...acquirerFromCsv]);
+      await Promise.all(
+        [...allAcquirer].map(walletAddress =>
+          this.acquirerWhitelistRepository.save({ vault: newVault, wallet_address: walletAddress })
+        )
+      );
+
+      // Contributor whitelist
+      const contributorsFromCsv = contributorWhitelistFile
+        ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
+        : [];
+      const allContributors = new Set([
+        ...(data.contributorWhitelist?.map(i => i.walletAddress) ?? []),
+        ...contributorsFromCsv,
+      ]);
+      await this.contributorWhitelistRepository.save(
+        [...allContributors].map(wa => ({ vault: newVault, wallet_address: wa }))
+      );
+
+      // Tags
+      if (data.tags?.length > 0) {
+        const tags = await Promise.all(
+          data.tags.map(async tagName => {
+            let tag = await this.tagsRepository.findOne({ where: { name: tagName } });
+            if (!tag) tag = await this.tagsRepository.save({ name: tagName });
+            return tag;
+          })
+        );
+        newVault.tags = tags;
+        await this.vaultsRepository.save(newVault);
+      }
+
+      // ========================================================================
+      // CHAIN-SPECIFIC: On-chain transaction creation
+      // ========================================================================
+      if (data.chainType === ChainType.robinhood) {
         const payload = await this.evmVaultSignerService.prepareVaultCreationWithExistingVault(
           userId,
           newVault.id,
           evmVaultId,
           data
         );
-
         return {
           vaultId: newVault.id,
           transactionId: payload.transactionId,
@@ -414,231 +561,19 @@ export class VaultsService {
         };
       }
 
-      // ---- Cardano path (original) ------------------------------------------
-      // Prepare vault data
-      // For acquire-only vaults, exclude contribution-related fields (they skip contribution phase)
-      const vaultData = transformToSnakeCase({
-        ...data,
-        owner: owner,
-        contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
-        acquireWindowDuration: data.acquireWindowDuration,
-        acquireOpenWindowTime,
-        contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
-        timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
-        vaultStatus: VaultStatus.created,
-        vaultImage: vaultImg,
-        ftTokenImg: ftTokenImg,
-        acquirerWhitelistCsv: acquirerWhitelistFile,
-        contributorWhitelistCsv: contributorWhitelistFile,
-      });
-
-      delete vaultData.assets_whitelist;
-      delete vaultData.acquirer_whitelist;
-      delete vaultData.contributor_whitelist;
-      delete vaultData.tags;
-
-      try {
-        newVault = await this.vaultsRepository.save(vaultData as Vault);
-        // Always reload the entity to ensure it's managed and has all relations
-        newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
-      } catch (error) {
-        // Handle unique constraint violation for file relations as fallback
-        if (error.code === '23505' && error.detail?.includes('already exists')) {
-          this.logger.warn(
-            'Duplicate key constraint violation during vault creation, retrying without file relations:',
-            error.detail
-          );
-
-          // Remove file relations and retry
-          const vaultDataWithoutFiles = { ...vaultData };
-          delete vaultDataWithoutFiles.vaultImage;
-          delete vaultDataWithoutFiles.ftTokenImg;
-          delete vaultDataWithoutFiles.acquirerWhitelistCsv;
-          delete vaultDataWithoutFiles.contributorWhitelistCsv;
-
-          try {
-            newVault = await this.vaultsRepository.save(vaultDataWithoutFiles as Vault);
-            this.logger.log('Vault creation succeeded without file relations');
-          } catch (retryError) {
-            this.logger.error('Vault creation failed even without file relations:', retryError);
-            throw new BadRequestException('Failed to create vault due to file conflicts. Please try again.');
-          }
-        } else {
-          throw error;
-        }
-      }
-
-      // Handle social links
-      if (data.socialLinks?.length > 0) {
-        const links = data.socialLinks.map(linkItem => {
-          return this.linksRepository.create({
-            vault: newVault,
-            name: linkItem.name,
-            url: linkItem.url,
-          });
-        });
-        await this.linksRepository.save(links);
-      }
-
-      // Handle assets whitelist
-      // TODO: Add lovelace support
-      let maxCountOf = 0;
-
-      // Then process them
-      const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
-
-      // Fetch LP token metadata AND verify valuation methods
-      const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
-      const lpTokensData =
-        policyIds.length > 0
-          ? await this.tokenVerificationRepository.find({
-              where: { policy_id: In(policyIds) },
-              select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
-            })
-          : [];
-      const lpTokenMap = new Map(
-        lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
-      );
-
-      // Validate LP token pricing configuration
-      for (const assetItem of uniquePolicyIds) {
-        const lpData = lpTokenMap.get(assetItem.policyId);
-
-        if (lpData?.isLp) {
-          // LP token detected - enforce lp_token_dynamic pricing
-          // Validate that LP token has an on-chain pool ID
-          if (!lpData.onchainId) {
-            throw new BadRequestException(
-              `Policy ${assetItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications. ` +
-                `Please ensure the LP token has a valid pool ID before adding it to the vault.`
-            );
-          }
-          // Auto-set to LP_TOKEN_DYNAMIC for LP tokens
-          assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
-        } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
-          // Non-LP token attempting to use lp_token_dynamic
-          throw new BadRequestException(
-            `Policy ${assetItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method. ` +
-              `Please mark it as an LP token in token_verifications or use a different valuation method.`
-          );
-        }
-      }
-
-      await Promise.all(
-        uniquePolicyIds.map(async assetItem => {
-          if (!assetItem.policyId) return;
-
-          const rawFallbackCollectionName =
-            assetItem.collectionName ||
-            collectionNameByPolicyId.get(assetItem.policyId) ||
-            assetItem.name ||
-            assetItem.policyName ||
-            null;
-
-          const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
-          const lpData = lpTokenMap.get(assetItem.policyId);
-
-          const result = await this.assetsWhitelistRepository
-            .createQueryBuilder()
-            .insert()
-            .values({
-              vault: newVault,
-              policy_id: assetItem.policyId,
-              collection_name: fallbackCollectionName,
-              asset_count_cap_min: assetItem.countCapMin,
-              asset_count_cap_max: assetItem.countCapMax,
-              valuation_method: assetItem.valuationMethod || 'market',
-              custom_price_ada: assetItem.customPriceAda || null,
-              lp_pool_onchain_id: lpData?.onchainId || null,
-            })
-            .orIgnore()
-            .execute();
-
-          if (result.identifiers.length > 0 && assetItem.countCapMax) {
-            maxCountOf += Number(assetItem.countCapMax);
-          }
-        })
-      );
-
-      newVault.max_contribute_assets = Number(maxCountOf) || 0;
-      await this.vaultsRepository.save(newVault);
-      // Handle acquirer whitelist
-      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromGCS(acquirerWhitelistFile.file_key) : [];
-
-      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
-
-      const allAcquirer = new Set([...acquirer, ...acquirerFromCsv]);
-
-      await Promise.all(
-        Array.from(allAcquirer).map(walletAddress => {
-          return this.acquirerWhitelistRepository.save({
-            vault: newVault,
-            wallet_address: walletAddress,
-          });
-        })
-      );
-
-      // Handle contributors whitelist
-      const contributorsFromCsv = contributorWhitelistFile
-        ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
-        : [];
-
-      const contributorList = data.contributorWhitelist
-        ? [...(data.contributorWhitelist.map(item => item.walletAddress) || [])]
-        : [];
-
-      const allContributors = new Set([...contributorList, ...contributorsFromCsv]);
-      const contributorsArray = [...allContributors];
-
-      await this.contributorWhitelistRepository.save(
-        contributorsArray.map(item => ({
-          vault: newVault,
-          wallet_address: item,
-        }))
-      );
-
-      // this.eventEmitter.emit('vault.whitelist_added', {
-      //   vaultId: newVault.id,
-      //   vaultName: newVault.name,
-      //   userIds: [],
-      // });
-
-      // Handle tags
-      if (data.tags?.length > 0) {
-        const tags = await Promise.all(
-          data.tags.map(async tagName => {
-            let tag = await this.tagsRepository.findOne({
-              where: { name: tagName },
-            });
-            if (!tag) {
-              tag = await this.tagsRepository.save({
-                name: tagName,
-              });
-            }
-            return tag;
-          })
-        );
-        newVault.tags = tags;
-        await this.vaultsRepository.save(newVault);
-      }
-
+      // ---- Cardano: load whitelists, validate size, build presigned tx -------
       const finalVault = await this.vaultsRepository.findOne({
         where: { id: newVault.id },
         relations: ['owner', 'social_links', 'tags', 'vault_image', 'ft_token_img'],
       });
+      if (!finalVault) throw new BadRequestException('Failed to retrieve created vault');
 
-      if (!finalVault) {
-        throw new BadRequestException('Failed to retrieve created vault');
-      }
-
-      // Load only policy_id from assets_whitelist
       const assetsWhitelistData = await this.assetsWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['policy_id'],
       });
       const policyWhitelist = [...new Set(assetsWhitelistData.map(item => item.policy_id))];
 
-      // Load wallet addresses from both contributor and acquirer whitelists
       const contributorWhitelistData = await this.contributorWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['wallet_address'],
@@ -648,12 +583,10 @@ export class VaultsService {
         select: ['wallet_address'],
       });
 
-      // Combine both whitelists into a unique array for smart contract
       const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
       const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
       const allowedContributors = [...new Set([...contributorAddresses, ...acquirerAddresses])];
 
-      // Validate combined whitelist size (Cardano transaction size limit)
       const MAX_COMBINED_WHITELIST_SIZE = 100;
       if (allowedContributors.length > MAX_COMBINED_WHITELIST_SIZE) {
         throw new BadRequestException(
@@ -663,17 +596,13 @@ export class VaultsService {
             `Maximum allowed is ${MAX_COMBINED_WHITELIST_SIZE} unique addresses to stay within Cardano transaction size limits.`
         );
       }
-
       this.logger.log(
-        `Vault ${newVault.id}: Combined whitelist - ` +
-          `${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ` +
-          `${allowedContributors.length} unique addresses`
+        `Vault ${newVault.id}: Combined whitelist — ${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ${allowedContributors.length} unique addresses`
       );
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
 
-      // Calculate start time based on contribution window type
       let startTime: number;
       let assetWindow: { start: number; end: number };
       let acquireWindow: { start: number; end: number };
@@ -776,9 +705,9 @@ export class VaultsService {
           customerAddress: finalVault.owner.address,
           vaultId: finalVault.id,
           allowedPolicies: policyWhitelist,
-          allowedContributors: allowedContributors,
+          allowedContributors,
           contractType: privacy,
-          valueMethod: valueMethod,
+          valueMethod,
           assetWindow,
           acquireWindow,
           userId: finalVault.owner.id,
@@ -788,15 +717,10 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      finalVault.ft_token_decimals = 6; //Default decimals, can be updated later based on asset properties
-
+      finalVault.ft_token_decimals = 6;
       await this.vaultsRepository.save(finalVault);
 
-      return {
-        vaultId: finalVault.id,
-        presignedTx,
-        txId: transactionId,
-      };
+      return { vaultId: finalVault.id, presignedTx, txId: transactionId };
     } catch (error) {
       this.logger.error('Error creating vault:', error);
 

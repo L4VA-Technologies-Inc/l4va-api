@@ -44,7 +44,7 @@ export class TransactionHealthService {
    * Health check cron job that runs every 30 minutes
    * Checks for transactions stuck in 'submitted' status
    */
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async checkStuckTransactions(): Promise<void> {
     this.logger.log('Starting health check for stuck transactions');
 
