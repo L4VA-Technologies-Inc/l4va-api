@@ -14,8 +14,11 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 // ---------------------------------------------------------------------------
-// ABI parameter definitions — mirrors VaultTypes.sol exactly.
-// Keep in sync with the Solidity structs if the contract is ever upgraded.
+// ABI parameter definitions — mirrors V3 VaultTypes.sol exactly.
+// V3 removes all rate tables from CycleConfig: pricing and per-wallet
+// allocations are computed off-chain and committed at closeCycle as a
+// Merkle root. Keep in sync with the Solidity structs if the contract is
+// ever upgraded.
 // ---------------------------------------------------------------------------
 
 const TIME_WINDOW = {
@@ -26,117 +29,12 @@ const TIME_WINDOW = {
   ],
 };
 
-const ASSET_VT_RATE = {
-  type: 'tuple' as const,
-  components: [
-    { name: 'vtPerAssetUnit', type: 'uint256' as const },
-    { name: 'assetDecimals', type: 'uint8' as const },
-    { name: 'version', type: 'uint32' as const },
-    { name: 'enabled', type: 'bool' as const },
-  ],
-};
-
-const NFT_COLLECTION_RATE = {
-  type: 'tuple' as const,
-  components: [
-    { name: 'vtPerToken', type: 'uint256' as const },
-    { name: 'version', type: 'uint32' as const },
-    { name: 'enabled', type: 'bool' as const },
-  ],
-};
-
-const ASSET_NATIVE_RATE = {
-  type: 'tuple' as const,
-  components: [
-    { name: 'nativePerAssetUnit', type: 'uint256' as const },
-    { name: 'assetDecimals', type: 'uint8' as const },
-    { name: 'version', type: 'uint32' as const },
-    { name: 'enabled', type: 'bool' as const },
-  ],
-};
-
-const NFT_COLLECTION_NATIVE_RATE = {
-  type: 'tuple' as const,
-  components: [
-    { name: 'nativePerToken', type: 'uint256' as const },
-    { name: 'version', type: 'uint32' as const },
-    { name: 'enabled', type: 'bool' as const },
-  ],
-};
-
 const CYCLE_CONFIG = {
   type: 'tuple' as const,
   components: [
     { name: 'assetWindow', ...TIME_WINDOW },
     { name: 'acquireWindow', ...TIME_WINDOW },
     { name: 'minAcquireThreshold', type: 'uint256' as const },
-    { name: 'nativeRate', ...ASSET_VT_RATE },
-    {
-      name: 'erc20Rates',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'asset', type: 'address' as const },
-        { name: 'rate', ...ASSET_VT_RATE },
-      ],
-    },
-    {
-      name: 'erc1155Rates',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'asset', type: 'address' as const },
-        { name: 'rate', ...ASSET_VT_RATE },
-      ],
-    },
-    {
-      name: 'nftCollectionRates',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'collection', type: 'address' as const },
-        { name: 'rate', ...NFT_COLLECTION_RATE },
-      ],
-    },
-    {
-      name: 'nftTokenIdOverrides',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'collection', type: 'address' as const },
-        { name: 'tokenId', type: 'uint256' as const },
-        { name: 'vtEntitlement', type: 'uint256' as const },
-      ],
-    },
-    {
-      name: 'erc20NativeRates',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'asset', type: 'address' as const },
-        { name: 'rate', ...ASSET_NATIVE_RATE },
-      ],
-    },
-    {
-      name: 'erc1155NativeRates',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'asset', type: 'address' as const },
-        { name: 'rate', ...ASSET_NATIVE_RATE },
-      ],
-    },
-    {
-      name: 'nftNativeCollectionRates',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'collection', type: 'address' as const },
-        { name: 'rate', ...NFT_COLLECTION_NATIVE_RATE },
-      ],
-    },
-    {
-      name: 'nftNativeTokenIdOverrides',
-      type: 'tuple[]' as const,
-      components: [
-        { name: 'collection', type: 'address' as const },
-        { name: 'tokenId', type: 'uint256' as const },
-        { name: 'nativePayoutEntitlement', type: 'uint256' as const },
-      ],
-    },
     { name: 'adaPairVtPerNativeUnit', type: 'uint256' as const },
     { name: 'assetWhitelist', type: 'address[]' as const },
     { name: 'contributorWhitelist', type: 'address[]' as const },
@@ -170,30 +68,6 @@ export interface EvmCycleConfig {
   assetWindow: { start: bigint; end: bigint };
   acquireWindow: { start: bigint; end: bigint };
   minAcquireThreshold: bigint;
-  nativeRate: { vtPerAssetUnit: bigint; assetDecimals: number; version: number; enabled: boolean };
-  erc20Rates: Array<{
-    asset: Address;
-    rate: { vtPerAssetUnit: bigint; assetDecimals: number; version: number; enabled: boolean };
-  }>;
-  erc1155Rates: Array<{
-    asset: Address;
-    rate: { vtPerAssetUnit: bigint; assetDecimals: number; version: number; enabled: boolean };
-  }>;
-  nftCollectionRates: Array<{ collection: Address; rate: { vtPerToken: bigint; version: number; enabled: boolean } }>;
-  nftTokenIdOverrides: Array<{ collection: Address; tokenId: bigint; vtEntitlement: bigint }>;
-  erc20NativeRates: Array<{
-    asset: Address;
-    rate: { nativePerAssetUnit: bigint; assetDecimals: number; version: number; enabled: boolean };
-  }>;
-  erc1155NativeRates: Array<{
-    asset: Address;
-    rate: { nativePerAssetUnit: bigint; assetDecimals: number; version: number; enabled: boolean };
-  }>;
-  nftNativeCollectionRates: Array<{
-    collection: Address;
-    rate: { nativePerToken: bigint; version: number; enabled: boolean };
-  }>;
-  nftNativeTokenIdOverrides: Array<{ collection: Address; tokenId: bigint; nativePayoutEntitlement: bigint }>;
   adaPairVtPerNativeUnit: bigint;
   assetWhitelist: Address[];
   contributorWhitelist: Address[];
@@ -437,20 +311,9 @@ export class EvmVaultSignerService {
         assetWindow: { start: assetWindowStart, end: assetWindowEnd },
         acquireWindow: { start: acquireWindowStart, end: acquireWindowEnd },
         minAcquireThreshold: 0n,
-        nativeRate: {
-          vtPerAssetUnit: 1000n * 10n ** 18n, // 1000 VT per ETH — admin can update later
-          assetDecimals: 18,
-          version: 0,
-          enabled: true,
-        },
-        erc20Rates: [],
-        erc1155Rates: [],
-        nftCollectionRates: [],
-        nftTokenIdOverrides: [],
-        erc20NativeRates: [],
-        erc1155NativeRates: [],
-        nftNativeCollectionRates: [],
-        nftNativeTokenIdOverrides: [],
+        // V3: LP-pair multiplier only. Contribution-time rates are gone —
+        // final VT / native allocations are committed off-chain and
+        // published on-chain as a Merkle root at `closeCycle`.
         adaPairVtPerNativeUnit: 0n,
         assetWhitelist: [],
         contributorWhitelist: [],
