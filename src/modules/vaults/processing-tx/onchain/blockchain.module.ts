@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AssetsModule } from '../../assets/assets.module';
+import { TransactionHealthService } from '../offchain-tx/transaction-health.service';
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
@@ -45,6 +46,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmVaultSignerService,
     EvmWebhookService,
     VaultManagingService,
+    TransactionHealthService,
   ],
   exports: [
     BlockchainService,
@@ -52,6 +54,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     BlockchainWebhookService,
     VaultManagingService,
     MetadataRegistryApiService,
+    TransactionHealthService,
   ],
 })
 export class BlockchainModule {}

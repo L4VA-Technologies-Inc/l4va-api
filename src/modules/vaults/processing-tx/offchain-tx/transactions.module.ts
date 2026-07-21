@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { TransactionHealthService } from './transaction-health.service';
 import { TransactionsController } from './transactions.controller';
 import { TransactionsService } from './transactions.service';
 
@@ -19,8 +18,8 @@ import { TaptoolsModule } from '@/modules/taptools/taptools.module';
     TaptoolsModule,
     GoogleCloudStorageModule,
   ],
-  providers: [TransactionsService, TransactionHealthService],
+  providers: [TransactionsService],
   controllers: [TransactionsController],
-  exports: [TransactionsService, TransactionHealthService],
+  exports: [TransactionsService],
 })
 export class TransactionsModule {}

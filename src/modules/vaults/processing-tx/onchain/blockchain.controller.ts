@@ -22,6 +22,8 @@ import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
+import { TransactionHealthService } from '../offchain-tx/transaction-health.service';
+import { TriggerHealthCheckRes } from '../offchain-tx/dto/trigger-health-check.res';
 
 import { Vault } from '@/database/vault.entity';
 import { AdminGuard } from '@/modules/auth/admin.guard';
@@ -35,6 +37,7 @@ export class BlockchainController {
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly evmWebhookService: EvmWebhookService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
+    private readonly transactionHealthService: TransactionHealthService,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
   ) {}
@@ -205,5 +208,13 @@ export class BlockchainController {
       message: result.message,
       prUrl: (result.data as { prUrl?: string })?.prUrl,
     };
+  }
+
+  @Post('health-check')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Manually trigger health check for stuck transactions' })
+  @ApiResponse({ status: 200, description: 'Health check completed', type: TriggerHealthCheckRes })
+  async triggerHealthCheck(): Promise<TriggerHealthCheckRes> {
+    return this.transactionHealthService.triggerHealthCheck();
   }
 }

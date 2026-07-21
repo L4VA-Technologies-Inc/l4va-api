@@ -2,12 +2,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { keccak256 } from 'viem';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
-import { EvmWebhookDto, EvmWebhookLog, EvmWebhookTransaction } from './dto/evm-webhook.dto';
+import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
-import { EvmVaultSignerService } from './evm-vault-signer.service';
 
 import { TransactionStatus } from '@/types/transaction.types';
 
@@ -21,18 +19,12 @@ import { TransactionStatus } from '@/types/transaction.types';
 export class EvmWebhookService {
   private readonly logger = new Logger(EvmWebhookService.name);
   private readonly signingKey: string;
-  private readonly vaultCreatedTopic: string;
 
   constructor(
     private readonly blockchainWebhookService: BlockchainWebhookService,
-    private readonly evmVaultSignerService: EvmVaultSignerService,
     private readonly configService: ConfigService
   ) {
     this.signingKey = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
-    // Precompute VaultCreated event signature
-    this.vaultCreatedTopic = keccak256(
-      new TextEncoder().encode('VaultCreated(bytes32,address,address,address,address)')
-    ).toLowerCase();
   }
 
   /**
@@ -81,14 +73,18 @@ export class EvmWebhookService {
 
     const summaries: WebhookTxSummaryDto[] = [];
 
-    // First pass: parse VaultCreated events to update vault contract addresses
-    for (const log of logs) {
-      await this.parseVaultCreatedEvent(log);
-    }
-
-    // Second pass: update transaction statuses
     for (const tx of txByHash.values()) {
-      const localTxId = await this.processTransaction(tx);
+      const txLogs = logs
+        .filter(log => log?.transaction?.hash === tx.hash)
+        .map(log => ({ topics: log.topics ?? [], data: log.data ?? '0x' }));
+
+      const localTxId = await this.blockchainWebhookService.applyEvmTransactionStatus(
+        tx.hash,
+        tx.index ?? 0,
+        this.determineInternalTransactionStatus(tx),
+        txLogs
+      );
+
       summaries.push({
         txHash: tx.hash,
         updatedLocalTxIds: localTxId ? [localTxId] : [],
@@ -96,15 +92,6 @@ export class EvmWebhookService {
     }
 
     return summaries;
-  }
-
-  /**
-   * Update a single EVM transaction using the shared confirmation logic.
-   * @returns Updated local transaction id, or null if no matching transaction
-   */
-  private async processTransaction(tx: EvmWebhookTransaction): Promise<string | null> {
-    const internalStatus = this.determineInternalTransactionStatus(tx);
-    return this.blockchainWebhookService.applyTransactionStatus(tx.hash, tx.index ?? 0, internalStatus);
   }
 
   /**
@@ -120,30 +107,6 @@ export class EvmWebhookService {
       return TransactionStatus.failed;
     }
     return TransactionStatus.pending;
-  }
-
-  /**
-   * Parse VaultCreated events from webhook logs and update vault contract addresses.
-   * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
-   */
-  private async parseVaultCreatedEvent(log: EvmWebhookLog): Promise<void> {
-    const topics = log.topics ?? [];
-    if (topics.length === 0) return;
-
-    // Check if this is a VaultCreated event
-    if (topics[0]?.toLowerCase() !== this.vaultCreatedTopic) {
-      return;
-    }
-
-    this.logger.debug(`VaultCreated event detected in tx ${log.transaction?.hash} — updating vault contract address`);
-
-    try {
-      await this.evmVaultSignerService.updateVaultFromCreatedEvent(log.transaction?.hash, topics, log.data ?? '0x');
-    } catch (error) {
-      this.logger.error(
-        `Failed to update vault from VaultCreated event in tx ${log.transaction?.hash}: ${(error as Error).message}`
-      );
-    }
   }
 
   /**

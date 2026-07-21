@@ -3,10 +3,12 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { keccak256 } from 'viem';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
+import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { Asset } from '@/database/asset.entity';
@@ -25,6 +27,7 @@ export class BlockchainWebhookService {
   private readonly logger = new Logger(BlockchainWebhookService.name);
   private readonly webhookAuthToken: string;
   private readonly maxEventAge: number;
+  private readonly vaultCreatedTopic: string;
 
   // Status mapping for blockchain events
   private readonly STATUS_MAP: Record<OnchainTransactionStatus, TransactionStatus> = {
@@ -39,6 +42,7 @@ export class BlockchainWebhookService {
     private readonly configService: ConfigService,
     private readonly assetsService: AssetsService,
     private readonly rewardEventProducer: RewardEventProducer,
+    private readonly evmVaultSignerService: EvmVaultSignerService,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Claim)
@@ -50,6 +54,9 @@ export class BlockchainWebhookService {
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
+    this.vaultCreatedTopic = keccak256(
+      new TextEncoder().encode('VaultCreated(bytes32,address,address,address,address)')
+    ).toLowerCase();
   }
 
   /**
@@ -252,6 +259,41 @@ export class BlockchainWebhookService {
       this.logger.error(`WH: Failed to process transaction ${txHash}: ${error.message}`, error.stack);
       return null;
     }
+  }
+
+  /**
+   * Unified EVM confirmation handler shared by both the Alchemy webhook and the
+   * health-check cron job. Parses any VaultCreated events from the transaction
+   * logs BEFORE applying the status transition so that contract addresses are
+   * persisted before handleCreateVaultConfirmation runs.
+   *
+   * @param txHash  On-chain EVM transaction hash
+   * @param txIndex Transaction index within its block
+   * @param status  Resolved internal status (confirmed / failed)
+   * @param logs    Normalized log entries for this transaction
+   */
+  async applyEvmTransactionStatus(
+    txHash: string,
+    txIndex: number,
+    status: TransactionStatus,
+    logs: { topics: string[]; data: string }[]
+  ): Promise<string | null> {
+    // Parse VaultCreated events first so vault contract addresses are set
+    // before handleCreateVaultConfirmation is called inside applyTransactionStatus
+    for (const log of logs) {
+      const topics = log.topics ?? [];
+      if (topics[0]?.toLowerCase() === this.vaultCreatedTopic) {
+        try {
+          await this.evmVaultSignerService.updateVaultFromCreatedEvent(txHash, topics, log.data);
+        } catch (error) {
+          this.logger.error(
+            `WH: Failed to update vault from VaultCreated event in tx ${txHash}: ${(error as Error).message}`
+          );
+        }
+      }
+    }
+
+    return this.applyTransactionStatus(txHash, txIndex, status);
   }
 
   /**
