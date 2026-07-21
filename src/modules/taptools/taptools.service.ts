@@ -6,6 +6,7 @@ import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
+import { createPublicClient, defineChain, http, parseAbi, type Address } from 'viem';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
@@ -30,12 +31,47 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
 import {
+  ChainType,
   VAULT_STATUSES_ACTIVE,
   VAULT_STATUSES_WITH_VT_TOKENS,
   VAULT_STATUSES_WITHOUT_VT_TOKENS,
   VaultStatus,
 } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
+
+// ---------------------------------------------------------------------------
+// EVM ABI fragments used for wallet asset enumeration
+// ---------------------------------------------------------------------------
+const ERC165_ABI = parseAbi(['function supportsInterface(bytes4 interfaceId) view returns (bool)']);
+
+const ERC20_ABI = parseAbi([
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
+  'function balanceOf(address account) view returns (uint256)',
+]);
+
+const ERC721_ABI = parseAbi([
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function balanceOf(address owner) view returns (uint256)',
+  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
+  'function tokenURI(uint256 tokenId) view returns (string)',
+]);
+
+const ERC1155_ABI = parseAbi([
+  'function balanceOf(address account, uint256 id) view returns (uint256)',
+  'function uri(uint256 id) view returns (string)',
+]);
+
+// ERC-165 interface IDs
+const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
+const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
+
+// Transfer event topic0 values for token enumeration
+const ERC721_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' as const;
+const ERC1155_TRANSFER_SINGLE_TOPIC = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62' as const;
+const ERC1155_TRANSFER_BATCH_TOPIC = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb' as const;
 
 /** Map of policyId -> custom price in ADA for vault-specific asset valuations */
 export type CustomPriceMap = Map<string, number>;
@@ -1932,8 +1968,14 @@ export class TaptoolsService {
     try {
       const adaPriceUsd = await this.priceService.getAdaPrice();
 
-      // Get custom prices from vault whitelist if vaultId provided
-      const customPriceMap = vaultId ? await this.getVaultCustomPrices(vaultId) : new Map();
+      // Resolve vault to get chain type and custom prices
+      const vault = await this.vaultRepository.findOne({ where: { id: vaultId }, select: ['id', 'chain_type'] });
+      const customPriceMap = vault ? await this.getVaultCustomPrices(vault.id) : new Map();
+
+      // Route EVM chains to dedicated handler
+      if (vault?.chain_type === ChainType.robinhood) {
+        return this.getEvmWalletSummaryPaginated(paginationQuery, customPriceMap, adaPriceUsd);
+      }
 
       // Get overview (cached)
       const overview = await this.getWalletOverview(walletAddress, adaPriceUsd);
@@ -2245,6 +2287,703 @@ export class TaptoolsService {
       this.logger.error(`Failed to load custom prices for vault ${vaultId}:`, error.message);
       return customPriceMap;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM (Robinhood chain) wallet asset fetching
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolve a mock price for EVM testnet assets.
+   * Priority: customPriceMap → EVM_TESTNET_NFT/FT_PRICE_ADA env → 1 ADA fallback.
+   * On mainnet always returns 0 so the real price pipeline takes over.
+   */
+  private getEvmTestnetPrice(contractAddress: string, customPriceMap: CustomPriceMap, isNft: boolean): number {
+    const contractKey = contractAddress.toLowerCase();
+    const custom = customPriceMap.get(contractKey) ?? customPriceMap.get(contractAddress);
+    if (custom !== undefined) return custom;
+    if (this.isMainnet) return 0;
+
+    const envKey = isNft ? 'EVM_TESTNET_NFT_PRICE_ADA' : 'EVM_TESTNET_FT_PRICE_ADA';
+    const envPrice = this.configService.get<number>(envKey);
+    return envPrice ?? 1;
+  }
+
+  /**
+   * Fetch token metadata JSON from a tokenURI / ERC-1155 uri string.
+   * Handles ipfs:// and http(s):// URIs. Returns null on any failure.
+   *
+   * NOTE: Alchemy's NFT API (getNFTsForOwner) supports rich metadata but only for
+   * chains Alchemy indexes (Ethereum, Polygon, Arbitrum, Base, etc.). Robinhood
+   * testnet is a custom chain and is NOT indexed by Alchemy, so we fetch metadata
+   * directly from tokenURI here. If you later add Alchemy Custom Network support,
+   * replace this with an Alchemy getNFTsForOwner call.
+   */
+  private async fetchEvmNftMetadata(tokenUri: string): Promise<{
+    name?: string;
+    description?: string;
+    image?: string;
+    attributes?: Array<{ trait_type?: string; value?: string | number }>;
+  } | null> {
+    if (!tokenUri) return null;
+    try {
+      let url = tokenUri;
+      if (tokenUri.startsWith('ipfs://')) {
+        const ipfsGateway = this.configService.get<string>('IPFS_GATEWAY') ?? 'https://ipfs.io/ipfs/';
+        url = ipfsGateway + tokenUri.slice(7);
+      } else if (!tokenUri.startsWith('http')) {
+        return null;
+      }
+      const response = await axios.get(url, { timeout: 5000 });
+      if (response.data && typeof response.data === 'object') return response.data;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private getEvmPublicClient() {
+    const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
+    if (!evmRpcUrl) {
+      throw new HttpException('EVM RPC URL not configured', 500);
+    }
+    const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
+    const robinhoodChain = defineChain({
+      id: chainId,
+      name: 'Robinhood',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: { default: { http: [evmRpcUrl] } },
+    });
+    return createPublicClient({ chain: robinhoodChain, transport: http(evmRpcUrl) });
+  }
+
+  /**
+   * Detect whether a contract is ERC721, ERC1155, or ERC20 via ERC-165.
+   * Falls back to ERC20 if supportsInterface is not available.
+   */
+  private async detectEvmContractType(client: any, contractAddress: string): Promise<'ERC721' | 'ERC1155' | 'ERC20'> {
+    try {
+      const [isErc721, isErc1155] = await Promise.all([
+        client
+          .readContract({
+            address: contractAddress as Address,
+            abi: ERC165_ABI,
+            functionName: 'supportsInterface',
+            args: [ERC721_INTERFACE_ID],
+          })
+          .catch(() => false),
+        client
+          .readContract({
+            address: contractAddress as Address,
+            abi: ERC165_ABI,
+            functionName: 'supportsInterface',
+            args: [ERC1155_INTERFACE_ID],
+          })
+          .catch(() => false),
+      ]);
+
+      if (isErc721) return 'ERC721';
+      if (isErc1155) return 'ERC1155';
+      return 'ERC20';
+    } catch {
+      return 'ERC20';
+    }
+  }
+
+  private async getErc20Asset(
+    client: any,
+    contractAddress: string,
+    walletAddress: string,
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<AssetValueDto | null> {
+    try {
+      const addr = contractAddress as Address;
+      const wallet = walletAddress as Address;
+
+      const [rawBalance, name, symbol, decimals] = await Promise.all([
+        client
+          .readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [wallet] })
+          .catch(() => 0n),
+        client.readContract({ address: addr, abi: ERC20_ABI, functionName: 'name' }).catch(() => contractAddress),
+        client.readContract({ address: addr, abi: ERC20_ABI, functionName: 'symbol' }).catch(() => ''),
+        client.readContract({ address: addr, abi: ERC20_ABI, functionName: 'decimals' }).catch(() => 18),
+      ]);
+
+      const balance = Number(rawBalance) / Math.pow(10, Number(decimals));
+      if (balance <= 0) return null;
+
+      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, false);
+      const priceUsd = priceAda * adaPriceUsd;
+
+      const dto: AssetValueDto = plainToInstance(
+        AssetValueDto,
+        {
+          tokenId: contractAddress,
+          name: String(name),
+          displayName: String(name),
+          ticker: String(symbol),
+          quantity: balance,
+          isNft: false,
+          isFungibleToken: true,
+          priceAda,
+          priceUsd,
+          valueAda: +(balance * priceAda).toFixed(6),
+          valueUsd: +(balance * priceUsd).toFixed(6),
+          metadata: {
+            policyId: contractAddress,
+            decimals: Number(decimals),
+          },
+        },
+        { excludeExtraneousValues: true }
+      );
+
+      return dto;
+    } catch (err: any) {
+      this.logger.warn(`Failed to fetch ERC20 asset ${contractAddress}: ${err.message}`);
+      return null;
+    }
+  }
+
+  private async getErc721Assets(
+    client: any,
+    contractAddress: string,
+    walletAddress: string,
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<AssetValueDto[]> {
+    try {
+      const addr = contractAddress as Address;
+      const wallet = walletAddress as Address;
+
+      const [balance, collectionName, symbol] = await Promise.all([
+        client
+          .readContract({ address: addr, abi: ERC721_ABI, functionName: 'balanceOf', args: [wallet] })
+          .catch(() => 0n),
+        client.readContract({ address: addr, abi: ERC721_ABI, functionName: 'name' }).catch(() => contractAddress),
+        client.readContract({ address: addr, abi: ERC721_ABI, functionName: 'symbol' }).catch(() => ''),
+      ]);
+
+      const count = Number(balance);
+      if (count === 0) return [];
+
+      // Enumerate token IDs via tokenOfOwnerByIndex (ERC721Enumerable)
+      const indexCalls = Array.from({ length: count }, (_, i) => ({
+        address: addr,
+        abi: ERC721_ABI,
+        functionName: 'tokenOfOwnerByIndex' as const,
+        args: [wallet, BigInt(i)] as [Address, bigint],
+      }));
+
+      const indexResults = await client.multicall({ contracts: indexCalls, allowFailure: true });
+
+      const tokenIds: bigint[] = indexResults.filter(r => r.status === 'success').map(r => r.result as bigint);
+
+      if (tokenIds.length === 0) {
+        this.logger.warn(`ERC721 ${contractAddress}: tokenOfOwnerByIndex not available, cannot enumerate tokens`);
+        return [];
+      }
+
+      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, true);
+      const priceUsd = priceAda * adaPriceUsd;
+
+      // Fetch tokenURIs for metadata enrichment (name / image / attributes)
+      const uriCalls = tokenIds.map(id => ({
+        address: addr,
+        abi: ERC721_ABI,
+        functionName: 'tokenURI' as const,
+        args: [id] as [bigint],
+      }));
+      const uriResults = await client.multicall({ contracts: uriCalls, allowFailure: true });
+      const metadataList = await Promise.all(
+        uriResults.map(r => (r.status === 'success' ? this.fetchEvmNftMetadata(r.result as string) : null))
+      );
+
+      const assets: AssetValueDto[] = tokenIds.map((tokenId, i) => {
+        const tokenIdStr = tokenId.toString();
+        const meta = metadataList[i];
+        return plainToInstance(
+          AssetValueDto,
+          {
+            tokenId: `${contractAddress}_${tokenIdStr}`,
+            name: meta?.name ?? `${String(collectionName)} #${tokenIdStr}`,
+            displayName: meta?.name ?? `${String(collectionName)} #${tokenIdStr}`,
+            ticker: String(symbol),
+            quantity: 1,
+            isNft: true,
+            isFungibleToken: false,
+            priceAda,
+            priceUsd,
+            valueAda: priceAda,
+            valueUsd: priceUsd,
+            metadata: {
+              policyId: contractAddress,
+              assetName: tokenIdStr,
+              image: meta?.image,
+              description: meta?.description,
+              attributes: meta?.attributes,
+              onchainMetadata: { tokenId: tokenIdStr, ...(meta ?? {}) },
+            },
+          },
+          { excludeExtraneousValues: true }
+        );
+      });
+
+      return assets;
+    } catch (err: any) {
+      this.logger.warn(`Failed to fetch ERC721 assets for ${contractAddress}: ${err.message}`);
+      return [];
+    }
+  }
+
+  private async getErc1155Assets(
+    client: any,
+    contractAddress: string,
+    walletAddress: string,
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<AssetValueDto[]> {
+    try {
+      const addr = contractAddress as Address;
+      const wallet = walletAddress as Address;
+
+      // Discover token IDs via TransferSingle and TransferBatch event logs
+      const [singleLogs, batchLogs] = await Promise.all([
+        client
+          .getLogs({
+            address: addr,
+            topics: [ERC1155_TRANSFER_SINGLE_TOPIC, null, null, wallet as any],
+            fromBlock: 0n,
+            toBlock: 'latest',
+          })
+          .catch(() => []),
+        client
+          .getLogs({
+            address: addr,
+            topics: [ERC1155_TRANSFER_BATCH_TOPIC, null, null, wallet as any],
+            fromBlock: 0n,
+            toBlock: 'latest',
+          })
+          .catch(() => []),
+      ]);
+
+      const tokenIdSet = new Set<bigint>();
+
+      // Parse TransferSingle: data = abi.encode(uint256 id, uint256 value)
+      for (const log of singleLogs) {
+        if (log.data && log.data !== '0x') {
+          const id = BigInt('0x' + log.data.slice(2, 66));
+          tokenIdSet.add(id);
+        }
+      }
+
+      // Parse TransferBatch: data = abi.encode(uint256[] ids, uint256[] values)
+      for (const log of batchLogs) {
+        if (log.data && log.data !== '0x') {
+          const data = log.data.slice(2); // strip 0x
+          // offset for ids array is in first 32 bytes, but since it's the first param it starts at 0x40
+          const idsOffset = parseInt(data.slice(0, 64), 16) * 2;
+          const idsLength = parseInt(data.slice(idsOffset, idsOffset + 64), 16);
+          for (let i = 0; i < idsLength; i++) {
+            const id = BigInt('0x' + data.slice(idsOffset + 64 + i * 64, idsOffset + 64 + (i + 1) * 64));
+            tokenIdSet.add(id);
+          }
+        }
+      }
+
+      if (tokenIdSet.size === 0) return [];
+
+      // Batch check current balances
+      const tokenIds = Array.from(tokenIdSet);
+      const balanceCalls = tokenIds.map(id => ({
+        address: addr,
+        abi: ERC1155_ABI,
+        functionName: 'balanceOf' as const,
+        args: [wallet, id] as [Address, bigint],
+      }));
+
+      const balanceResults = await client.multicall({ contracts: balanceCalls, allowFailure: true });
+
+      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, true);
+      const priceUsd = priceAda * adaPriceUsd;
+
+      // Fetch ERC-1155 uris for metadata enrichment
+      const uriCalls1155 = tokenIds.map(id => ({
+        address: addr,
+        abi: ERC1155_ABI,
+        functionName: 'uri' as const,
+        args: [id] as [bigint],
+      }));
+      const uriResults1155 = await client.multicall({ contracts: uriCalls1155, allowFailure: true });
+      const metadataList1155 = await Promise.all(
+        uriResults1155.map((r, i) => {
+          if (r.status !== 'success') return null;
+          // ERC-1155 uri may contain {id} template — replace with zero-padded hex
+          const raw = r.result as string;
+          const hexId = tokenIds[i].toString(16).padStart(64, '0');
+          return this.fetchEvmNftMetadata(raw.replace('{id}', hexId));
+        })
+      );
+
+      const assets: AssetValueDto[] = [];
+      for (let i = 0; i < tokenIds.length; i++) {
+        const result = balanceResults[i];
+        if (result.status !== 'success') continue;
+
+        const qty = Number(result.result as bigint);
+        if (qty <= 0) continue;
+
+        const tokenIdStr = tokenIds[i].toString();
+        const meta = metadataList1155[i];
+        assets.push(
+          plainToInstance(
+            AssetValueDto,
+            {
+              tokenId: `${contractAddress}_${tokenIdStr}`,
+              name: meta?.name ?? `Token #${tokenIdStr}`,
+              displayName: meta?.name ?? `Token #${tokenIdStr}`,
+              quantity: qty,
+              isNft: true,
+              isFungibleToken: false,
+              priceAda,
+              priceUsd,
+              valueAda: +(qty * priceAda).toFixed(6),
+              valueUsd: +(qty * priceUsd).toFixed(6),
+              metadata: {
+                policyId: contractAddress,
+                assetName: tokenIdStr,
+                image: meta?.image,
+                description: meta?.description,
+                attributes: meta?.attributes,
+                onchainMetadata: { tokenId: tokenIdStr, ...(meta ?? {}) },
+              },
+            },
+            { excludeExtraneousValues: true }
+          )
+        );
+      }
+
+      return assets;
+    } catch (err: any) {
+      this.logger.warn(`Failed to fetch ERC1155 assets for ${contractAddress}: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get paginated wallet summary for EVM (Robinhood) chain.
+   * Uses Alchemy APIs (NFT + Token) when ALCHEMY_API_KEY is configured,
+   * falls back to direct RPC enumeration otherwise.
+   *
+   * Alchemy network names for Robinhood:
+   *   testnet → robinhood-testnet   (set ALCHEMY_NETWORK=robinhood-testnet)
+   *   mainnet → robinhood-mainnet   (set ALCHEMY_NETWORK=robinhood-mainnet)
+   */
+  private async getEvmWalletSummaryPaginated(
+    paginationQuery: PaginationQueryDto,
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<PaginatedWalletSummaryDto> {
+    const alchemyKey = this.configService.get<string>('ALCHEMY_API_KEY');
+    const alchemyNetwork = this.configService.get<string>('ALCHEMY_NETWORK', 'robinhood-testnet');
+
+    if (alchemyKey) {
+      try {
+        return await this.getEvmWalletSummaryViaAlchemy(
+          paginationQuery,
+          customPriceMap,
+          adaPriceUsd,
+          alchemyKey,
+          alchemyNetwork
+        );
+      } catch (err: any) {
+        this.logger.warn(`Alchemy EVM wallet summary failed, falling back to RPC: ${err.message}`);
+      }
+    }
+
+    return this.getEvmWalletSummaryViaRpc(paginationQuery, customPriceMap, adaPriceUsd);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Alchemy-based EVM wallet asset fetching
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch NFTs (ERC721 + ERC1155) owned by a wallet via Alchemy NFT API.
+   * Returns fully enriched AssetValueDto array including metadata.
+   */
+  private async fetchAlchemyNfts(
+    apiKey: string,
+    network: string,
+    walletAddress: string,
+    contracts: string[],
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<AssetValueDto[]> {
+    const nftBase = `https://${network}.g.alchemy.com/nft/v3/${apiKey}`;
+    const contractParams = contracts.map(c => `contractAddresses[]=${encodeURIComponent(c)}`).join('&');
+    const url = `${nftBase}/getNFTsForOwner?owner=${encodeURIComponent(walletAddress)}&${contractParams}&withMetadata=true&pageSize=100`;
+
+    const response = await axios.get(url, { timeout: 10_000 });
+    const ownedNfts: any[] = response.data?.ownedNfts ?? [];
+
+    return ownedNfts.map(nft => {
+      const contractAddress: string = nft.contract?.address ?? '';
+      const tokenId: string = nft.tokenId ?? '0';
+      const qty = parseInt(nft.balance ?? '1', 10) || 1;
+
+      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, true);
+      const priceUsd = priceAda * adaPriceUsd;
+
+      const name = nft.name ?? `${nft.contract?.name ?? contractAddress} #${tokenId}`;
+      const image = nft.image?.cachedUrl ?? nft.image?.originalUrl ?? nft.raw?.metadata?.image ?? undefined;
+
+      return plainToInstance(
+        AssetValueDto,
+        {
+          tokenId: `${contractAddress}_${tokenId}`,
+          name,
+          displayName: name,
+          ticker: nft.contract?.symbol ?? undefined,
+          quantity: qty,
+          isNft: true,
+          isFungibleToken: false,
+          priceAda,
+          priceUsd,
+          valueAda: +(qty * priceAda).toFixed(6),
+          valueUsd: +(qty * priceUsd).toFixed(6),
+          metadata: {
+            policyId: contractAddress,
+            assetName: tokenId,
+            image,
+            description: nft.description ?? nft.raw?.metadata?.description ?? undefined,
+            attributes: nft.raw?.metadata?.attributes ?? undefined,
+            onchainMetadata: {
+              tokenId,
+              tokenType: nft.tokenType,
+              ...(nft.raw?.metadata ?? {}),
+            },
+          },
+        },
+        { excludeExtraneousValues: true }
+      );
+    });
+  }
+
+  /**
+   * Fetch ERC20 token balances + metadata via Alchemy Token API.
+   * Skips contracts that are known NFT contracts (already fetched).
+   */
+  private async fetchAlchemyErc20s(
+    apiKey: string,
+    network: string,
+    walletAddress: string,
+    contracts: string[],
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<AssetValueDto[]> {
+    const rpcBase = `https://${network}.g.alchemy.com/v2/${apiKey}`;
+
+    // Batch-fetch balances
+    const balanceRes = await axios.post(
+      rpcBase,
+      { jsonrpc: '2.0', method: 'alchemy_getTokenBalances', params: [walletAddress, contracts], id: 1 },
+      { timeout: 10_000 }
+    );
+
+    const tokenBalances: Array<{ contractAddress: string; tokenBalance: string }> =
+      balanceRes.data?.result?.tokenBalances ?? [];
+
+    const nonZero = tokenBalances.filter(tb => {
+      try {
+        return BigInt(tb.tokenBalance ?? '0x0') > 0n;
+      } catch {
+        return false;
+      }
+    });
+
+    if (nonZero.length === 0) return [];
+
+    // Fetch metadata for each non-zero token concurrently
+    const withMeta = await Promise.all(
+      nonZero.map(async tb => {
+        try {
+          const metaRes = await axios.post(
+            rpcBase,
+            { jsonrpc: '2.0', method: 'alchemy_getTokenMetadata', params: [tb.contractAddress], id: 1 },
+            { timeout: 5_000 }
+          );
+          return { ...tb, meta: metaRes.data?.result ?? {} };
+        } catch {
+          return { ...tb, meta: {} };
+        }
+      })
+    );
+
+    return withMeta
+      .map(({ contractAddress, tokenBalance, meta }) => {
+        const decimals: number = meta?.decimals ?? 18;
+        let balance = 0;
+        try {
+          balance = Number(BigInt(tokenBalance)) / Math.pow(10, decimals);
+        } catch {
+          return null;
+        }
+        if (balance <= 0) return null;
+
+        const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, false);
+        const priceUsd = priceAda * adaPriceUsd;
+
+        return plainToInstance(
+          AssetValueDto,
+          {
+            tokenId: contractAddress,
+            name: meta?.name ?? contractAddress,
+            displayName: meta?.name ?? contractAddress,
+            ticker: meta?.symbol ?? undefined,
+            quantity: balance,
+            isNft: false,
+            isFungibleToken: true,
+            priceAda,
+            priceUsd,
+            valueAda: +(balance * priceAda).toFixed(6),
+            valueUsd: +(balance * priceUsd).toFixed(6),
+            metadata: {
+              policyId: contractAddress,
+              decimals,
+              image: meta?.logo ?? undefined,
+            },
+          },
+          { excludeExtraneousValues: true }
+        );
+      })
+      .filter((a): a is AssetValueDto => a !== null);
+  }
+
+  /** Alchemy-based implementation of EVM wallet summary. */
+  private async getEvmWalletSummaryViaAlchemy(
+    paginationQuery: PaginationQueryDto,
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number,
+    apiKey: string,
+    network: string
+  ): Promise<PaginatedWalletSummaryDto> {
+    const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
+    const contracts = whitelistedPolicies ?? [];
+    const allAssets: AssetValueDto[] = [];
+
+    // --- NFTs (ERC721 + ERC1155) ---
+    if (filter !== 'tokens' && contracts.length > 0) {
+      const nfts = await this.fetchAlchemyNfts(apiKey, network, walletAddress, contracts, customPriceMap, adaPriceUsd);
+      allAssets.push(...nfts);
+    }
+
+    // --- ERC20 tokens: skip contracts that already returned NFTs ---
+    if (filter !== 'nfts' && contracts.length > 0) {
+      const nftContractSet = new Set(allAssets.map(a => (a.metadata?.policyId ?? '').toLowerCase()));
+      const erc20Candidates =
+        filter === 'tokens' ? contracts : contracts.filter(c => !nftContractSet.has(c.toLowerCase()));
+
+      if (erc20Candidates.length > 0) {
+        const tokens = await this.fetchAlchemyErc20s(
+          apiKey,
+          network,
+          walletAddress,
+          erc20Candidates,
+          customPriceMap,
+          adaPriceUsd
+        );
+        allAssets.push(...tokens);
+      }
+    }
+
+    return this.buildEvmPaginatedResponse(walletAddress, allAssets, page, limit, search);
+  }
+
+  /** Direct-RPC fallback for EVM wallet summary (used when Alchemy is not configured). */
+  private async getEvmWalletSummaryViaRpc(
+    paginationQuery: PaginationQueryDto,
+    customPriceMap: CustomPriceMap,
+    adaPriceUsd: number
+  ): Promise<PaginatedWalletSummaryDto> {
+    const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
+
+    const client = this.getEvmPublicClient();
+    const allAssets: AssetValueDto[] = [];
+
+    for (const contractAddress of whitelistedPolicies ?? []) {
+      const contractType = await this.detectEvmContractType(client, contractAddress);
+
+      if (contractType === 'ERC721' && filter !== 'tokens') {
+        const nfts = await this.getErc721Assets(client, contractAddress, walletAddress, customPriceMap, adaPriceUsd);
+        allAssets.push(...nfts);
+      } else if (contractType === 'ERC1155' && filter !== 'tokens') {
+        const tokens = await this.getErc1155Assets(client, contractAddress, walletAddress, customPriceMap, adaPriceUsd);
+        allAssets.push(...tokens);
+      } else if (contractType === 'ERC20' && filter !== 'nfts') {
+        const token = await this.getErc20Asset(client, contractAddress, walletAddress, customPriceMap, adaPriceUsd);
+        if (token) allAssets.push(token);
+      }
+    }
+
+    return this.buildEvmPaginatedResponse(walletAddress, allAssets, page, limit, search);
+  }
+
+  /** Shared helper: search + paginate + wrap into PaginatedWalletSummaryDto. */
+  private buildEvmPaginatedResponse(
+    walletAddress: string,
+    allAssets: AssetValueDto[],
+    page: number,
+    limit: number,
+    search?: string
+  ): PaginatedWalletSummaryDto {
+    const filtered = search
+      ? allAssets.filter(
+          a =>
+            a.name.toLowerCase().includes(search.toLowerCase()) ||
+            a.ticker?.toLowerCase().includes(search.toLowerCase())
+        )
+      : allAssets;
+
+    const total = filtered.length;
+    const offset = (page - 1) * limit;
+    const pageAssets = filtered.slice(offset, offset + limit);
+
+    return plainToInstance(
+      PaginatedWalletSummaryDto,
+      {
+        overview: plainToInstance(
+          WalletOverviewDto,
+          {
+            wallet: walletAddress,
+            totalValueAda: +allAssets.reduce((s, a) => s + a.valueAda, 0).toFixed(4),
+            totalValueUsd: +allAssets.reduce((s, a) => s + a.valueUsd, 0).toFixed(4),
+            lastUpdated: new Date().toISOString(),
+            summary: {
+              totalAssets: allAssets.length,
+              nfts: allAssets.filter(a => a.isNft).length,
+              tokens: allAssets.filter(a => a.isFungibleToken).length,
+              ada: 0,
+            },
+          },
+          { excludeExtraneousValues: true }
+        ),
+        assets: pageAssets,
+        pagination: plainToInstance(
+          PaginationMetaDto,
+          {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit) || 1,
+            hasNextPage: offset + limit < total,
+            hasPrevPage: page > 1,
+          },
+          { excludeExtraneousValues: true }
+        ),
+      },
+      { excludeExtraneousValues: true }
+    );
   }
 
   private async getWalletOverview(walletAddress: string, adaPriceUsd: number): Promise<WalletOverviewDto> {
