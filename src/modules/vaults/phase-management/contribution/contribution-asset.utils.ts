@@ -7,6 +7,7 @@ export const DEFAULT_FT_DECIMALS = 6;
 
 export interface ContributionAssetLike {
   type?: string;
+  policyId?: string;
   quantity?: number;
   decimals?: number;
   metadata?: { decimals?: number };
@@ -67,12 +68,25 @@ export function sumContributionQuantitiesForLimits(assets: ContributionAssetLike
   return assets.reduce((total, asset) => total + getContributionQuantityForLimits(asset), 0);
 }
 
-/** Persist validated decimals on FT assets so downstream limit checks use trusted values. */
+/**
+ * Normalize contribution assets:
+ * - Persist validated decimals on FT assets for downstream limit checks
+ * - Normalize EVM addresses (0x...) to lowercase for consistent comparison
+ */
 export function normalizeContributionAssets<T extends ContributionAssetLike>(assets: T[]): T[] {
   return assets.map(asset => {
-    if (asset.type === AssetType.FT || asset.type === 'ft') {
-      return { ...asset, decimals: resolveFtDecimals(asset) };
+    const normalized = { ...asset };
+
+    // Normalize EVM addresses to lowercase
+    if (asset.policyId && asset.policyId.startsWith('0x')) {
+      normalized.policyId = asset.policyId.toLowerCase();
     }
-    return asset;
+
+    // Validate and persist decimals for fungible tokens
+    if (asset.type === AssetType.FT || asset.type === 'ft') {
+      normalized.decimals = resolveFtDecimals(asset);
+    }
+
+    return normalized;
   });
 }

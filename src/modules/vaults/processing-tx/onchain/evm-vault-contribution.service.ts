@@ -126,8 +126,20 @@ export class EvmVaultContributionService {
     private readonly configService: ConfigService
   ) {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
-    this.mintingSignerPrivateKey = this.configService.get<string>('EVM_MINTING_SIGNER_PRIVATE_KEY') as Hex;
-    this.mintingSignerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS') as Address;
+
+    const privateKey = this.configService.get<string>('EVM_MINTING_SIGNER_PRIVATE_KEY');
+    if (!privateKey) {
+      throw new Error(
+        'EVM_MINTING_SIGNER_PRIVATE_KEY is not configured. Add it to .env to enable EVM contribution signing.'
+      );
+    }
+    this.mintingSignerPrivateKey = privateKey as Hex;
+
+    const signerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS');
+    if (!signerAddress) {
+      throw new Error('EVM_MINTING_SIGNER_ADDRESS is not configured.');
+    }
+    this.mintingSignerAddress = signerAddress as Address;
   }
 
   // --------------------------------------------------------------------------
@@ -231,10 +243,12 @@ export class EvmVaultContributionService {
     // createAssets consumes metadata, so preserve child hashes on the row
     // BEFORE createAssets clears metadata.
     if (childTxHashes && childTxHashes.length > 0) {
+      // Wrap array metadata in object structure to preserve both assets and childTxHashes
+      const assets = Array.isArray(transaction.metadata) ? transaction.metadata : [];
       await this.transactionRepository.update(
         { id: txId },
         {
-          metadata: { ...((transaction.metadata as object) || {}), evmChildTxHashes: childTxHashes },
+          metadata: { assets, evmChildTxHashes: childTxHashes },
         }
       );
     }

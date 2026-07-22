@@ -83,11 +83,12 @@ export class TransactionsService {
       throw new NotFoundException('Transaction not found');
     }
 
-    // Handle metadata structure for acquire transactions
-    // New format: { assets: [...], isExpansion: boolean }
-    // Old format: [...] (array directly)
+    // Handle metadata structure:
+    // - Contribute: array [...] OR { assets: [...], evmChildTxHashes: [...] }
+    // - Acquire: { assets: [...], isExpansion: boolean } OR [...] (legacy)
     let pendingAssets = transaction.metadata || [];
-    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
+    if (transaction.metadata && !Array.isArray(transaction.metadata)) {
+      // Metadata is an object - extract the assets array
       pendingAssets = (transaction.metadata as any).assets || [];
     }
 

@@ -198,7 +198,10 @@ export class ContributionService {
       }> = [];
 
       for (const policyId of requestedPolicyIds) {
-        const whitelistedAsset = vaultData.assets_whitelist?.find(wa => wa.policy_id === policyId);
+        // Case-insensitive comparison for EVM addresses (0x...)
+        const whitelistedAsset = vaultData.assets_whitelist?.find(
+          wa => wa.policy_id.toLowerCase() === policyId.toLowerCase()
+        );
 
         if (!whitelistedAsset) {
           invalidAssets.push(policyId);
