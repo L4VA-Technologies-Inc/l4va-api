@@ -18,7 +18,7 @@ export class TransactionHealthService {
   private readonly logger = new Logger(TransactionHealthService.name);
   private readonly blockfrost: BlockFrostAPI;
   private readonly evmClient?: PublicClient;
-  private readonly STUCK_TRANSACTION_TIMEOUT_MINUTES = 3;
+  private readonly STUCK_TRANSACTION_TIMEOUT_MINUTES = 2;
 
   constructor(
     @InjectRepository(Transaction)
@@ -44,7 +44,7 @@ export class TransactionHealthService {
    * Health check cron job that runs every 30 minutes
    * Checks for transactions stuck in 'submitted' status
    */
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async checkStuckTransactions(): Promise<void> {
     this.logger.log('Starting health check for stuck transactions');
 
