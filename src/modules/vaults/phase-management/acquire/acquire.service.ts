@@ -50,6 +50,25 @@ export class AcquireService {
     // Normalize assets: convert decimalQuantity to quantity if needed, normalize EVM addresses
     acquireReq.assets = normalizeContributionAssets(acquireReq.assets);
 
+    // Acquire UI sends native ETH in wei already. Preserve that contract for
+    // prepareContribution() so it does not parseEther() the amount again.
+    acquireReq.assets = acquireReq.assets.map(asset => {
+      const isEthType = String(asset.type || '').toLowerCase() === 'eth';
+      const isNativeEthAddress =
+        String(asset.policyId || '').toLowerCase() === '0x0000000000000000000000000000000000000000';
+      if (!isEthType && !isNativeEthAddress) {
+        return asset;
+      }
+
+      return {
+        ...asset,
+        metadata: {
+          ...(asset.metadata || {}),
+          rawWei: true,
+        },
+      };
+    });
+
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       relations: ['acquirer_whitelist', 'owner'],

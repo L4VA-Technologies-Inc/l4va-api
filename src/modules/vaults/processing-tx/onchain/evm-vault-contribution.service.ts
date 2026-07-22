@@ -350,11 +350,16 @@ export class EvmVaultContributionService {
     if (kind === EvmAssetKind.ERC721) return 1n;
 
     const raw = asset.quantity ?? asset.amount ?? 0;
+    const rawText = typeof raw === 'string' ? raw.trim() : String(raw);
+    const isIntegerString = /^[0-9]+$/.test(rawText);
+    // Backward-compatible heuristic: old acquire rows may already store wei as
+    // a large integer string but miss metadata.rawWei=true.
+    const isLikelyRawWei = isIntegerString && rawText.length >= 10;
 
     // Native ETH: AcquireModal sends display units (e.g. 0.05 ETH). Convert to
     // wei via parseEther. Callers who already have wei can pass a string like
     // "50000000000000000" and set asset.metadata.rawWei = true to bypass.
-    if (kind === EvmAssetKind.Native && asset.metadata?.rawWei !== true) {
+    if (kind === EvmAssetKind.Native && asset.metadata?.rawWei !== true && !isLikelyRawWei) {
       try {
         const value = parseEther(String(raw));
         if (value <= 0n) throw new BadRequestException('Native amount must be > 0');
