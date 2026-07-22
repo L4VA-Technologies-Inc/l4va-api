@@ -17,12 +17,12 @@ import { AssetValuationMethod } from '@/types/asset.types';
 
 export class AssetWhitelistDto {
   @ApiProperty({
-    description: 'Policy ID of the asset (56-character hex string)',
+    description: 'Asset identifier: Cardano policy ID (56 hex chars) or EVM contract address (0x + 40 hex chars)',
     example: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]{56}$/, {
-    message: 'Policy ID must be a 56-character hexadecimal string',
+  @Matches(/^(?:[0-9a-fA-F]{56}|0x[0-9a-fA-F]{40})$/, {
+    message: 'Asset identifier must be a Cardano policy ID (56 hex chars) or EVM contract address (0x + 40 hex chars)',
   })
   policyId: string;
 

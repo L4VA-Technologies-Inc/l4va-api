@@ -21,6 +21,7 @@ import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 import { TapToolsClient } from './taptools.client';
 
 import { Asset } from '@/database/asset.entity';
+import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -74,8 +75,24 @@ const ERC721_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11
 const ERC1155_TRANSFER_SINGLE_TOPIC = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62' as const;
 const ERC1155_TRANSFER_BATCH_TOPIC = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb' as const;
 
-/** Map of policyId -> custom price in ADA for vault-specific asset valuations */
+// Chainlink AggregatorV3Interface — used to read on-chain price feeds on Robinhood mainnet
+const CHAINLINK_AGGREGATOR_ABI = parseAbi([
+  'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
+  'function decimals() view returns (uint8)',
+]);
+
+/** Map of policyId/contractAddress -> custom price in ADA for vault-specific asset valuations */
 export type CustomPriceMap = Map<string, number>;
+
+/** Per-feed configuration loaded from evm_asset_price_feeds */
+export type EvmPriceFeedConfig = {
+  feedAddress: string;
+  maxAgeSeconds: number;
+  allowDexscreenerFallback: boolean;
+};
+
+/** Map of token contract address (lowercase) -> feed configuration */
+export type EvmPriceFeedsMap = Map<string, EvmPriceFeedConfig>;
 
 interface GetAssetValueParams {
   policyId: string;
@@ -159,6 +176,8 @@ export class TaptoolsService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
+    @InjectRepository(EvmAssetPriceFeedEntity)
+    private readonly evmPriceFeedRepository: Repository<EvmAssetPriceFeedEntity>,
     private readonly assetsService: AssetsService,
     private readonly priceService: PriceService,
     private readonly configService: ConfigService,
@@ -1055,7 +1074,7 @@ export class TaptoolsService {
       const customPricesByVault = new Map<string, Map<string, number>>();
 
       for (const vaultId of vaultIds) {
-        const customPrices = await this.getVaultCustomPrices(vaultId);
+        const { customPrices } = await this.getVaultCustomPrices(vaultId);
         if (customPrices.size > 0) {
           customPricesByVault.set(vaultId, customPrices);
         }
@@ -1217,7 +1236,7 @@ export class TaptoolsService {
     }
 
     // Load custom prices from vault whitelist
-    const customPriceMap = await this.getVaultCustomPrices(vaultId);
+    const { customPrices: customPriceMap } = await this.getVaultCustomPrices(vaultId);
     const adaPrice = await this.priceService.getAdaPrice();
 
     // Group assets by policyId and assetId to handle quantities
@@ -1481,7 +1500,7 @@ export class TaptoolsService {
       const customPricesMap = new Map<string, Map<string, number>>();
       await Promise.all(
         vaults.map(async vault => {
-          const customPrices = await this.getVaultCustomPrices(vault.id);
+          const { customPrices } = await this.getVaultCustomPrices(vault.id);
           if (customPrices && customPrices.size > 0) {
             customPricesMap.set(vault.id, customPrices);
           }
@@ -1971,11 +1990,13 @@ export class TaptoolsService {
 
       // Resolve vault to get chain type and custom prices
       const vault = await this.vaultRepository.findOne({ where: { id: vaultId }, select: ['id', 'chain_type'] });
-      const customPriceMap = vault ? await this.getVaultCustomPrices(vault.id) : new Map();
+      const { customPrices: customPriceMap, chainlinkFeeds } = vault
+        ? await this.getVaultCustomPrices(vault.id)
+        : { customPrices: new Map<string, number>(), chainlinkFeeds: new Map<string, EvmPriceFeedConfig>() };
 
       // Route EVM chains to dedicated handler
       if (vault?.chain_type === ChainType.robinhood) {
-        return this.getEvmWalletSummaryPaginated(paginationQuery, customPriceMap, adaPriceUsd);
+        return this.getEvmWalletSummaryPaginated(paginationQuery, customPriceMap, chainlinkFeeds, adaPriceUsd);
       }
 
       // Get overview (cached)
@@ -2219,8 +2240,11 @@ export class TaptoolsService {
    * @param vaultId The ID of the vault
    * @returns Map of policy IDs to custom prices in ADA
    */
-  private async getVaultCustomPrices(vaultId: string): Promise<CustomPriceMap> {
-    const customPriceMap: CustomPriceMap = new Map();
+  private async getVaultCustomPrices(
+    vaultId: string
+  ): Promise<{ customPrices: CustomPriceMap; chainlinkFeeds: EvmPriceFeedsMap }> {
+    const customPrices: CustomPriceMap = new Map();
+    const chainlinkFeeds: EvmPriceFeedsMap = new Map();
 
     try {
       const vault = await this.vaultRepository.findOne({
@@ -2229,13 +2253,34 @@ export class TaptoolsService {
       });
 
       if (!vault || !vault.assets_whitelist) {
-        return customPriceMap;
+        return { customPrices, chainlinkFeeds };
+      }
+
+      // Collect all EVM contract addresses from the whitelist to fetch their feeds in one query
+      const evmAddresses = vault.assets_whitelist
+        .map(w => w.policy_id)
+        .filter(p => /^0x[0-9a-fA-F]{40}$/.test(p))
+        .map(p => p.toLowerCase());
+
+      if (evmAddresses.length > 0) {
+        const chainId = this.configService.get<number>('EVM_CHAIN_ID') ?? 46630;
+        const feeds = await this.evmPriceFeedRepository.find({
+          where: { chain_id: chainId, enabled: true, token_address: In(evmAddresses) },
+          select: ['token_address', 'chainlink_feed_address', 'max_age_seconds', 'allow_dexscreener_fallback'],
+        });
+        for (const feed of feeds) {
+          chainlinkFeeds.set(feed.token_address.toLowerCase(), {
+            feedAddress: feed.chainlink_feed_address.toLowerCase(),
+            maxAgeSeconds: feed.max_age_seconds,
+            allowDexscreenerFallback: feed.allow_dexscreener_fallback,
+          });
+        }
       }
 
       for (const whitelistItem of vault.assets_whitelist) {
         // Handle static custom pricing
         if (whitelistItem.valuation_method === AssetValuationMethod.CUSTOM && whitelistItem.custom_price_ada) {
-          customPriceMap.set(whitelistItem.policy_id, Number(whitelistItem.custom_price_ada));
+          customPrices.set(whitelistItem.policy_id, Number(whitelistItem.custom_price_ada));
         }
 
         // Handle dynamic LP token pricing
@@ -2272,10 +2317,8 @@ export class TaptoolsService {
           }
 
           if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
-            customPriceMap.set(whitelistItem.policy_id, lpPrice);
-            // this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
+            customPrices.set(whitelistItem.policy_id, lpPrice);
           } else {
-            // Skip logging if price calculation fails - asset may not be in vault yet
             this.logger.debug(
               `Failed to calculate LP price for ${whitelistItem.policy_id} - asset may not be deposited yet`
             );
@@ -2283,10 +2326,10 @@ export class TaptoolsService {
         }
       }
 
-      return customPriceMap;
+      return { customPrices, chainlinkFeeds };
     } catch (error: any) {
       this.logger.error(`Failed to load custom prices for vault ${vaultId}:`, error.message);
-      return customPriceMap;
+      return { customPrices, chainlinkFeeds };
     }
   }
 
@@ -2295,19 +2338,113 @@ export class TaptoolsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Resolve a mock price for EVM testnet assets.
-   * Priority: customPriceMap → EVM_TESTNET_NFT/FT_PRICE_ADA env → 1 ADA fallback.
-   * On mainnet always returns 0 so the real price pipeline takes over.
+   * Resolve the ADA price for an EVM asset.
+   *
+   * Priority:
+   *   1. Custom price from vault whitelist (always wins)
+   *   2. Testnet: mock price from env (EVM_TESTNET_NFT/FT_PRICE_ADA) or 1 ADA
+   *   3. Mainnet: Chainlink on-chain feed (evm_asset_price_feeds DB) → DexScreener → null
+   *
+   * DEXSCREENER_CHAIN_ID env: DexScreener chain slug (e.g. "robinhood").
+   * Staleness limit and DexScreener fallback flag come from evm_asset_price_feeds rows.
    */
-  private getEvmTestnetPrice(contractAddress: string, customPriceMap: CustomPriceMap, isNft: boolean): number {
+  private async getEvmPriceAda(
+    contractAddress: string,
+    customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
+    isNft: boolean,
+    adaPriceUsd: number
+  ): Promise<number | null> {
+    // 1. Vault-specific custom price
     const contractKey = contractAddress.toLowerCase();
     const custom = customPriceMap.get(contractKey) ?? customPriceMap.get(contractAddress);
     if (custom !== undefined) return custom;
-    if (this.isMainnet) return 0;
 
-    const envKey = isNft ? 'EVM_TESTNET_NFT_PRICE_ADA' : 'EVM_TESTNET_FT_PRICE_ADA';
-    const envPrice = this.configService.get<number>(envKey);
-    return envPrice ?? 1;
+    // 2. Testnet mock
+    if (!this.isMainnet) {
+      const envKey = isNft ? 'EVM_TESTNET_NFT_PRICE_ADA' : 'EVM_TESTNET_FT_PRICE_ADA';
+      const envPrice = this.configService.get<number>(envKey);
+      return envPrice ?? 1;
+    }
+
+    // 3. Mainnet — Chainlink feed from evm_asset_price_feeds DB table
+    const feedConfig = chainlinkFeeds.get(contractKey);
+    if (feedConfig) {
+      const client = this.getEvmPublicClient();
+      const priceUsd = await this.getChainlinkPriceUsd(feedConfig.feedAddress, client, feedConfig.maxAgeSeconds);
+      if (priceUsd !== null && adaPriceUsd > 0) return priceUsd / adaPriceUsd;
+
+      if (!feedConfig.allowDexscreenerFallback) return null;
+    }
+
+    // 4. Mainnet — DexScreener fallback
+    const dexPriceUsd = await this.getDexScreenerPriceUsd(contractAddress);
+    if (dexPriceUsd !== null && adaPriceUsd > 0) return dexPriceUsd / adaPriceUsd;
+
+    return null;
+  }
+
+  /**
+   * Read USD price from a Chainlink AggregatorV3 feed proxy via viem.
+   * Validates answer > 0 and staleness. Returns null on any failure.
+   */
+  private async getChainlinkPriceUsd(
+    feedProxyAddress: string,
+    client: any,
+    maxAgeSeconds: number
+  ): Promise<number | null> {
+    try {
+      const [roundData, decimals] = await Promise.all([
+        client.readContract({
+          address: feedProxyAddress as Address,
+          abi: CHAINLINK_AGGREGATOR_ABI,
+          functionName: 'latestRoundData',
+        }),
+        client.readContract({
+          address: feedProxyAddress as Address,
+          abi: CHAINLINK_AGGREGATOR_ABI,
+          functionName: 'decimals',
+        }),
+      ]);
+
+      const [, answer, , updatedAt] = roundData as [bigint, bigint, bigint, bigint, bigint];
+      if (answer <= 0n) return null;
+
+      const ageSeconds = Math.floor(Date.now() / 1000) - Number(updatedAt);
+      if (ageSeconds > maxAgeSeconds) {
+        this.logger.warn(`Chainlink feed ${feedProxyAddress} is stale (${ageSeconds}s old, max ${maxAgeSeconds}s)`);
+        return null;
+      }
+
+      return Number(answer) / Math.pow(10, Number(decimals));
+    } catch (err: any) {
+      this.logger.warn(`Chainlink price read failed for ${feedProxyAddress}: ${err?.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch USD price from DexScreener for an EVM token.
+   * Uses DEXSCREENER_CHAIN_ID env (default: "robinhood"). Picks the pair
+   * with the highest USD liquidity to avoid illiquid/stale quotes.
+   * Returns null when the token has no listed pair or the call fails.
+   */
+  private async getDexScreenerPriceUsd(contractAddress: string): Promise<number | null> {
+    try {
+      const chainId = this.configService.get<string>('DEXSCREENER_CHAIN_ID') ?? 'robinhood';
+      const url = `https://api.dexscreener.com/tokens/v1/${chainId}/${contractAddress}`;
+      const response = await axios.get(url, { timeout: 5_000 });
+      const pairs: any[] = Array.isArray(response.data) ? response.data : [];
+
+      const best = pairs
+        .filter(p => p.priceUsd && parseFloat(p.priceUsd) > 0)
+        .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+
+      return best ? parseFloat(best.priceUsd) : null;
+    } catch (err: any) {
+      this.logger.warn(`DexScreener price fetch failed for ${contractAddress}: ${err?.message}`);
+      return null;
+    }
   }
 
   /**
@@ -2396,6 +2533,7 @@ export class TaptoolsService {
     contractAddress: string,
     walletAddress: string,
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<AssetValueDto | null> {
     try {
@@ -2414,7 +2552,8 @@ export class TaptoolsService {
       const balance = Number(rawBalance) / Math.pow(10, Number(decimals));
       if (balance <= 0) return null;
 
-      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, false);
+      const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, false, adaPriceUsd);
+      if (priceAda === null) return null;
       const priceUsd = priceAda * adaPriceUsd;
 
       const dto: AssetValueDto = plainToInstance(
@@ -2451,6 +2590,7 @@ export class TaptoolsService {
     contractAddress: string,
     walletAddress: string,
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<AssetValueDto[]> {
     try {
@@ -2485,7 +2625,8 @@ export class TaptoolsService {
         return [];
       }
 
-      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, true);
+      const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, true, adaPriceUsd);
+      if (priceAda === null) return [];
       const priceUsd = priceAda * adaPriceUsd;
 
       // Fetch tokenURIs for metadata enrichment (name / image / attributes)
@@ -2542,6 +2683,7 @@ export class TaptoolsService {
     contractAddress: string,
     walletAddress: string,
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<AssetValueDto[]> {
     try {
@@ -2605,7 +2747,8 @@ export class TaptoolsService {
 
       const balanceResults = await client.multicall({ contracts: balanceCalls, allowFailure: true });
 
-      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, true);
+      const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, true, adaPriceUsd);
+      if (priceAda === null) return [];
       const priceUsd = priceAda * adaPriceUsd;
 
       // Fetch ERC-1155 uris for metadata enrichment
@@ -2683,6 +2826,7 @@ export class TaptoolsService {
   private async getEvmWalletSummaryPaginated(
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<PaginatedWalletSummaryDto> {
     const alchemyKey = this.configService.get<string>('ALCHEMY_API_KEY');
@@ -2693,6 +2837,7 @@ export class TaptoolsService {
         return await this.getEvmWalletSummaryViaAlchemy(
           paginationQuery,
           customPriceMap,
+          chainlinkFeeds,
           adaPriceUsd,
           alchemyKey,
           alchemyNetwork
@@ -2702,7 +2847,7 @@ export class TaptoolsService {
       }
     }
 
-    return this.getEvmWalletSummaryViaRpc(paginationQuery, customPriceMap, adaPriceUsd);
+    return this.getEvmWalletSummaryViaRpc(paginationQuery, customPriceMap, chainlinkFeeds, adaPriceUsd);
   }
 
   // ---------------------------------------------------------------------------
@@ -2719,6 +2864,7 @@ export class TaptoolsService {
     walletAddress: string,
     contracts: string[],
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<AssetValueDto[]> {
     const nftBase = `https://${network}.g.alchemy.com/nft/v3/${apiKey}`;
@@ -2728,47 +2874,58 @@ export class TaptoolsService {
     const response = await axios.get(url, { timeout: 10_000 });
     const ownedNfts: any[] = response.data?.ownedNfts ?? [];
 
-    return ownedNfts.map(nft => {
-      const contractAddress: string = nft.contract?.address ?? '';
-      const tokenId: string = nft.tokenId ?? '0';
-      const qty = parseInt(nft.balance ?? '1', 10) || 1;
+    return (
+      await Promise.all(
+        ownedNfts.map(async nft => {
+          const contractAddress: string = nft.contract?.address ?? '';
+          const tokenId: string = nft.tokenId ?? '0';
+          const qty = parseInt(nft.balance ?? '1', 10) || 1;
 
-      const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, true);
-      const priceUsd = priceAda * adaPriceUsd;
+          const priceAda = await this.getEvmPriceAda(
+            contractAddress,
+            customPriceMap,
+            chainlinkFeeds,
+            true,
+            adaPriceUsd
+          );
+          if (priceAda === null) return null;
+          const priceUsd = priceAda * adaPriceUsd;
 
-      const name = nft.name ?? `${nft.contract?.name ?? contractAddress} #${tokenId}`;
-      const image = nft.image?.cachedUrl ?? nft.image?.originalUrl ?? nft.raw?.metadata?.image ?? undefined;
+          const name = nft.name ?? `${nft.contract?.name ?? contractAddress} #${tokenId}`;
+          const image = nft.image?.cachedUrl ?? nft.image?.originalUrl ?? nft.raw?.metadata?.image ?? undefined;
 
-      return plainToInstance(
-        AssetValueDto,
-        {
-          tokenId: `${contractAddress}_${tokenId}`,
-          name,
-          displayName: name,
-          ticker: nft.contract?.symbol ?? undefined,
-          quantity: qty,
-          isNft: true,
-          isFungibleToken: false,
-          priceAda,
-          priceUsd,
-          valueAda: +(qty * priceAda).toFixed(6),
-          valueUsd: +(qty * priceUsd).toFixed(6),
-          metadata: {
-            policyId: contractAddress,
-            assetName: tokenId,
-            image,
-            description: nft.description ?? nft.raw?.metadata?.description ?? undefined,
-            attributes: nft.raw?.metadata?.attributes ?? undefined,
-            onchainMetadata: {
-              tokenId,
-              tokenType: nft.tokenType,
-              ...(nft.raw?.metadata ?? {}),
+          return plainToInstance(
+            AssetValueDto,
+            {
+              tokenId: `${contractAddress}_${tokenId}`,
+              name,
+              displayName: name,
+              ticker: nft.contract?.symbol ?? undefined,
+              quantity: qty,
+              isNft: true,
+              isFungibleToken: false,
+              priceAda,
+              priceUsd,
+              valueAda: +(qty * priceAda).toFixed(6),
+              valueUsd: +(qty * priceUsd).toFixed(6),
+              metadata: {
+                policyId: contractAddress,
+                assetName: tokenId,
+                image,
+                description: nft.description ?? nft.raw?.metadata?.description ?? undefined,
+                attributes: nft.raw?.metadata?.attributes ?? undefined,
+                onchainMetadata: {
+                  tokenId,
+                  tokenType: nft.tokenType,
+                  ...(nft.raw?.metadata ?? {}),
+                },
+              },
             },
-          },
-        },
-        { excludeExtraneousValues: true }
-      );
-    });
+            { excludeExtraneousValues: true }
+          );
+        })
+      )
+    ).filter((a): a is AssetValueDto => a !== null);
   }
 
   /**
@@ -2781,6 +2938,7 @@ export class TaptoolsService {
     walletAddress: string,
     contracts: string[],
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<AssetValueDto[]> {
     const rpcBase = `https://${network}.g.alchemy.com/v2/${apiKey}`;
@@ -2821,50 +2979,60 @@ export class TaptoolsService {
       })
     );
 
-    return withMeta
-      .map(({ contractAddress, tokenBalance, meta }) => {
-        const decimals: number = meta?.decimals ?? 18;
-        let balance = 0;
-        try {
-          balance = Number(BigInt(tokenBalance)) / Math.pow(10, decimals);
-        } catch {
-          return null;
-        }
-        if (balance <= 0) return null;
+    return (
+      await Promise.all(
+        withMeta.map(async ({ contractAddress, tokenBalance, meta }) => {
+          const decimals: number = meta?.decimals ?? 18;
+          let balance = 0;
+          try {
+            balance = Number(BigInt(tokenBalance)) / Math.pow(10, decimals);
+          } catch {
+            return null;
+          }
+          if (balance <= 0) return null;
 
-        const priceAda = this.getEvmTestnetPrice(contractAddress, customPriceMap, false);
-        const priceUsd = priceAda * adaPriceUsd;
+          const priceAda = await this.getEvmPriceAda(
+            contractAddress,
+            customPriceMap,
+            chainlinkFeeds,
+            false,
+            adaPriceUsd
+          );
+          if (priceAda === null) return null;
+          const priceUsd = priceAda * adaPriceUsd;
 
-        return plainToInstance(
-          AssetValueDto,
-          {
-            tokenId: contractAddress,
-            name: meta?.name ?? contractAddress,
-            displayName: meta?.name ?? contractAddress,
-            ticker: meta?.symbol ?? undefined,
-            quantity: balance,
-            isNft: false,
-            isFungibleToken: true,
-            priceAda,
-            priceUsd,
-            valueAda: +(balance * priceAda).toFixed(6),
-            valueUsd: +(balance * priceUsd).toFixed(6),
-            metadata: {
-              policyId: contractAddress,
-              decimals,
-              image: meta?.logo ?? undefined,
+          return plainToInstance(
+            AssetValueDto,
+            {
+              tokenId: contractAddress,
+              name: meta?.name ?? contractAddress,
+              displayName: meta?.name ?? contractAddress,
+              ticker: meta?.symbol ?? undefined,
+              quantity: balance,
+              isNft: false,
+              isFungibleToken: true,
+              priceAda,
+              priceUsd,
+              valueAda: +(balance * priceAda).toFixed(6),
+              valueUsd: +(balance * priceUsd).toFixed(6),
+              metadata: {
+                policyId: contractAddress,
+                decimals,
+                image: meta?.logo ?? undefined,
+              },
             },
-          },
-          { excludeExtraneousValues: true }
-        );
-      })
-      .filter((a): a is AssetValueDto => a !== null);
+            { excludeExtraneousValues: true }
+          );
+        })
+      )
+    ).filter((a): a is AssetValueDto => a !== null);
   }
 
   /** Alchemy-based implementation of EVM wallet summary. */
   private async getEvmWalletSummaryViaAlchemy(
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number,
     apiKey: string,
     network: string
@@ -2875,7 +3043,15 @@ export class TaptoolsService {
 
     // --- NFTs (ERC721 + ERC1155) ---
     if (filter !== 'tokens' && contracts.length > 0) {
-      const nfts = await this.fetchAlchemyNfts(apiKey, network, walletAddress, contracts, customPriceMap, adaPriceUsd);
+      const nfts = await this.fetchAlchemyNfts(
+        apiKey,
+        network,
+        walletAddress,
+        contracts,
+        customPriceMap,
+        chainlinkFeeds,
+        adaPriceUsd
+      );
       allAssets.push(...nfts);
     }
 
@@ -2892,6 +3068,7 @@ export class TaptoolsService {
           walletAddress,
           erc20Candidates,
           customPriceMap,
+          chainlinkFeeds,
           adaPriceUsd
         );
         allAssets.push(...tokens);
@@ -2905,6 +3082,7 @@ export class TaptoolsService {
   private async getEvmWalletSummaryViaRpc(
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number
   ): Promise<PaginatedWalletSummaryDto> {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
@@ -2916,13 +3094,34 @@ export class TaptoolsService {
       const contractType = await this.detectEvmContractType(client, contractAddress);
 
       if (contractType === 'ERC721' && filter !== 'tokens') {
-        const nfts = await this.getErc721Assets(client, contractAddress, walletAddress, customPriceMap, adaPriceUsd);
+        const nfts = await this.getErc721Assets(
+          client,
+          contractAddress,
+          walletAddress,
+          customPriceMap,
+          chainlinkFeeds,
+          adaPriceUsd
+        );
         allAssets.push(...nfts);
       } else if (contractType === 'ERC1155' && filter !== 'tokens') {
-        const tokens = await this.getErc1155Assets(client, contractAddress, walletAddress, customPriceMap, adaPriceUsd);
+        const tokens = await this.getErc1155Assets(
+          client,
+          contractAddress,
+          walletAddress,
+          customPriceMap,
+          chainlinkFeeds,
+          adaPriceUsd
+        );
         allAssets.push(...tokens);
       } else if (contractType === 'ERC20' && filter !== 'nfts') {
-        const token = await this.getErc20Asset(client, contractAddress, walletAddress, customPriceMap, adaPriceUsd);
+        const token = await this.getErc20Asset(
+          client,
+          contractAddress,
+          walletAddress,
+          customPriceMap,
+          chainlinkFeeds,
+          adaPriceUsd
+        );
         if (token) allAssets.push(token);
       }
     }
