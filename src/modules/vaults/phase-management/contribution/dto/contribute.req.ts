@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, ValidateNested, Min, Max, IsNumber, IsInt } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, ValidateNested, Min, Max, IsInt } from 'class-validator';
 
 import { MAX_ASSET_DECIMALS } from '../contribution-asset.utils';
 
@@ -37,17 +37,18 @@ export class ContributionAsset {
 
   @ApiProperty({
     description:
-      'Quantity of assets to contribute in raw blockchain units (e.g., 3500000 for 3.5 tokens with 6 decimals). For NFTs, this is always 1.',
+      'Quantity of assets to contribute in raw blockchain units (e.g., lovelace for ADA, wei for ETH). For large values like wei, use string to avoid precision loss. For NFTs, this is always 1.',
     example: 3500000,
     minimum: 1,
-    maximum: 9007199254740991,
   })
   @IsNotEmpty()
-  @IsNumber()
-  @Min(1, { message: 'Quantity must be at least 1 (raw units)' })
-  @Max(MAX_SAFE_QUANTITY, { message: 'Quantity exceeds maximum safe value (9,007,199,254,740,991)' })
   @Expose()
-  quantity: number;
+  @Transform(({ value }) => {
+    // Accept both string and number, convert to number for validation
+    // Keep as original type for downstream processing
+    return value;
+  })
+  quantity: number | string;
 
   @ApiPropertyOptional({
     description: 'Display name of the asset (used for UI and stored as asset name)',
@@ -96,6 +97,22 @@ export class ContributionAsset {
   @Expose()
   @IsOptional()
   valueUsd?: number;
+
+  @ApiPropertyOptional({
+    description: 'Price of the asset in ETH',
+    example: 0.025,
+  })
+  @Expose()
+  @IsOptional()
+  priceEth?: number;
+
+  @ApiPropertyOptional({
+    description: 'Total value in ETH (price × quantity)',
+    example: 0.025,
+  })
+  @Expose()
+  @IsOptional()
+  valueEth?: number;
 
   @ApiPropertyOptional({
     description: 'Asset description',

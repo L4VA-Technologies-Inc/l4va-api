@@ -8,7 +8,7 @@ export const DEFAULT_FT_DECIMALS = 6;
 export interface ContributionAssetLike {
   type?: string;
   policyId?: string;
-  quantity?: number;
+  quantity?: number | string;
   decimals?: number;
   metadata?: { decimals?: number };
 }
@@ -52,7 +52,8 @@ export function getContributionQuantityForLimits(asset: ContributionAssetLike): 
   }
 
   if (asset.type === AssetType.FT || asset.type === 'ft') {
-    const rawQuantity = Number(asset.quantity);
+    const rawQuantity = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
+
     if (!Number.isFinite(rawQuantity) || rawQuantity <= 0) {
       throw new BadRequestException('Fungible token contribution quantity must be greater than 0');
     }

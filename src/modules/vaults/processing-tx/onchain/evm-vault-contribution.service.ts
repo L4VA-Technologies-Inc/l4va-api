@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { keccak256, toBytes, type Address, type Hex } from 'viem';
+import { keccak256, parseEther, toBytes, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -153,8 +153,8 @@ export class EvmVaultContributionService {
     });
     if (!transaction) throw new NotFoundException('Transaction not found');
     if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
-    if (transaction.type !== TransactionType.contribute) {
-      throw new BadRequestException('Transaction is not a contribution');
+    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+      throw new BadRequestException('Transaction is not a contribution or acquire');
     }
 
     const vault = await this.vaultsRepository.findOne({ where: { id: transaction.vault_id } });
@@ -169,8 +169,12 @@ export class EvmVaultContributionService {
     const contributor = transaction.user?.address as Address | undefined;
     if (!contributor) throw new BadRequestException('User has no EVM address on record');
 
-    const rawAssets = (transaction.metadata as any[]) || [];
-    if (!Array.isArray(rawAssets) || rawAssets.length === 0) {
+    // Metadata shape varies by tx type:
+    //  - contribute: metadata is the raw assets array
+    //  - acquire   : metadata is { assets: [...] } (see AcquireService)
+    const meta = transaction.metadata as any;
+    const rawAssets: any[] = Array.isArray(meta) ? meta : Array.isArray(meta?.assets) ? meta.assets : [];
+    if (rawAssets.length === 0) {
       throw new BadRequestException('Transaction has no assets to contribute');
     }
 
@@ -236,19 +240,21 @@ export class EvmVaultContributionService {
     const transaction = await this.transactionRepository.findOne({ where: { id: txId } });
     if (!transaction) throw new NotFoundException('Transaction not found');
     if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
-    if (transaction.type !== TransactionType.contribute) {
-      throw new BadRequestException('Transaction is not a contribution');
+    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+      throw new BadRequestException('Transaction is not a contribution or acquire');
     }
 
     // createAssets consumes metadata, so preserve child hashes on the row
-    // BEFORE createAssets clears metadata.
+    // BEFORE createAssets clears metadata. Support both metadata shapes:
+    // array (contribute) and { assets: [...] } (acquire).
     if (childTxHashes && childTxHashes.length > 0) {
-      // Wrap array metadata in object structure to preserve both assets and childTxHashes
-      const assets = Array.isArray(transaction.metadata) ? transaction.metadata : [];
+      const meta = transaction.metadata as any;
+      const assets = Array.isArray(meta) ? meta : Array.isArray(meta?.assets) ? meta.assets : [];
+      const preservedMeta = Array.isArray(meta) ? {} : { ...(meta || {}) };
       await this.transactionRepository.update(
         { id: txId },
         {
-          metadata: { assets, evmChildTxHashes: childTxHashes },
+          metadata: { ...preservedMeta, assets, evmChildTxHashes: childTxHashes },
         }
       );
     }
@@ -308,6 +314,8 @@ export class EvmVaultContributionService {
 
     // Fall back to legacy AssetType.
     if (asset.type === AssetType.ADA || asset.type === 'ada') return EvmAssetKind.Native;
+    // AcquireModal (EVM branch) sends { type: 'ETH', ... } — treat as Native.
+    if (asset.type === 'ETH' || asset.type === 'eth') return EvmAssetKind.Native;
     if (asset.type === AssetType.FT || asset.type === 'ft') return EvmAssetKind.ERC20;
     if (asset.type === AssetType.NFT || asset.type === 'nft') return EvmAssetKind.ERC721;
 
@@ -341,12 +349,26 @@ export class EvmVaultContributionService {
   private resolveAmount(kind: EvmAssetKind, asset: any): bigint {
     if (kind === EvmAssetKind.ERC721) return 1n;
 
-    // Frontend sends raw blockchain quantities (already decimal-scaled for FTs
-    // and wei for native). See ContributeModal.handleContribute.
     const raw = asset.quantity ?? asset.amount ?? 0;
+
+    // Native ETH: AcquireModal sends display units (e.g. 0.05 ETH). Convert to
+    // wei via parseEther. Callers who already have wei can pass a string like
+    // "50000000000000000" and set asset.metadata.rawWei = true to bypass.
+    if (kind === EvmAssetKind.Native && asset.metadata?.rawWei !== true) {
+      try {
+        const value = parseEther(String(raw));
+        if (value <= 0n) throw new BadRequestException('Native amount must be > 0');
+        return value;
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        throw new BadRequestException(`Invalid Native amount: ${raw}`);
+      }
+    }
+
+    // ERC20 / (raw-wei Native): frontend sends raw blockchain quantities
+    // (decimal-scaled for FTs, wei for native when rawWei=true).
     let value: bigint;
     try {
-      // Number → string → BigInt (handles both integer numbers and numeric strings)
       value = BigInt(typeof raw === 'number' ? Math.trunc(raw) : String(raw));
     } catch {
       throw new BadRequestException(`Invalid amount for ${EvmAssetKind[kind]} contribution: ${raw}`);
