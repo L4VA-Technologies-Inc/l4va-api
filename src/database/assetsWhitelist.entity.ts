@@ -21,8 +21,8 @@ export class AssetsWhitelistEntity {
 
   @Expose({ name: 'policyId' })
   @Column({ type: 'varchar', length: 56, nullable: false })
-  @Matches(/^[0-9a-fA-F]{56}$/, {
-    message: 'Policy ID must be a 56-character hexadecimal string',
+  @Matches(/^(?:[0-9a-fA-F]{56}|0x[0-9a-fA-F]{40})$/, {
+    message: 'Asset identifier must be a Cardano policy ID (56 hex chars) or EVM contract address (0x + 40 hex chars)',
   })
   policy_id: string;
 
