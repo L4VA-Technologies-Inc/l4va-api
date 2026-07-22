@@ -11,6 +11,7 @@ import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { PriceService } from '@/modules/price/price.service';
 import {
+  ChainType,
   VAULT_STATUSES_ACTIVE,
   VAULT_STATUSES_FOR_CONTRIBUTED_STATS,
   VAULT_STATUSES_FOR_STAGE_STATS,
@@ -40,7 +41,7 @@ export class StatisticsService {
    *
    * @returns Object containing platform statistics
    */
-  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
+  async getVaultStatistics(chainType?: ChainType): Promise<VaultStatisticsResponse> {
     try {
       // Count active vaults (contribution, acquire, locked, expansion, acquire_expansion), excluding hidden vaults on mainnet
       const activeVaultsWhere: any = {
@@ -49,6 +50,9 @@ export class StatisticsService {
       };
       if (this.isMainnet) {
         activeVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
+      }
+      if (chainType) {
+        activeVaultsWhere.chain_type = chainType;
       }
       const activeVaultsCount = await this.vaultsRepository.count({
         where: activeVaultsWhere,
@@ -67,6 +71,9 @@ export class StatisticsService {
       if (this.isMainnet) {
         totalVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
       }
+      if (chainType) {
+        totalVaultsWhere.chain_type = chainType;
+      }
       const totalVaultsCount = await this.vaultsRepository.count({
         where: totalVaultsWhere,
       });
@@ -82,6 +89,9 @@ export class StatisticsService {
         totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        totalValueQuery.andWhere('vault.chain_type = :chainType', { chainType });
       }
       const totalValueResult = await totalValueQuery.getRawOne();
 
@@ -100,6 +110,9 @@ export class StatisticsService {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
       }
+      if (chainType) {
+        totalContributedQuery.andWhere('vault.chain_type = :chainType', { chainType });
+      }
       const totalContributedResult = await totalContributedQuery.getRawOne();
 
       // Count total assets ever contributed (all time, including removed), excluding hidden vaults on mainnet
@@ -110,6 +123,11 @@ export class StatisticsService {
         totalAssetsQueryBuilder.andWhere('asset.vault_id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        totalAssetsQueryBuilder
+          .innerJoin('asset.vault', 'vault')
+          .andWhere('vault.chain_type = :chainType', { chainType });
       }
       const totalAssetsQuery = await totalAssetsQueryBuilder.getRawOne();
 
@@ -122,10 +140,13 @@ export class StatisticsService {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
       }
+      if (chainType) {
+        totalAcquiredQuery.andWhere('vault.chain_type = :chainType', { chainType });
+      }
       const totalAcquiredResult = await totalAcquiredQuery.getRawOne();
 
-      const vaultsByStage = await this.getVaultsByStageData();
-      const vaultsByType = await this.getVaultsByTypeData();
+      const vaultsByStage = await this.getVaultsByStageData(chainType);
+      const vaultsByType = await this.getVaultsByTypeData(chainType);
 
       const [adaPrice, ethPrice] = await Promise.all([
         this.priceService.getAdaPrice(),
@@ -165,9 +186,9 @@ export class StatisticsService {
    * Gets distribution of vaults by stage with TVL in both ADA and USD
    * @returns Record of stages with percentages and TVL values
    */
-  private async getVaultsByStageData(): Promise<
-    Record<string, { percentage: number; valueAda: string; valueUsd: string; valueEth: string }>
-  > {
+  private async getVaultsByStageData(
+    chainType?: ChainType
+  ): Promise<Record<string, { percentage: number; valueAda: string; valueUsd: string; valueEth: string }>> {
     try {
       // Get TVL by vault status for all currencies, excluding hidden vaults on mainnet
       const statusQuery = this.vaultsRepository
@@ -185,6 +206,9 @@ export class StatisticsService {
         statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        statusQuery.andWhere('vault.chain_type = :chainType', { chainType });
       }
       const statusResults = await statusQuery.groupBy('vault.vault_status').getRawMany();
 
@@ -240,9 +264,9 @@ export class StatisticsService {
    * Gets distribution of vaults by privacy type with TVL in both ADA and USD
    * @returns Record of privacy types with percentages and TVL values
    */
-  private async getVaultsByTypeData(): Promise<
-    Record<string, { percentage: number; valueAda: number; valueUsd: number; valueEth: number }>
-  > {
+  private async getVaultsByTypeData(
+    chainType?: ChainType
+  ): Promise<Record<string, { percentage: number; valueAda: number; valueUsd: number; valueEth: number }>> {
     try {
       const privacyQuery = this.vaultsRepository
         .createQueryBuilder('vault')
@@ -256,6 +280,9 @@ export class StatisticsService {
         privacyQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        privacyQuery.andWhere('vault.chain_type = :chainType', { chainType });
       }
       const privacyResults = await privacyQuery.groupBy('vault.privacy').getRawMany();
 

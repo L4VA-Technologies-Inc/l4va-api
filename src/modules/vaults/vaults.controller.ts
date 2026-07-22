@@ -33,6 +33,7 @@ import {
 } from './dto/get-collection-names.dto';
 import { GetVaultActivityDto } from './dto/get-vault-activity.dto';
 import { GetVaultParamDto } from './dto/get-vault-param.dto';
+import { GetVaultStatisticsQuery } from './dto/get-vault-statistics-query.dto';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { GetVaultsDto } from './dto/get-vaults.dto';
@@ -192,8 +193,8 @@ export class VaultsController {
     status: 200,
   })
   @Get('statistics')
-  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
-    return await this.statisticsService.getVaultStatistics();
+  async getVaultStatistics(@Query() query: GetVaultStatisticsQuery): Promise<VaultStatisticsResponse> {
+    return await this.statisticsService.getVaultStatistics(query.chainType);
   }
 
   @ApiDoc({
