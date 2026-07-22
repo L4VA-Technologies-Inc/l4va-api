@@ -15,6 +15,7 @@ import {
 import { TransactionStatus, TransactionType } from '../types/transaction.types';
 
 import { Asset } from './asset.entity';
+import { ColumnNumericTransformer } from './column-numeric.transformer';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
 
@@ -48,11 +49,24 @@ export class Transaction {
   })
   type?: TransactionType;
 
-  @Column({ nullable: true })
+  @ApiProperty({ description: 'Transaction amount in smallest units (lovelace for ADA, wei for ETH)' })
+  @Column({
+    type: 'decimal',
+    precision: 30,
+    scale: 0,
+    nullable: true,
+    transformer: new ColumnNumericTransformer(),
+  })
   amount: number;
 
-  @ApiProperty({ description: 'Transaction fee in lovelace' })
-  @Column({ nullable: true })
+  @ApiProperty({ description: 'Transaction fee in smallest units (lovelace for ADA, wei for ETH)' })
+  @Column({
+    type: 'decimal',
+    precision: 30,
+    scale: 0,
+    nullable: true,
+    transformer: new ColumnNumericTransformer(),
+  })
   fee: number;
 
   @Expose({ name: 'txHash' })

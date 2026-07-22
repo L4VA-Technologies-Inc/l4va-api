@@ -12,18 +12,10 @@ import {
 
 import { AssetType, AssetStatus, AssetOriginType } from '../types/asset.types';
 
+import { ColumnNumericTransformer } from './column-numeric.transformer';
 import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
-
-export class ColumnNumericTransformer {
-  to(data: number): number {
-    return data;
-  }
-  from(data: string): number {
-    return parseFloat(data);
-  }
-}
 
 export const imageUrlTransformer: ValueTransformer = {
   to: (value: string) => value,
@@ -83,7 +75,7 @@ export class Asset {
    */
   @Column({
     type: 'decimal',
-    precision: 20,
+    precision: 30,
     scale: 2,
     default: 0,
     transformer: new ColumnNumericTransformer(),
