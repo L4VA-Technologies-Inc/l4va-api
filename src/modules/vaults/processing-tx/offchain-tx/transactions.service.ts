@@ -110,7 +110,7 @@ export class TransactionsService {
           vault: { id: transaction.vault_id } as Vault,
           type: AssetType.ADA, // Using ADA type for acquire
           policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          asset_id: assetItem.assetName || '', // Default to empty string for EVM assets
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
@@ -223,7 +223,7 @@ export class TransactionsService {
           vault: { id: transaction.vault_id } as Vault,
           type: assetItem.type,
           policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          asset_id: assetItem.assetName || '', // Default to empty string for EVM ERC20 tokens
           quantity: rawQuantity, // Store raw blockchain quantity
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,

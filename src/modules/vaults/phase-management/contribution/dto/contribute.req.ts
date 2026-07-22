@@ -27,13 +27,13 @@ export class ContributionAsset {
   @Expose()
   type: AssetType;
 
-  @ApiProperty({
-    description: 'Asset name within the policy',
+  @ApiPropertyOptional({
+    description: 'Asset name within the policy (required for Cardano, optional for EVM tokens)',
     example: 'l4vaaudiEngine',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @Expose()
-  assetName: string;
+  assetName?: string;
 
   @ApiProperty({
     description:
