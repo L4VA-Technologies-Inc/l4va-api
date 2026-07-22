@@ -129,7 +129,12 @@ export class TransactionsService {
           return { assetItem, blockfrostMetadata: null };
         }
 
-        // Otherwise fetch from Blockfrost
+        // Skip Blockfrost for EVM assets (Blockfrost is Cardano-specific)
+        if (assetItem.policyId?.startsWith('0x')) {
+          return { assetItem, blockfrostMetadata: null };
+        }
+
+        // Otherwise fetch from Blockfrost for Cardano assets
         try {
           const unit = assetItem.policyId + assetItem.assetName;
           const assetInfo = await this.blockfrost.assetsById(unit);
