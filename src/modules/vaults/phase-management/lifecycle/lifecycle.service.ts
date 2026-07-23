@@ -23,6 +23,7 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
+import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -76,7 +77,8 @@ export class LifecycleService {
     private readonly dataSource: DataSource,
     private readonly evmCycleCloseService: EvmCycleCloseService,
     private readonly evmContractReader: EvmContractReader,
-    private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator
+    private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
+    private readonly evmRefundOrchestrator: EvmRefundOrchestrator
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -97,6 +99,8 @@ export class LifecycleService {
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
       await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
+      await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met
+      await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
     } finally {
       this.isRunning = false;
     }
@@ -2620,6 +2624,45 @@ export class LifecycleService {
       }
     } catch (err) {
       this.logger.error(`EVM airdrop sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: detect vaults whose acquire window has ended without meeting the
+   * on-chain minAcquireThreshold and broadcast `cancelCurrentCycle()`.
+   * Feeds the refund pipeline below.
+   */
+  private async handleEvmFailedVaultDetection(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmRefundOrchestrator.detectAndCancelFailedVaults();
+      if (stats.cancellationsInitiated > 0 || stats.cancellationsFailed > 0) {
+        this.logger.log(
+          `EVM failed-vault sweep: checked=${stats.vaultsChecked} cancelled=${stats.cancellationsInitiated} failed=${stats.cancellationsFailed}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM failed-vault detection failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: fan out refund batches for vaults whose cycle is Cancelled on-chain
+   * and still have active EvmContribution rows. Delegates candidate
+   * selection, RPC guards, batch broadcast, and event reconciliation to
+   * EvmRefundOrchestrator.
+   */
+  private async handleEvmRefundBatches(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmRefundOrchestrator.pushAllVaults();
+      if (stats.batchesBroadcast > 0 || stats.alreadyRefundedSkipped > 0) {
+        this.logger.log(
+          `EVM refund sweep: batches=${stats.batchesBroadcast} refunds=${stats.refundsBroadcast} alreadyOnChain=${stats.alreadyRefundedSkipped}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM refund sweep failed: ${(err as Error).message}`);
     }
   }
 }
