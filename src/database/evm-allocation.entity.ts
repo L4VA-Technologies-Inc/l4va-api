@@ -84,6 +84,10 @@ export class EvmAllocation {
   @Column({ name: 'claim_tx_hash', type: 'varchar', length: 66, nullable: true })
   claim_tx_hash?: string;
 
+  /** Block number the AllocationClaimed event was mined in — reorg / audit anchor. */
+  @Column({ name: 'claim_block_number', type: 'bigint', nullable: true })
+  claim_block_number?: string;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   created_at: Date;
 

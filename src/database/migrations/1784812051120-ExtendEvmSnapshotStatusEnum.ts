@@ -24,9 +24,7 @@ export class ExtendEvmSnapshotStatusEnum1784812051120 implements MigrationInterf
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TYPE "evm_snapshot_status_enum" ADD VALUE IF NOT EXISTS 'submitting'`);
-    await queryRunner.query(
-      `ALTER TYPE "evm_snapshot_status_enum" ADD VALUE IF NOT EXISTS 'reconciliation_required'`
-    );
+    await queryRunner.query(`ALTER TYPE "evm_snapshot_status_enum" ADD VALUE IF NOT EXISTS 'reconciliation_required'`);
   }
 
   public async down(): Promise<void> {

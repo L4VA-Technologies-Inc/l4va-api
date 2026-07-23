@@ -6,7 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
-import { EvmVaultEventReconciler, VaultLogInput } from './evm-vault-event-reconciler.service';
+import { EvmVaultEventReconciler, VaultLogInput, PerTxOutcome } from './evm-vault-event-reconciler.service';
 
 import { TransactionStatus } from '@/types/transaction.types';
 
@@ -115,16 +115,14 @@ export class EvmWebhookService {
           `Vault event reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
         );
 
-        // Fast-path: when the webhook batch fully reconciled without errors,
-        // mark every parent Transaction as reconciled so the health-checker
-        // sweep doesn't re-fetch the receipt on the next tick. If errors > 0
-        // we deliberately leave reconciliation_status/reconciled_at untouched
-        // and let TransactionHealthService's cron retry the whole receipt.
-        if (stats.errors === 0) {
-          const distinctHashes = Array.from(new Set(vaultLogs.map(l => l.txHash)));
-          for (const hash of distinctHashes) {
-            await this.markTransactionReconciled(hash);
-          }
+        // Fast-path: mark each parent Transaction reconciled ONLY if its
+        // per-tx outcome satisfies its expected_events spec. Anything short
+        // is left for the health-check cron to retry against a fresh
+        // canonical receipt. Never blindly trust webhook logs — Alchemy may
+        // drop or reorder items across redeliveries.
+        const distinctHashes = Array.from(new Set(vaultLogs.map(l => l.txHash)));
+        for (const hash of distinctHashes) {
+          await this.markTransactionReconciledIfSpecMet(hash, stats.perTx.get(hash));
         }
       } catch (err) {
         // Reconciliation failures MUST NOT roll back the tx-status updates
@@ -138,15 +136,26 @@ export class EvmWebhookService {
   }
 
   /**
-   * Idempotently mark an EVM transaction fully reconciled. Only flips from
-   * NULL → success — never overwrites a prior 'success' or 'failed'.
+   * Idempotently mark an EVM transaction fully reconciled — but ONLY if its
+   * expected_events spec is fully satisfied by this webhook batch. If the
+   * spec is missing (legacy row) treat any errors-free outcome as ok. On
+   * anything short, leave the row untouched so the durable cron retries.
    */
-  private async markTransactionReconciled(txHash: string): Promise<void> {
+  private async markTransactionReconciledIfSpecMet(txHash: string, outcome?: PerTxOutcome): Promise<void> {
     try {
+      const tx = await this.blockchainWebhookService.findEvmTransactionByHashOrChildHash(txHash);
+      if (!tx) return;
+      const verdict = this.vaultEventReconciler.verifyExpectedEvents(outcome, tx.expected_events);
+      if (!verdict.ok) {
+        this.logger.debug(
+          `Webhook fast-path skip: tx ${txHash} did not satisfy expected_events (${verdict.reason})`
+        );
+        return;
+      }
+      if ((outcome?.errors ?? []).length > 0) return;
       await this.blockchainWebhookService.markEvmTransactionReconciled(txHash);
     } catch (err) {
-      // Non-fatal — the health-check cron owns the retry.
-      this.logger.debug(`markTransactionReconciled(${txHash}) failed: ${(err as Error).message}`);
+      this.logger.debug(`markTransactionReconciledIfSpecMet(${txHash}) failed: ${(err as Error).message}`);
     }
   }
 

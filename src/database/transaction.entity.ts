@@ -213,4 +213,13 @@ export class Transaction {
   @Expose({ name: 'reconciledAt' })
   @Column({ name: 'reconciled_at', type: 'timestamptz', nullable: true })
   reconciled_at?: Date;
+
+  /**
+   * JSONB array of ExpectedEventSpec entries the reconciler MUST see for this
+   * tx to reach `success`. Empty / null means "no expectations" (legacy or
+   * unrelated tx). Any non-empty spec must be fully satisfied.
+   */
+  @Expose({ name: 'expectedEvents' })
+  @Column({ name: 'expected_events', type: 'jsonb', nullable: true })
+  expected_events?: Array<{ name: string; count?: number }>;
 }

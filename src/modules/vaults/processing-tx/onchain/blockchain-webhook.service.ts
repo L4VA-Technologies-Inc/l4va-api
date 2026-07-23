@@ -321,6 +321,23 @@ export class BlockchainWebhookService {
   }
 
   /**
+   * Find the Transaction row that owns an EVM tx hash. Two paths:
+   *   1. `transactions.tx_hash = hash` — the classic case.
+   *   2. Any Transaction whose `metadata.evmChildTxHashes` array contains
+   *      `hash` — for the multi-child contribution flow.
+   */
+  async findEvmTransactionByHashOrChildHash(hash: string): Promise<Transaction | null> {
+    const direct = await this.transactionRepository.findOne({ where: { tx_hash: hash } });
+    if (direct) return direct;
+    return this.transactionRepository
+      .createQueryBuilder('t')
+      .where(`t.metadata -> 'evmChildTxHashes' @> :hashArray::jsonb`, {
+        hashArray: JSON.stringify([hash]),
+      })
+      .getOne();
+  }
+
+  /**
    * Index a reward activity event when a contribution or acquisition is confirmed on-chain.
    */
   private async indexRewardEvent(transaction: any, txHash: string): Promise<void> {

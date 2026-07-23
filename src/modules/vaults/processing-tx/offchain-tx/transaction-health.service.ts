@@ -386,10 +386,21 @@ export class TransactionHealthService {
       logIndex: typeof log.logIndex === 'number' ? log.logIndex : null,
     }));
 
-    // No logs means nothing to reconcile — still mark success so the sweep
-    // stops touching this row.
+    const expected = transaction.expected_events;
+
+    // No logs AND no expected events → truly a no-op (unrelated tx). Success.
+    // No logs BUT expected events → hard failure — the receipt should have
+    // included them.
     if (vaultLogs.length === 0) {
-      await this.markReconciled(transaction);
+      if (expected && expected.length > 0) {
+        await this.recordReconciliationAttempt(
+          transaction,
+          EvmReconciliationStatus.pending,
+          `receipt has zero vault logs but tx expected ${expected.map(e => e.name).join(', ')}`
+        );
+      } else {
+        await this.markReconciled(transaction);
+      }
       return;
     }
 
@@ -402,17 +413,29 @@ export class TransactionHealthService {
       return;
     }
 
-    if (stats.errors > 0) {
+    // Expected-event check — enforced regardless of aggregate error count so
+    // "skipped when required" counts as a reconciliation error.
+    const verdict = this.vaultEventReconciler.verifyExpectedEvents(stats.perTx.get(transaction.tx_hash), expected);
+    if (!verdict.ok) {
       await this.recordReconciliationAttempt(
         transaction,
         EvmReconciliationStatus.pending,
-        `reconciler reported errors=${stats.errors} (processed=${stats.processed}, skipped=${stats.skipped})`
+        verdict.reason ?? 'expected-event check failed'
       );
       return;
     }
 
-    // errors=0 → either processed some events or nothing matched (unrelated tx).
-    // Either way we're done with this row.
+    // Aggregate reconciler errors — anything the reconciler couldn't apply.
+    if (stats.errors > 0) {
+      const perTx = stats.perTx.get(transaction.tx_hash);
+      await this.recordReconciliationAttempt(
+        transaction,
+        EvmReconciliationStatus.pending,
+        `reconciler errors=${stats.errors} for tx ${transaction.tx_hash}: ${(perTx?.errors ?? []).slice(0, 3).join('; ') || '(no per-tx detail)'}`
+      );
+      return;
+    }
+
     await this.markReconciled(transaction);
   }
 
@@ -435,12 +458,18 @@ export class TransactionHealthService {
     lastError: string
   ): Promise<void> {
     const attempts = (transaction.reconciliation_attempts ?? 0) + 1;
-    // Cap 'failed' bit here to avoid infinite retries on a persistently
-    // broken tx (e.g. reverted or invalid).
-    const finalStatus =
-      status === EvmReconciliationStatus.failed || attempts >= this.MAX_RECONCILIATION_ATTEMPTS
-        ? EvmReconciliationStatus.failed
-        : EvmReconciliationStatus.pending;
+    // Terminal states:
+    //   - `failed` for explicitly unrecoverable outcomes (reverted receipts).
+    //   - `manual_review_required` after retry cap for anything else. Retryable
+    //     via the explicit `retryReconciliation(txId)` admin path.
+    let finalStatus: EvmReconciliationStatus;
+    if (status === EvmReconciliationStatus.failed) {
+      finalStatus = EvmReconciliationStatus.failed;
+    } else if (attempts >= this.MAX_RECONCILIATION_ATTEMPTS) {
+      finalStatus = EvmReconciliationStatus.manual_review_required;
+    } else {
+      finalStatus = EvmReconciliationStatus.pending;
+    }
 
     await this.transactionRepository
       .createQueryBuilder()
@@ -457,10 +486,37 @@ export class TransactionHealthService {
       this.logger.error(
         `EVM reconciliation FAILED terminally for tx ${transaction.tx_hash} after ${attempts} attempt(s): ${lastError}`
       );
+    } else if (finalStatus === EvmReconciliationStatus.manual_review_required) {
+      this.logger.error(
+        `EVM reconciliation NEEDS MANUAL REVIEW for tx ${transaction.tx_hash} after ${attempts} attempt(s): ${lastError}. ` +
+          `Use retryReconciliation(txId) to reset.`
+      );
     } else {
       this.logger.warn(
         `EVM reconciliation attempt ${attempts}/${this.MAX_RECONCILIATION_ATTEMPTS} for tx ${transaction.tx_hash}: ${lastError}`
       );
     }
+  }
+
+  /**
+   * Explicit retry path for a Transaction stuck in `manual_review_required`
+   * (or `failed`). Resets attempts to zero and flips status back to
+   * `pending` so the cron sweep picks it up on the next tick.
+   */
+  async retryReconciliation(txId: string): Promise<boolean> {
+    const result = await this.transactionRepository
+      .createQueryBuilder()
+      .update(Transaction)
+      .set({
+        reconciliation_status: EvmReconciliationStatus.pending,
+        reconciliation_attempts: 0,
+        reconciliation_last_error: null,
+      })
+      .where('id = :id AND reconciled_at IS NULL AND reconciliation_status IN (:...retryable)', {
+        id: txId,
+        retryable: [EvmReconciliationStatus.manual_review_required, EvmReconciliationStatus.failed],
+      })
+      .execute();
+    return (result.affected ?? 0) > 0;
   }
 }

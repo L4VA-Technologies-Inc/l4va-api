@@ -8,7 +8,14 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import {
+  EvmReconciliationStatus,
+  ExpectedEventSpec,
+  TransactionStatus,
+  TransactionType,
+} from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
 
 /**
@@ -44,6 +51,7 @@ export class EvmCycleCloseService {
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(EvmValuationSnapshot) private readonly snapshotsRepository: Repository<EvmValuationSnapshot>,
+    @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner
@@ -144,6 +152,16 @@ export class EvmCycleCloseService {
     const expectedTotalVt = BigInt(snapshot.total_vt_allocation);
     const expectedTotalNative = BigInt(snapshot.total_native_allocation);
 
+    // Create the admin Transaction row up front so the health-check cron
+    // knows what events are expected on the receipt. reconciliation_status
+    // = 'pending' is what makes the sweep pick this row up on retry.
+    const adminTx = await this.createAdminTxRow({
+      type: TransactionType.evmCloseCycle,
+      vaultId,
+      vault,
+      expectedEvents: [{ name: 'CycleClosed', count: 1 }],
+    });
+
     // ── simulate → broadcast → persist(hash) → wait → decode ─────────────────
     let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
     try {
@@ -155,25 +173,46 @@ export class EvmCycleCloseService {
           args: [expectedRoot, expectedValuationHash, expectedTotalVt, expectedTotalNative],
         },
         ['CycleClosed'],
-        // onBroadcast: persist the hash immediately so a crash-between-broadcast-
-        // and-receipt is recoverable via `reconcileFromChain`.
+        // onBroadcast: persist hash on BOTH the snapshot AND the admin Tx row
+        // BEFORE waiting for receipt. This makes the flow crash-safe.
         async (hash) => {
-          await this.snapshotsRepository.update(
-            { id: snapshot.id },
-            { status: EvmSnapshotStatus.submitted, submit_tx_hash: hash }
-          );
+          await this.dataSource.transaction(async manager => {
+            await manager.update(
+              EvmValuationSnapshot,
+              { id: snapshot.id },
+              { status: EvmSnapshotStatus.submitted, submit_tx_hash: hash }
+            );
+            await manager.update(
+              Transaction,
+              { id: adminTx.id },
+              { tx_hash: hash, status: TransactionStatus.submitted }
+            );
+          });
         }
       );
     } catch (err) {
       if (err instanceof TxRevertedError) {
-        await this.snapshotsRepository.update(
-          { id: snapshot.id },
-          {
-            status: EvmSnapshotStatus.failed,
-            submit_tx_hash: err.hash,
-            failure_reason: `receipt reverted: ${err.message.slice(0, 500)}`,
-          }
-        );
+        await this.dataSource.transaction(async manager => {
+          await manager.update(
+            EvmValuationSnapshot,
+            { id: snapshot.id },
+            {
+              status: EvmSnapshotStatus.failed,
+              submit_tx_hash: err.hash,
+              failure_reason: `receipt reverted: ${err.message.slice(0, 500)}`,
+            }
+          );
+          await manager.update(
+            Transaction,
+            { id: adminTx.id },
+            {
+              tx_hash: err.hash,
+              status: TransactionStatus.failed,
+              reconciliation_status: EvmReconciliationStatus.failed,
+              reconciliation_last_error: err.message.slice(0, 500),
+            }
+          );
+        });
         throw err;
       }
       // We may or may not have persisted a hash via onBroadcast. If we did,
@@ -182,24 +221,45 @@ export class EvmCycleCloseService {
       const current = await this.snapshotsRepository.findOne({ where: { id: snapshot.id } });
       const reason = (err as Error).message || String(err);
       if (current?.submit_tx_hash) {
-        await this.snapshotsRepository.update(
-          { id: snapshot.id },
-          {
-            status: EvmSnapshotStatus.reconciliation_required,
-            failure_reason: `receipt wait failed with hash present: ${reason.slice(0, 500)}`,
-          }
-        );
+        await this.dataSource.transaction(async manager => {
+          await manager.update(
+            EvmValuationSnapshot,
+            { id: snapshot.id },
+            {
+              status: EvmSnapshotStatus.reconciliation_required,
+              failure_reason: `receipt wait failed with hash present: ${reason.slice(0, 500)}`,
+            }
+          );
+          // Leave Transaction.reconciliation_status='pending' so the sweep retries.
+          await manager.update(
+            Transaction,
+            { id: adminTx.id },
+            { reconciliation_last_error: `receipt wait failed: ${reason.slice(0, 500)}` }
+          );
+        });
       } else {
-        await this.snapshotsRepository.update(
-          { id: snapshot.id },
-          { status: EvmSnapshotStatus.failed, failure_reason: `broadcast: ${reason.slice(0, 500)}` }
-        );
+        await this.dataSource.transaction(async manager => {
+          await manager.update(
+            EvmValuationSnapshot,
+            { id: snapshot.id },
+            { status: EvmSnapshotStatus.failed, failure_reason: `broadcast: ${reason.slice(0, 500)}` }
+          );
+          await manager.update(
+            Transaction,
+            { id: adminTx.id },
+            {
+              status: TransactionStatus.failed,
+              reconciliation_status: EvmReconciliationStatus.failed,
+              reconciliation_last_error: `broadcast failed: ${reason.slice(0, 500)}`,
+            }
+          );
+        });
       }
       throw err;
     }
 
     // Receipt succeeded. Validate emitted event(s).
-    await this.validateAndCommit(snapshot.id, vaultAddress, vaultId, cycleId, result, {
+    await this.validateAndCommit(snapshot.id, adminTx.id, vaultAddress, vaultId, cycleId, result, {
       expectedRoot,
       expectedValuationHash,
       expectedTotalVt,
@@ -242,7 +302,7 @@ export class EvmCycleCloseService {
       cycleView.totalNativeAllocation === BigInt(snapshot.total_native_allocation) &&
       cycleView.status === EvmCycleStatus.Locked
     ) {
-      await this.commitConfirmed(snapshot, vault.id, BigInt(snapshot.cycle_id), onChainRoot, snapshot.submit_tx_hash as Hex);
+      await this.commitConfirmed(snapshot, null, vault.id, BigInt(snapshot.cycle_id), onChainRoot, snapshot.submit_tx_hash as Hex);
       this.logger.log(`Reconciled snapshot ${snapshotId} → confirmed (root matches on-chain)`);
       return { status: EvmSnapshotStatus.confirmed, onChainRoot };
     }
@@ -313,6 +373,14 @@ export class EvmCycleCloseService {
 
     this.logger.log(`Cancelling current cycle for vault ${vaultId} (reason: ${reason})`);
 
+    // Admin Tx row for reconciliation tracking.
+    const adminTx = await this.createAdminTxRow({
+      type: TransactionType.evmCancelCycle,
+      vaultId,
+      vault,
+      expectedEvents: [{ name: 'CycleStatusChanged', count: 1 }],
+    });
+
     const result = await this.adminSigner.sendAndConfirm(
       {
         address: vaultAddress,
@@ -321,9 +389,16 @@ export class EvmCycleCloseService {
         args: [],
       },
       ['CycleStatusChanged'],
-      // Persist the hash the moment we have it.
+      // Persist the hash the moment we have it — on BOTH the vault and the tx row.
       async (hash) => {
-        await this.vaultsRepository.update({ id: vaultId }, { evm_cancel_cycle_tx_hash: hash });
+        await this.dataSource.transaction(async manager => {
+          await manager.update(Vault, { id: vaultId }, { evm_cancel_cycle_tx_hash: hash });
+          await manager.update(
+            Transaction,
+            { id: adminTx.id },
+            { tx_hash: hash, status: TransactionStatus.submitted }
+          );
+        });
       }
     );
 
@@ -335,14 +410,60 @@ export class EvmCycleCloseService {
         Number((e.args as { newStatus: number }).newStatus) === EvmCycleStatus.Cancelled
     );
     if (!evt) {
+      // Success receipt but no matching event decoded — leave reconciliation
+      // pending so the health-check cron re-fetches and resolves.
+      await this.transactionsRepository.update(
+        { id: adminTx.id },
+        {
+          status: TransactionStatus.confirmed,
+          reconciliation_last_error: `CycleStatusChanged(Cancelled) not decoded in receipt tx ${result.hash}`,
+        }
+      );
       this.logger.warn(
         `cancelCurrentCycle tx ${result.hash} confirmed but no CycleStatusChanged(Cancelled) event decoded. ` +
-          `Hash is persisted; webhook layer will reconcile.`
+          `Hash persisted; health-check cron will reconcile.`
+      );
+    } else {
+      // Happy path: mark tx confirmed AND reconciled.
+      await this.transactionsRepository.update(
+        { id: adminTx.id },
+        {
+          status: TransactionStatus.confirmed,
+          reconciliation_status: EvmReconciliationStatus.success,
+          reconciled_at: new Date(),
+          reconciliation_last_error: null,
+        }
       );
     }
 
     this.logger.log(`Cycle cancelled for vault ${vaultId}. tx=${result.hash}`);
     return { txHash: result.hash };
+  }
+
+  /**
+   * Create a Transaction row for an admin-signed on-chain operation. Called
+   * by every admin broadcast BEFORE simulate/send so that a crash between
+   * broadcast and receipt leaves a diagnosable, retryable row for the
+   * health-check cron.
+   */
+  private async createAdminTxRow(params: {
+    type: TransactionType;
+    vaultId: string;
+    vault: Vault;
+    expectedEvents: ExpectedEventSpec[];
+  }): Promise<Transaction> {
+    const tx = this.transactionsRepository.create({
+      type: params.type,
+      status: TransactionStatus.pending,
+      vault_id: params.vaultId,
+      chain_id: params.vault.chain_id,
+      from_address: this.adminSigner.address,
+      to_address: params.vault.contract_address,
+      reconciliation_status: EvmReconciliationStatus.pending,
+      reconciliation_attempts: 0,
+      expected_events: params.expectedEvents,
+    });
+    return this.transactionsRepository.save(tx);
   }
 
   // ==========================================================================
@@ -351,6 +472,7 @@ export class EvmCycleCloseService {
 
   private async validateAndCommit(
     snapshotId: string,
+    adminTxId: string,
     vaultAddress: Address,
     vaultId: string,
     cycleId: bigint,
@@ -371,14 +493,26 @@ export class EvmCycleCloseService {
     if (!cycleClosed) {
       // Successful receipt, no matching event. Do NOT fail — kick to
       // reconciliation so we can check the on-chain cycle before deciding.
-      await this.snapshotsRepository.update(
-        { id: snapshotId },
-        {
-          status: EvmSnapshotStatus.reconciliation_required,
-          submit_tx_hash: result.hash,
-          failure_reason: `CycleClosed event not found (or wrong emitter) in receipt for tx ${result.hash}`,
-        }
-      );
+      await this.dataSource.transaction(async manager => {
+        await manager.update(
+          EvmValuationSnapshot,
+          { id: snapshotId },
+          {
+            status: EvmSnapshotStatus.reconciliation_required,
+            submit_tx_hash: result.hash,
+            failure_reason: `CycleClosed event not found (or wrong emitter) in receipt for tx ${result.hash}`,
+          }
+        );
+        // Confirm the tx status (it landed) but leave reconciliation_status='pending'.
+        await manager.update(
+          Transaction,
+          { id: adminTxId },
+          {
+            status: TransactionStatus.confirmed,
+            reconciliation_last_error: `CycleClosed event not found (or wrong emitter) in tx ${result.hash}`,
+          }
+        );
+      });
       throw new Error(
         `CycleClosed event missing/mismatched-emitter in tx ${result.hash} — snapshot ${snapshotId} marked reconciliation_required`
       );
@@ -404,16 +538,25 @@ export class EvmCycleCloseService {
       mismatches.push(`totalNative ${args.totalNativeAllocation} vs ${expectedTotalNative}`);
 
     if (mismatches.length > 0) {
-      // Event args diverge from what we prepared. Route to reconciliation so
-      // the operator can decide (never rebroadcast in this branch).
-      await this.snapshotsRepository.update(
-        { id: snapshotId },
-        {
-          status: EvmSnapshotStatus.reconciliation_required,
-          submit_tx_hash: result.hash,
-          failure_reason: `CycleClosed mismatch(es): ${mismatches.join('; ')}`,
-        }
-      );
+      await this.dataSource.transaction(async manager => {
+        await manager.update(
+          EvmValuationSnapshot,
+          { id: snapshotId },
+          {
+            status: EvmSnapshotStatus.reconciliation_required,
+            submit_tx_hash: result.hash,
+            failure_reason: `CycleClosed mismatch(es): ${mismatches.join('; ')}`,
+          }
+        );
+        await manager.update(
+          Transaction,
+          { id: adminTxId },
+          {
+            status: TransactionStatus.confirmed,
+            reconciliation_last_error: `CycleClosed mismatch(es): ${mismatches.join('; ')}`,
+          }
+        );
+      });
       throw new Error(
         `CycleClosed event mismatches for tx ${result.hash}: ${mismatches.join('; ')} — snapshot ${snapshotId} marked reconciliation_required`
       );
@@ -422,13 +565,14 @@ export class EvmCycleCloseService {
     // All good — commit atomically.
     const snapshot = await this.snapshotsRepository.findOne({ where: { id: snapshotId } });
     if (!snapshot) throw new Error(`Snapshot ${snapshotId} vanished before commit`);
-    await this.commitConfirmed(snapshot, vaultId, cycleId, expectedRoot, result.hash);
+    await this.commitConfirmed(snapshot, adminTxId, vaultId, cycleId, expectedRoot, result.hash);
 
     this.logger.log(`Cycle ${cycleId} for vault ${vaultId} confirmed. tx=${result.hash} root=${expectedRoot}`);
   }
 
   private async commitConfirmed(
     snapshot: EvmValuationSnapshot,
+    adminTxId: string | null,
     vaultId: string,
     cycleId: bigint,
     root: Hex,
@@ -455,6 +599,21 @@ export class EvmCycleCloseService {
           evm_root_committed_at: new Date(),
         }
       );
+      if (adminTxId) {
+        // Mark admin Tx confirmed, and if the receipt-time event validation
+        // already covered our expected_events spec then reconciliation is
+        // done. Set reconciled_at directly.
+        await manager.update(
+          Transaction,
+          { id: adminTxId },
+          {
+            status: TransactionStatus.confirmed,
+            reconciliation_status: EvmReconciliationStatus.success,
+            reconciled_at: new Date(),
+            reconciliation_last_error: null,
+          }
+        );
+      }
     });
   }
 }
