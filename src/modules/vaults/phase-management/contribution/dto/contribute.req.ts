@@ -6,9 +6,10 @@ import { MAX_ASSET_DECIMALS } from '../contribution-asset.utils';
 
 import { AssetType } from '@/types/asset.types';
 
-// Maximum safe quantity to prevent database overflow and JS precision loss
-// Using Number.MAX_SAFE_INTEGER (2^53 - 1) = 9,007,199,254,740,991
-export const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER;
+// NOTE: For EVM tokens with 18 decimals, raw quantities will exceed MAX_SAFE_INTEGER.
+// Validation should be performed on decimal-adjusted quantities, not raw blockchain values.
+// This constant is kept for reference but not used for FT quantity validation.
+export const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
 
 export class ContributionAsset {
   @ApiProperty({

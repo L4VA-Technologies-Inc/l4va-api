@@ -21,10 +21,9 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
-// Maximum safe quantity for JavaScript number handling
-// Using Number.MAX_SAFE_INTEGER (2^53 - 1) to prevent precision loss
-const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
-const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000000; // 1 trillion
+// Threshold for logging warnings about large token quantities (decimal-adjusted)
+// Set to 1 trillion tokens to catch potentially suspicious contributions
+const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000000; // 1 trillion tokens
 
 @Injectable()
 export class ContributionService {
@@ -215,18 +214,28 @@ export class ContributionService {
           0
         );
 
-        // Additional safety check: prevent individual FT quantities from exceeding reasonable limits
+        // Additional safety check: prevent unreasonably large decimal-adjusted FT quantities
+        // Note: Raw quantities for EVM tokens (18 decimals) will exceed MAX_SAFE_INTEGER,
+        // so we validate the decimal-adjusted (human-readable) amount instead.
         for (const asset of assetsByPolicy[policyId]) {
-          const qty = Number(asset.quantity) || 0;
-          if (asset.type === 'ft' && qty > MAX_SAFE_QUANTITY) {
-            throw new BadRequestException(`Asset quantity ${qty} exceeds maximum safe value for policy ${policyId}`);
-          }
+          if (asset.type === 'ft') {
+            const rawQty = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
+            const decimals = asset.decimals ?? 6;
+            const decimalAdjustedQty = decimals > 0 ? rawQty / Math.pow(10, decimals) : rawQty;
 
-          // Log warning for very large quantities
-          if (qty > LARGE_QUANTITY_WARNING_THRESHOLD) {
-            this.logger.warn(
-              `Large quantity contribution detected: ${qty} tokens for policy ${policyId} by user ${userId}`
-            );
+            // Validate decimal-adjusted quantity is within reasonable bounds (1 trillion tokens)
+            if (decimalAdjustedQty > LARGE_QUANTITY_WARNING_THRESHOLD) {
+              this.logger.warn(
+                `Large quantity contribution detected: ${decimalAdjustedQty} tokens (${rawQty} raw) for policy ${policyId} by user ${userId}`
+              );
+
+              // Reject if truly unreasonable (>1 quadrillion tokens)
+              if (decimalAdjustedQty > LARGE_QUANTITY_WARNING_THRESHOLD * 1000) {
+                throw new BadRequestException(
+                  `Asset quantity ${decimalAdjustedQty} tokens exceeds maximum reasonable value for policy ${policyId}`
+                );
+              }
+            }
           }
         }
 
