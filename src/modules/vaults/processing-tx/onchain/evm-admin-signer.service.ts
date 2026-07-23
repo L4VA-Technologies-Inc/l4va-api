@@ -25,6 +25,20 @@ export interface AdminTxOptions<TAbi extends Abi, TFunctionName extends string> 
   timeoutMs?: number;
 }
 
+/**
+ * Thrown when the receipt reports on-chain revert. Carries the hash so the
+ * caller can persist it against the operation record for post-mortem.
+ */
+export class TxRevertedError extends Error {
+  constructor(
+    public readonly hash: Hex,
+    public readonly receipt: TransactionReceipt
+  ) {
+    super(`Transaction ${hash} reverted on-chain (status=${receipt.status})`);
+    this.name = 'TxRevertedError';
+  }
+}
+
 export interface AdminTxResult {
   hash: Hex;
   receipt: TransactionReceipt;
@@ -102,10 +116,14 @@ export class EvmAdminSigner {
    * @param expectedEventNames Event names (from `opts.abi`) whose logs the caller
    *   wants back, decoded. Non-matching logs are ignored. If a required event is
    *   missing from a successful receipt, caller can detect via `decodedEvents.length`.
+   * @param onBroadcast Optional callback fired the moment writeContract returns
+   *   the hash (BEFORE waiting for the receipt). The caller MUST use it to
+   *   persist the hash so a crash-in-flight can be reconciled from-chain later.
    */
   async sendAndConfirm<TAbi extends Abi, TFunctionName extends string>(
     opts: AdminTxOptions<TAbi, TFunctionName>,
-    expectedEventNames: string[] = []
+    expectedEventNames: string[] = [],
+    onBroadcast?: (hash: Hex) => Promise<void>
   ): Promise<AdminTxResult> {
     const { address, abi, functionName, args, value, timeoutMs = 120_000 } = opts;
 
@@ -138,6 +156,18 @@ export class EvmAdminSigner {
 
     this.logger.log(`Broadcast ${functionName} tx=${hash}`);
 
+    // 2a. Persist the hash before waiting. If this throws, we still return
+    // the receipt-wait error so the caller knows both things happened.
+    if (onBroadcast) {
+      try {
+        await onBroadcast(hash);
+      } catch (persistErr) {
+        this.logger.error(
+          `onBroadcast(${hash}) failed: ${(persistErr as Error).message}. Continuing to wait for receipt.`
+        );
+      }
+    }
+
     // 3. Wait for receipt.
     const receipt = await this.publicClient.waitForTransactionReceipt({
       hash,
@@ -146,13 +176,30 @@ export class EvmAdminSigner {
 
     // 4. Require success.
     if (receipt.status !== 'success') {
-      throw new Error(`Transaction ${hash} reverted on-chain (status=${receipt.status})`);
+      throw new TxRevertedError(hash, receipt);
     }
 
     // 5. Decode expected events.
     const decodedEvents = expectedEventNames.length > 0 ? this.decodeEvents(abi, receipt.logs, expectedEventNames) : [];
 
     return { hash, receipt, decodedEvents };
+  }
+
+  /** Public helper for reconciliation paths that only have a hash. */
+  async fetchReceiptAndDecode<TAbi extends Abi>(
+    hash: Hex,
+    abi: TAbi,
+    expectedEventNames: string[]
+  ): Promise<AdminTxResult> {
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
+    if (receipt.status !== 'success') {
+      throw new TxRevertedError(hash, receipt);
+    }
+    return {
+      hash,
+      receipt,
+      decodedEvents: this.decodeEvents(abi, receipt.logs, expectedEventNames),
+    };
   }
 
   private decodeEvents(

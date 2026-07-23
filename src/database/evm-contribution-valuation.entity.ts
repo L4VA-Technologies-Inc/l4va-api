@@ -75,12 +75,34 @@ export class EvmContributionValuation {
   })
   amount_raw: string;
 
-  /** Decimal-normalized quantity (e.g. FT quantity / 10^decimals). */
-  @Column({ name: 'amount_normalized', type: 'decimal', precision: 78, scale: 18 })
+  /**
+   * Amount in whole-unit base: for ERC20 = amount_raw scaled by 10^18 / 10^decimals
+   * (i.e. 18-decimal-normalized quantity in wei-scale); for NFTs = count * 10^18;
+   * for Native = wei directly. Stored as bigint via ColumnBigintStringTransformer.
+   */
+  @Column({
+    name: 'amount_normalized',
+    type: 'decimal',
+    precision: 78,
+    scale: 0,
+    transformer: new ColumnBigintStringTransformer(),
+  })
   amount_normalized: string;
 
-  /** Unit price in wei of native (ETH). */
-  @Column({ name: 'unit_price_native', type: 'decimal', precision: 78, scale: 18 })
+  /**
+   * Unit price in wei per whole unit.
+   *   ERC-20 → wei per whole token (10^decimals base units)
+   *   ERC-721 / ERC-1155 → wei per NFT
+   *   Native → 1
+   * Stored as bigint via ColumnBigintStringTransformer.
+   */
+  @Column({
+    name: 'unit_price_native',
+    type: 'decimal',
+    precision: 78,
+    scale: 0,
+    transformer: new ColumnBigintStringTransformer(),
+  })
   unit_price_native: string;
 
   /** Total native value in wei (amount_normalized * unit_price_native, rounded). */

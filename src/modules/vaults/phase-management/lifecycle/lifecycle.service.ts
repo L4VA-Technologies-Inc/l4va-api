@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
@@ -11,6 +11,7 @@ import { ExpansionService } from '../governance/expansion.service';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -19,6 +20,8 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -28,11 +31,12 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
-  VaultStatus,
+  ChainType,
   ContributionWindowType,
   InvestmentWindowType,
   SmartContractVaultStatus,
   VaultFailureReason,
+  VaultStatus,
 } from '@/types/vault.types';
 
 @Injectable()
@@ -67,7 +71,10 @@ export class LifecycleService {
     private readonly eventEmitter: EventEmitter2,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly expansionService: ExpansionService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly dataSource: DataSource,
+    private readonly evmCycleCloseService: EvmCycleCloseService,
+    private readonly evmContractReader: EvmContractReader
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -86,6 +93,7 @@ export class LifecycleService {
       await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
+      await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
     } finally {
       this.isRunning = false;
     }
@@ -754,6 +762,10 @@ export class LifecycleService {
         now,
       })
       .andWhere('vault.is_acquire_only IS NOT TRUE')
+      // EVM (Robinhood) vaults are handled by handleEvmAcquireToLocked instead.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: 'robinhood',
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
@@ -2495,5 +2507,95 @@ export class LifecycleService {
     } catch (error) {
       this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM: broadcast closeCycle for vaults whose snapshot is ready.
+  //
+  // Lifecycle paths supported (all three end at Locked):
+  //   Contribution → Locked                     (Acquire window absent/zero-length)
+  //   Acquire      → Locked                     (Asset window absent/zero-length)
+  //   Contribution → Acquire → Locked           (standard two-window flow)
+  //
+  // We do NOT filter by DB `vault_status` — the source of truth for close
+  // eligibility is the on-chain cycle. This method requires:
+  //   1. A snapshot for the vault + cycle is in status='ready'.
+  //   2. On-chain cycle status is Active AND both configured windows have ended.
+  //      (closeCycleForVault's own preflight enforces (1) and Cycle=Active.
+  //       We enforce (2) here so we don't broadcast during a still-open window.)
+  //
+  // Gated by env `EVM_CYCLE_AUTOMATION_ENABLED=true`. Defaults to false while
+  // pricing, reconciliation, and webhook handlers are still being built out.
+  // ---------------------------------------------------------------------------
+  private async handleEvmAcquireToLocked(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+
+    const readySnapshots = await this.dataSource
+      .getRepository(EvmValuationSnapshot)
+      .createQueryBuilder('snap')
+      .innerJoin(Vault, 'vault', 'vault.id = snap.vault_id')
+      .where('snap.status = :status', { status: EvmSnapshotStatus.ready })
+      .andWhere('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.evm_root_committed_at IS NULL')
+      .select(['snap.id', 'snap.vault_id', 'snap.cycle_id'])
+      .getMany();
+
+    if (readySnapshots.length === 0) return;
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+
+    for (const snap of readySnapshots) {
+      if (this.processingVaults.has(snap.vault_id)) continue;
+
+      // On-chain gate: both windows must have ended AND cycle must still be Active.
+      // Note: closeCycleForVault repeats the Active check under its DB gate.
+      let bothWindowsClosed = false;
+      try {
+        const vault = await this.vaultRepository.findOne({
+          where: { id: snap.vault_id },
+          select: ['id', 'contract_address', 'chain_id'],
+        });
+        if (!vault?.contract_address) continue;
+        const cycleView = await this.evmContractReader.getCycle(
+          vault.contract_address as `0x${string}`,
+          BigInt(snap.cycle_id)
+        );
+        // Cycle must still be Active on-chain.
+        if (cycleView.status !== 0 /* EvmCycleStatus.Active */) continue;
+        // Both windows must have ended. Zero-length windows (start==end==0)
+        // are treated as already closed.
+        const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
+        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        bothWindowsClosed = assetEnded && acquireEnded;
+      } catch (err) {
+        this.logger.warn(
+          `EVM handleEvmAcquireToLocked window check failed for vault ${snap.vault_id}: ${(err as Error).message}`
+        );
+        continue;
+      }
+      if (!bothWindowsClosed) continue;
+
+      this.processingVaults.add(snap.vault_id);
+      try {
+        this.logger.log(`EVM closeCycle: vault=${snap.vault_id} cycle=${snap.cycle_id} snapshot=${snap.id}`);
+        await this.evmCycleCloseService.closeCycleForVault(snap.vault_id, BigInt(snap.cycle_id));
+      } catch (err) {
+        this.logger.error(
+          `EVM closeCycle failed for vault ${snap.vault_id} cycle ${snap.cycle_id}: ${(err as Error).message}`
+        );
+      } finally {
+        this.processingVaults.delete(snap.vault_id);
+      }
+    }
+  }
+
+  /**
+   * Feature flag for the automated EVM close-cycle pipeline. Defaults to
+   * FALSE so the cron does nothing until pricing, reconciliation, and
+   * webhook handlers are all wired up.
+   */
+  private isEvmCycleAutomationEnabled(): boolean {
+    const raw = process.env.EVM_CYCLE_AUTOMATION_ENABLED;
+    return raw === 'true' || raw === '1';
   }
 }

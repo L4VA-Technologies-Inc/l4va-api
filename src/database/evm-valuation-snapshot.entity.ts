@@ -16,19 +16,25 @@ import { EvmContributionValuation } from './evm-contribution-valuation.entity';
 import { Vault } from './vault.entity';
 
 /**
- * State machine for `EvmValuationSnapshot.status`. See session plan Phase B.
+ * State machine for `EvmValuationSnapshot.status`.
  *
- *   calculated  — compute finished, all inputs + outputs persisted, no on-chain action yet.
- *   ready       — sanity checks passed; snapshot is broadcast-eligible.
- *   submitted   — closeCycle tx broadcast; hash recorded.
- *   confirmed   — receipt confirmed AND decoded CycleClosed exactly matches the snapshot.
- *   failed      — sim revert, receipt reverted, event mismatch, or timeout.
+ *   calculated              — compute finished; all inputs + outputs persisted; no on-chain action yet.
+ *   ready                   — sanity checks passed; snapshot is broadcast-eligible.
+ *   submitting              — atomic gate flipped from ready; broadcast in flight, hash not yet persisted.
+ *                             Only lives inside a single call frame (see EvmCycleCloseService).
+ *   submitted               — closeCycle tx broadcast and hash persisted; awaiting receipt.
+ *   confirmed               — receipt confirmed AND decoded CycleClosed exactly matches the snapshot.
+ *   reconciliation_required — receipt successful BUT expected events missing or mismatched. Tx hash stored;
+ *                             `reconcileFromChain` re-reads on-chain root before promoting/failing.
+ *   failed                  — simulate revert, receipt reverted, or reconciliation concluded mismatch.
  */
 export enum EvmSnapshotStatus {
   calculated = 'calculated',
   ready = 'ready',
+  submitting = 'submitting',
   submitted = 'submitted',
   confirmed = 'confirmed',
+  reconciliation_required = 'reconciliation_required',
   failed = 'failed',
 }
 

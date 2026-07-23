@@ -11,7 +11,10 @@ import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
 import { EvmAdminSigner } from './evm-admin-signer.service';
+import { EvmAllocationService } from './evm-allocation.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmCycleCloseService } from './evm-cycle-close.service';
+import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { EvmWebhookService } from './evm-webhook.service';
@@ -26,6 +29,7 @@ import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContributionValuation } from '@/database/evm-contribution-valuation.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
+import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -55,6 +59,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
       EvmValuationSnapshot,
       EvmContributionValuation,
       EvmAllocation,
+      EvmAssetPriceFeedEntity,
     ]),
   ],
   controllers: [BlockchainController],
@@ -65,6 +70,9 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     BlockchainWebhookService,
     EvmContractReader,
     EvmAdminSigner,
+    EvmAllocationService,
+    EvmLockTimePricingService,
+    EvmCycleCloseService,
     EvmVaultSignerService,
     EvmVaultContributionService,
     EvmWebhookService,
@@ -80,6 +88,9 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     TransactionHealthService,
     EvmContractReader,
     EvmAdminSigner,
+    EvmAllocationService,
+    EvmLockTimePricingService,
+    EvmCycleCloseService,
   ],
 })
 export class BlockchainModule {}
