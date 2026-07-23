@@ -13,21 +13,25 @@ import { ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody } from '@nestjs/s
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { TriggerHealthCheckRes } from '../offchain-tx/dto/trigger-health-check.res';
+import { TransactionHealthService } from '../offchain-tx/transaction-health.service';
+
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BuildTransactionRes } from './dto/build-transaction.res';
+import { ConfirmEvmContributionReq, PrepareEvmContributionReq } from './dto/evm-contribution.dto';
 import { EvmWebhookDto } from './dto/evm-webhook.dto';
 import { HandleWebhookRes } from './dto/handle-webhook.res';
 import { BuildTransactionDto, SubmitTransactionDto, TransactionSubmitResponseDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
-import { TransactionHealthService } from '../offchain-tx/transaction-health.service';
-import { TriggerHealthCheckRes } from '../offchain-tx/dto/trigger-health-check.res';
 
 import { Vault } from '@/database/vault.entity';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
+import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 
 @ApiTags('blockchain')
 @Controller('blockchain')
@@ -36,6 +40,7 @@ export class BlockchainController {
     private readonly vaultContributionService: VaultContributionService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly evmWebhookService: EvmWebhookService,
+    private readonly evmVaultContributionService: EvmVaultContributionService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly transactionHealthService: TransactionHealthService,
     @InjectRepository(Vault)
@@ -64,6 +69,33 @@ export class BlockchainController {
   @UseGuards(AuthGuard)
   async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
     return this.vaultContributionService.submitContributionTransaction(params);
+  }
+
+  @Post('evm/contribution/prepare')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: 'Prepare EVM contribution — sign one ContributionAuthorization per asset',
+    description:
+      'Returns per-asset EIP-712 authorizations signed by the vault mintingKey, plus the vault address, chainId, and the approve/contribute calls the wallet must submit.',
+  })
+  async prepareEvmContribution(@Body() body: PrepareEvmContributionReq, @Request() req: AuthRequest) {
+    return this.evmVaultContributionService.prepareContribution(body.txId, req.user.sub);
+  }
+
+  @Post('evm/contribution/confirm')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: 'Confirm EVM contribution — persist tx hash and create Asset rows',
+    description:
+      'Called after the wallet has submitted all N on-chain contribute() calls. Stores the primary tx hash on the Transaction, records the child hashes in metadata, and materializes the Asset rows from the contribution metadata.',
+  })
+  async confirmEvmContribution(@Body() body: ConfirmEvmContributionReq, @Request() req: AuthRequest) {
+    return this.evmVaultContributionService.confirmContribution(
+      body.txId,
+      body.txHash,
+      req.user.sub,
+      body.childTxHashes
+    );
   }
 
   @Post('tx-webhook')

@@ -12,18 +12,10 @@ import {
 
 import { AssetType, AssetStatus, AssetOriginType } from '../types/asset.types';
 
+import { ColumnNumericTransformer } from './column-numeric.transformer';
 import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
-
-export class ColumnNumericTransformer {
-  to(data: number): number {
-    return data;
-  }
-  from(data: string): number {
-    return parseFloat(data);
-  }
-}
 
 export const imageUrlTransformer: ValueTransformer = {
   to: (value: string) => value,
@@ -80,10 +72,14 @@ export class Asset {
   /**
    * Raw quantity of the asset as stored in the database, not adjusted for decimals. For fungible tokens, this represents the total quantity.
    * For NFTs, this is typically 1. The actual value in human-readable form should be calculated using the 'decimals' field when applicable.
+   *
+   * Native asset unit contract:
+   * - ADA rows store quantity in ADA units.
+   * - ETH rows store quantity in wei (smallest unit, 1 ETH = 10^18 wei).
    */
   @Column({
     type: 'decimal',
-    precision: 20,
+    precision: 30,
     scale: 2,
     default: 0,
     transformer: new ColumnNumericTransformer(),
@@ -259,6 +255,7 @@ export class Asset {
    * Storage formats:
    * - FT tokens: Stored in raw units (e.g., 3,000,000 base units) → normalize by decimals
    * - ADA: Stored in ADA units (e.g., 5250.00 ADA) → already normalized
+   * - ETH: Stored in wei → convert to ETH externally when a display value is needed
    * - NFTs: Always 1 → no normalization needed
    *
    * @returns Normalized quantity (e.g., 3.0 tokens instead of 3,000,000 raw units)
@@ -267,6 +264,11 @@ export class Asset {
     // ADA is already stored in ADA units (not lovelace)
     if (this.type === AssetType.ADA) {
       return this.quantity;
+    }
+
+    // ETH is stored in wei; convert to ETH for API/display.
+    if (this.type === AssetType.ETH) {
+      return Number((this.quantity / 1_000_000_000_000_000_000).toFixed(6));
     }
 
     // NFTs are always quantity 1
@@ -305,6 +307,11 @@ export class Asset {
    * @returns Total value in ADA
    */
   get valueAda(): number {
+    // ETH quantity is persisted in wei and must be converted to ETH for value.
+    if (this.type === AssetType.ETH) {
+      return (this.quantity / 1_000_000_000_000_000_000) * this.effectivePrice;
+    }
+
     return this.normalizedQuantity * this.effectivePrice;
   }
 }

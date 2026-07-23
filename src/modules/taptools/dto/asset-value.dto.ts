@@ -108,6 +108,10 @@ export class AssetValueDto {
   @Expose()
   priceUsd: number;
 
+  @ApiProperty({ description: 'Asset price in ETH' })
+  @Expose()
+  priceEth: number;
+
   @ApiProperty({ description: 'Total value in ADA (price * quantity)' })
   @Expose()
   valueAda: number;
@@ -115,6 +119,10 @@ export class AssetValueDto {
   @ApiProperty({ description: 'Total value in USD (price * quantity)' })
   @Expose()
   valueUsd: number;
+
+  @ApiProperty({ description: 'Total value in ETH (price * quantity)' })
+  @Expose()
+  valueEth: number;
 
   @ApiProperty({ description: 'Asset metadata', required: false, type: () => AssetMetadataDto })
   @Expose()

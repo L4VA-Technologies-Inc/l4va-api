@@ -2,6 +2,7 @@ export enum AssetType {
   NFT = 'nft',
   FT = 'ft',
   ADA = 'ada',
+  ETH = 'eth',
 }
 
 export enum AssetStatus {

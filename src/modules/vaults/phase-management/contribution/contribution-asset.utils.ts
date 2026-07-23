@@ -7,7 +7,8 @@ export const DEFAULT_FT_DECIMALS = 6;
 
 export interface ContributionAssetLike {
   type?: string;
-  quantity?: number;
+  policyId?: string;
+  quantity?: number | string;
   decimals?: number;
   metadata?: { decimals?: number };
 }
@@ -51,7 +52,8 @@ export function getContributionQuantityForLimits(asset: ContributionAssetLike): 
   }
 
   if (asset.type === AssetType.FT || asset.type === 'ft') {
-    const rawQuantity = Number(asset.quantity);
+    const rawQuantity = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
+
     if (!Number.isFinite(rawQuantity) || rawQuantity <= 0) {
       throw new BadRequestException('Fungible token contribution quantity must be greater than 0');
     }
@@ -67,12 +69,25 @@ export function sumContributionQuantitiesForLimits(assets: ContributionAssetLike
   return assets.reduce((total, asset) => total + getContributionQuantityForLimits(asset), 0);
 }
 
-/** Persist validated decimals on FT assets so downstream limit checks use trusted values. */
+/**
+ * Normalize contribution assets:
+ * - Persist validated decimals on FT assets for downstream limit checks
+ * - Normalize EVM addresses (0x...) to lowercase for consistent comparison
+ */
 export function normalizeContributionAssets<T extends ContributionAssetLike>(assets: T[]): T[] {
   return assets.map(asset => {
-    if (asset.type === AssetType.FT || asset.type === 'ft') {
-      return { ...asset, decimals: resolveFtDecimals(asset) };
+    const normalized = { ...asset };
+
+    // Normalize EVM addresses to lowercase
+    if (asset.policyId && asset.policyId.startsWith('0x')) {
+      normalized.policyId = asset.policyId.toLowerCase();
     }
-    return asset;
+
+    // Validate and persist decimals for fungible tokens
+    if (asset.type === AssetType.FT || asset.type === 'ft') {
+      normalized.decimals = resolveFtDecimals(asset);
+    }
+
+    return normalized;
   });
 }

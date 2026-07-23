@@ -1996,7 +1996,14 @@ export class TaptoolsService {
 
       // Route EVM chains to dedicated handler
       if (vault?.chain_type === ChainType.robinhood) {
-        return this.getEvmWalletSummaryPaginated(paginationQuery, customPriceMap, chainlinkFeeds, adaPriceUsd);
+        const ethPriceUsd = await this.priceService.getEthPrice();
+        return this.getEvmWalletSummaryPaginated(
+          paginationQuery,
+          customPriceMap,
+          chainlinkFeeds,
+          adaPriceUsd,
+          ethPriceUsd
+        );
       }
 
       // Get overview (cached)
@@ -2480,7 +2487,7 @@ export class TaptoolsService {
     }
   }
 
-  private getEvmPublicClient() {
+  private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
     const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
     if (!evmRpcUrl) {
       throw new HttpException('EVM RPC URL not configured', 500);
@@ -2534,7 +2541,8 @@ export class TaptoolsService {
     walletAddress: string,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<AssetValueDto | null> {
     try {
       const addr = contractAddress as Address;
@@ -2555,6 +2563,7 @@ export class TaptoolsService {
       const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, false, adaPriceUsd);
       if (priceAda === null) return null;
       const priceUsd = priceAda * adaPriceUsd;
+      const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
 
       const dto: AssetValueDto = plainToInstance(
         AssetValueDto,
@@ -2568,8 +2577,10 @@ export class TaptoolsService {
           isFungibleToken: true,
           priceAda,
           priceUsd,
+          priceEth,
           valueAda: +(balance * priceAda).toFixed(6),
           valueUsd: +(balance * priceUsd).toFixed(6),
+          valueEth: +(balance * priceEth).toFixed(6),
           metadata: {
             policyId: contractAddress,
             decimals: Number(decimals),
@@ -2591,7 +2602,8 @@ export class TaptoolsService {
     walletAddress: string,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<AssetValueDto[]> {
     try {
       const addr = contractAddress as Address;
@@ -2628,6 +2640,7 @@ export class TaptoolsService {
       const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, true, adaPriceUsd);
       if (priceAda === null) return [];
       const priceUsd = priceAda * adaPriceUsd;
+      const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
 
       // Fetch tokenURIs for metadata enrichment (name / image / attributes)
       const uriCalls = tokenIds.map(id => ({
@@ -2656,8 +2669,10 @@ export class TaptoolsService {
             isFungibleToken: false,
             priceAda,
             priceUsd,
+            priceEth,
             valueAda: priceAda,
             valueUsd: priceUsd,
+            valueEth: priceEth,
             metadata: {
               policyId: contractAddress,
               assetName: tokenIdStr,
@@ -2684,7 +2699,8 @@ export class TaptoolsService {
     walletAddress: string,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<AssetValueDto[]> {
     try {
       const addr = contractAddress as Address;
@@ -2750,6 +2766,7 @@ export class TaptoolsService {
       const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, true, adaPriceUsd);
       if (priceAda === null) return [];
       const priceUsd = priceAda * adaPriceUsd;
+      const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
 
       // Fetch ERC-1155 uris for metadata enrichment
       const uriCalls1155 = tokenIds.map(id => ({
@@ -2791,8 +2808,10 @@ export class TaptoolsService {
               isFungibleToken: false,
               priceAda,
               priceUsd,
+              priceEth,
               valueAda: +(qty * priceAda).toFixed(6),
               valueUsd: +(qty * priceUsd).toFixed(6),
+              valueEth: +(qty * priceEth).toFixed(6),
               metadata: {
                 policyId: contractAddress,
                 assetName: tokenIdStr,
@@ -2827,7 +2846,8 @@ export class TaptoolsService {
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<PaginatedWalletSummaryDto> {
     const alchemyKey = this.configService.get<string>('ALCHEMY_API_KEY');
     const alchemyNetwork = this.configService.get<string>('ALCHEMY_NETWORK', 'robinhood-testnet');
@@ -2839,6 +2859,7 @@ export class TaptoolsService {
           customPriceMap,
           chainlinkFeeds,
           adaPriceUsd,
+          ethPriceUsd,
           alchemyKey,
           alchemyNetwork
         );
@@ -2847,7 +2868,7 @@ export class TaptoolsService {
       }
     }
 
-    return this.getEvmWalletSummaryViaRpc(paginationQuery, customPriceMap, chainlinkFeeds, adaPriceUsd);
+    return this.getEvmWalletSummaryViaRpc(paginationQuery, customPriceMap, chainlinkFeeds, adaPriceUsd, ethPriceUsd);
   }
 
   // ---------------------------------------------------------------------------
@@ -2865,7 +2886,8 @@ export class TaptoolsService {
     contracts: string[],
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<AssetValueDto[]> {
     const nftBase = `https://${network}.g.alchemy.com/nft/v3/${apiKey}`;
     const contractParams = contracts.map(c => `contractAddresses[]=${encodeURIComponent(c)}`).join('&');
@@ -2890,6 +2912,7 @@ export class TaptoolsService {
           );
           if (priceAda === null) return null;
           const priceUsd = priceAda * adaPriceUsd;
+          const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
 
           const name = nft.name ?? `${nft.contract?.name ?? contractAddress} #${tokenId}`;
           const image = nft.image?.cachedUrl ?? nft.image?.originalUrl ?? nft.raw?.metadata?.image ?? undefined;
@@ -2906,8 +2929,10 @@ export class TaptoolsService {
               isFungibleToken: false,
               priceAda,
               priceUsd,
+              priceEth,
               valueAda: +(qty * priceAda).toFixed(6),
               valueUsd: +(qty * priceUsd).toFixed(6),
+              valueEth: +(qty * priceEth).toFixed(6),
               metadata: {
                 policyId: contractAddress,
                 assetName: tokenId,
@@ -2939,7 +2964,8 @@ export class TaptoolsService {
     contracts: string[],
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<AssetValueDto[]> {
     const rpcBase = `https://${network}.g.alchemy.com/v2/${apiKey}`;
 
@@ -3000,6 +3026,7 @@ export class TaptoolsService {
           );
           if (priceAda === null) return null;
           const priceUsd = priceAda * adaPriceUsd;
+          const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
 
           return plainToInstance(
             AssetValueDto,
@@ -3013,8 +3040,10 @@ export class TaptoolsService {
               isFungibleToken: true,
               priceAda,
               priceUsd,
+              priceEth,
               valueAda: +(balance * priceAda).toFixed(6),
               valueUsd: +(balance * priceUsd).toFixed(6),
+              valueEth: +(balance * priceEth).toFixed(6),
               metadata: {
                 policyId: contractAddress,
                 decimals,
@@ -3034,6 +3063,7 @@ export class TaptoolsService {
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number,
+    ethPriceUsd: number,
     apiKey: string,
     network: string
   ): Promise<PaginatedWalletSummaryDto> {
@@ -3050,7 +3080,8 @@ export class TaptoolsService {
         contracts,
         customPriceMap,
         chainlinkFeeds,
-        adaPriceUsd
+        adaPriceUsd,
+        ethPriceUsd
       );
       allAssets.push(...nfts);
     }
@@ -3069,7 +3100,8 @@ export class TaptoolsService {
           erc20Candidates,
           customPriceMap,
           chainlinkFeeds,
-          adaPriceUsd
+          adaPriceUsd,
+          ethPriceUsd
         );
         allAssets.push(...tokens);
       }
@@ -3083,7 +3115,8 @@ export class TaptoolsService {
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    ethPriceUsd: number
   ): Promise<PaginatedWalletSummaryDto> {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
 
@@ -3100,7 +3133,8 @@ export class TaptoolsService {
           walletAddress,
           customPriceMap,
           chainlinkFeeds,
-          adaPriceUsd
+          adaPriceUsd,
+          ethPriceUsd
         );
         allAssets.push(...nfts);
       } else if (contractType === 'ERC1155' && filter !== 'tokens') {
@@ -3110,7 +3144,8 @@ export class TaptoolsService {
           walletAddress,
           customPriceMap,
           chainlinkFeeds,
-          adaPriceUsd
+          adaPriceUsd,
+          ethPriceUsd
         );
         allAssets.push(...tokens);
       } else if (contractType === 'ERC20' && filter !== 'nfts') {
@@ -3120,7 +3155,8 @@ export class TaptoolsService {
           walletAddress,
           customPriceMap,
           chainlinkFeeds,
-          adaPriceUsd
+          adaPriceUsd,
+          ethPriceUsd
         );
         if (token) allAssets.push(token);
       }
@@ -3158,6 +3194,7 @@ export class TaptoolsService {
             wallet: walletAddress,
             totalValueAda: +allAssets.reduce((s, a) => s + a.valueAda, 0).toFixed(4),
             totalValueUsd: +allAssets.reduce((s, a) => s + a.valueUsd, 0).toFixed(4),
+            totalValueEth: +allAssets.reduce((s, a) => s + a.valueEth, 0).toFixed(6),
             lastUpdated: new Date().toISOString(),
             summary: {
               totalAssets: allAssets.length,
@@ -3410,6 +3447,9 @@ export class TaptoolsService {
     }>,
     customPriceMap?: Map<string, number>
   ): Promise<AssetValueDto[]> {
+    // Fetch ETH price for Cardano assets (needed for multi-currency support)
+    const ethPriceUsd = await this.priceService.getEthPrice();
+
     const prepared = items.map(({ asset, detailsResult }) => {
       const details = detailsResult.details;
       const metadata = details.onchain_metadata || details.metadata || {};
@@ -3433,6 +3473,7 @@ export class TaptoolsService {
 
     return prepared.map(({ asset, details, metadata, assetName, isNFT }, idx) => {
       const { priceAda, priceUsd } = prices[idx];
+      const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
 
       // Get decimals for proper value calculation
       // For FTs with decimals > 0, prices are per decimal-adjusted unit
@@ -3471,8 +3512,10 @@ export class TaptoolsService {
         isFungibleToken: !isNFT,
         priceAda,
         priceUsd,
+        priceEth,
         valueAda: priceAda * decimalAdjustedQuantity, // Calculate value with decimal-adjusted quantity
         valueUsd: priceUsd * decimalAdjustedQuantity,
+        valueEth: priceEth * decimalAdjustedQuantity,
         metadata: {
           image: normalizedImage,
           policyId: details.policy_id,

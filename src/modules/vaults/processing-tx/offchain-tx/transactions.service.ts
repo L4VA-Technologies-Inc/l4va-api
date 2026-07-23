@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
@@ -83,11 +83,12 @@ export class TransactionsService {
       throw new NotFoundException('Transaction not found');
     }
 
-    // Handle metadata structure for acquire transactions
-    // New format: { assets: [...], isExpansion: boolean }
-    // Old format: [...] (array directly)
+    // Handle metadata structure:
+    // - Contribute: array [...] OR { assets: [...], evmChildTxHashes: [...] }
+    // - Acquire: { assets: [...], isExpansion: boolean } OR [...] (legacy)
     let pendingAssets = transaction.metadata || [];
-    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
+    if (transaction.metadata && !Array.isArray(transaction.metadata)) {
+      // Metadata is an object - extract the assets array
       pendingAssets = (transaction.metadata as any).assets || [];
     }
 
@@ -104,12 +105,33 @@ export class TransactionsService {
 
     if (transaction.type === TransactionType.acquire) {
       pendingAssets.forEach(assetItem => {
+        const rawType = String(assetItem.type ?? assetItem.asset_type ?? '')
+          .trim()
+          .toLowerCase();
+        const policyId = String(assetItem.policyId ?? assetItem.policy_id ?? '')
+          .trim()
+          .toLowerCase();
+        const assetName = String(assetItem.assetName ?? assetItem.asset_id ?? '')
+          .trim()
+          .toLowerCase();
+        const isNativeEthAddress = policyId === '0x0000000000000000000000000000000000000000';
+
+        // Acquire flow supports only native assets: ADA (Cardano) or ETH (EVM).
+        if (rawType && rawType !== AssetType.ADA && rawType !== AssetType.ETH) {
+          throw new BadRequestException(
+            `Invalid acquire asset type "${rawType}". Acquire supports only "${AssetType.ADA}" or "${AssetType.ETH}".`
+          );
+        }
+
+        const resolvedType: AssetType =
+          rawType === AssetType.ETH || isNativeEthAddress || assetName === 'eth' ? AssetType.ETH : AssetType.ADA;
+
         assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
-          type: AssetType.ADA, // Using ADA type for acquire
-          policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          type: resolvedType,
+          policy_id: policyId,
+          asset_id: assetName || (resolvedType === AssetType.ETH ? 'eth' : ''),
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
@@ -128,7 +150,12 @@ export class TransactionsService {
           return { assetItem, blockfrostMetadata: null };
         }
 
-        // Otherwise fetch from Blockfrost
+        // Skip Blockfrost for EVM assets (Blockfrost is Cardano-specific)
+        if (assetItem.policyId?.startsWith('0x')) {
+          return { assetItem, blockfrostMetadata: null };
+        }
+
+        // Otherwise fetch from Blockfrost for Cardano assets
         try {
           const unit = assetItem.policyId + assetItem.assetName;
           const assetInfo = await this.blockfrost.assetsById(unit);
@@ -217,7 +244,7 @@ export class TransactionsService {
           vault: { id: transaction.vault_id } as Vault,
           type: assetItem.type,
           policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          asset_id: assetItem.assetName || '', // Default to empty string for EVM ERC20 tokens
           quantity: rawQuantity, // Store raw blockchain quantity
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
