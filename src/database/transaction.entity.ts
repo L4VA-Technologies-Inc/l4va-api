@@ -161,4 +161,25 @@ export class Transaction {
   @Expose({ name: 'logIndex' })
   @Column({ name: 'log_index', type: 'integer', nullable: true })
   log_index?: number;
+
+  // ---------------------------------------------------------------------------
+  // EVM refund linkage. On-chain contribution IDs are NOT stored here — a
+  // single DB Transaction can carry multiple assets (each becomes its own
+  // Solidity contribution). See evm_contributions for the canonical mapping.
+  //
+  // INVARIANT (enforced by EvmRefundOrchestrator, Phase C):
+  //   Parent Transaction becomes `refunded` ONLY after every child
+  //   EvmContribution row for this Transaction has status='refunded'. Child
+  //   rows are the source of truth; the fields below are a fast rollup.
+  // ---------------------------------------------------------------------------
+
+  /** Hash of the last refund tx touching this Transaction (informational). */
+  @Expose({ name: 'refundTxHash' })
+  @Column({ name: 'refund_tx_hash', nullable: true })
+  refund_tx_hash?: string;
+
+  /** Set when ALL child EvmContributions of this Transaction are refunded. */
+  @Expose({ name: 'refundedAt' })
+  @Column({ name: 'refunded_at', type: 'timestamptz', nullable: true })
+  refunded_at?: Date;
 }

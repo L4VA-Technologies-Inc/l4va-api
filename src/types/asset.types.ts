@@ -23,6 +23,8 @@ export enum AssetStatus {
   OFFERED = 'offered',
   /** Offer was canceled or rejected on WayUp */
   CANCEL_OFFER = 'cancel_offer',
+  /** Asset was refunded on-chain (EVM: contribution cancelled / cycle cancelled). */
+  REFUNDED = 'refunded',
 }
 
 export enum AssetOriginType {

@@ -5,6 +5,8 @@ export enum TransactionStatus {
   confirmed = 'confirmed',
   failed = 'failed',
   stuck = 'stuck',
+  /** Contribution was refunded on-chain (either via self-cancel or after cycle cancel). */
+  refunded = 'refunded',
 }
 
 export enum TransactionType {
@@ -33,5 +35,13 @@ export enum TransactionType {
   updateVault = 'update-vault',
   /** WayUp marketplace transaction (listing, unlisting, update, offer, purchase) */
   wayup = 'wayup',
+  /** EVM: admin-signed `closeCycle(root, hash, totalVt, totalNative)`. */
+  evmCloseCycle = 'evm-close-cycle',
+  /** EVM: admin-signed `claimAllocations([...])` batch airdrop. */
+  evmClaim = 'evm-claim',
+  /** EVM: admin-signed `refundContributions([...])` batch refund. */
+  evmRefund = 'evm-refund',
+  /** EVM: admin-signed `cancelCurrentCycle()`. */
+  evmCancelCycle = 'evm-cancel-cycle',
   all = 'all',
 }
