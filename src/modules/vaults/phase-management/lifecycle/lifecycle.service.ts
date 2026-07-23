@@ -20,6 +20,7 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
@@ -74,7 +75,8 @@ export class LifecycleService {
     private readonly alertsService: AlertsService,
     private readonly dataSource: DataSource,
     private readonly evmCycleCloseService: EvmCycleCloseService,
-    private readonly evmContractReader: EvmContractReader
+    private readonly evmContractReader: EvmContractReader,
+    private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -94,6 +96,7 @@ export class LifecycleService {
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
+      await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
     } finally {
       this.isRunning = false;
     }
@@ -2597,5 +2600,26 @@ export class LifecycleService {
   private isEvmCycleAutomationEnabled(): boolean {
     const raw = process.env.EVM_CYCLE_AUTOMATION_ENABLED;
     return raw === 'true' || raw === '1';
+  }
+
+  /**
+   * EVM: fan out claim batches for vaults whose snapshots are confirmed
+   * and still have unclaimed allocation rows. Delegates all the heavy
+   * lifting (candidate selection, RPC guards, batch broadcast, event
+   * reconciliation) to EvmAirdropOrchestrator. Gated by the same feature
+   * flag as closeCycle automation.
+   */
+  private async handleEvmAirdropClaims(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmAirdropOrchestrator.pushAllVaults();
+      if (stats.batchesBroadcast > 0 || stats.alreadyClaimedSkipped > 0) {
+        this.logger.log(
+          `EVM airdrop sweep: batches=${stats.batchesBroadcast} claims=${stats.claimsBroadcast} alreadyOnChain=${stats.alreadyClaimedSkipped}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM airdrop sweep failed: ${(err as Error).message}`);
+    }
   }
 }

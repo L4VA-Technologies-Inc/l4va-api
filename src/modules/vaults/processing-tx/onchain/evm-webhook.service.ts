@@ -147,9 +147,7 @@ export class EvmWebhookService {
       if (!tx) return;
       const verdict = this.vaultEventReconciler.verifyExpectedEvents(outcome, tx.expected_events);
       if (!verdict.ok) {
-        this.logger.debug(
-          `Webhook fast-path skip: tx ${txHash} did not satisfy expected_events (${verdict.reason})`
-        );
+        this.logger.debug(`Webhook fast-path skip: tx ${txHash} did not satisfy expected_events (${verdict.reason})`);
         return;
       }
       if ((outcome?.errors ?? []).length > 0) return;
