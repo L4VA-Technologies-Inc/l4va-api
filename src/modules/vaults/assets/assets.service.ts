@@ -279,6 +279,9 @@ export class AssetsService {
       queryBuilder.andWhere('asset.type = :type', { type });
     }
 
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
+    const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+
     // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
     statsQuery
@@ -287,6 +290,8 @@ export class AssetsService {
           CASE 
             WHEN asset.type = :ftType THEN 
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+            WHEN asset.type = :ethType THEN
+              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
             ELSE 
               asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
           END
@@ -298,6 +303,7 @@ export class AssetsService {
         `SUM(
           CASE 
             WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
+            WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
             ELSE 0 
           END
         )`,
@@ -306,6 +312,8 @@ export class AssetsService {
       .setParameters({
         nftType: AssetType.NFT,
         ftType: AssetType.FT,
+        ethType: AssetType.ETH,
+        ethPriceInAda,
       });
 
     const rawStats = await statsQuery.getRawOne();
@@ -319,30 +327,30 @@ export class AssetsService {
       .orderBy('asset.added_at', 'DESC')
       .getManyAndCount();
 
-    const adaPrice = await this.priceService.getAdaPrice();
-
     const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
     // Calculate average per token (including all assets)
     const totalTokens = adjustedTotalFTAssets + totalNFTAssets;
     const assetsAvgAda = totalTokens > 0 ? adjustedTotalValueAda / totalTokens : 0;
     const assetsAvgUsd = assetsAvgAda * adaPrice;
 
-    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
-
-    assetsWithUsd.forEach(asset => {
+    const itemsSource = assets.map(asset => {
       const isNft = asset.type === AssetType.NFT;
+      const effectivePriceAda =
+        asset.dex_price ?? asset.floor_price ?? (asset.type === AssetType.ETH ? ethPriceInAda : 0);
+      const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
+      const plain = instanceToPlain(asset) as Record<string, unknown>;
 
-      // Use the Asset entity getters for computed values
-      // Note: normalizedQuantity and valueAda are now automatic via getters
-      asset.valueUsd = asset.valueAda * adaPrice;
-
-      // FloorPriceUsd is only for NFTs
+      plain.quantity = asset.normalizedQuantity;
+      plain.valueAda = effectiveValueAda;
+      plain.valueUsd = effectiveValueAda * adaPrice;
       if (isNft && asset.floor_price) {
-        asset.floorPriceUsd = asset.floor_price * adaPrice;
+        plain.floorPriceUsd = asset.floor_price * adaPrice;
       }
+
+      return plain;
     });
 
-    const items = plainToInstance(AssetItemDto, assetsWithUsd, {
+    const items = plainToInstance(AssetItemDto, itemsSource, {
       excludeExtraneousValues: true,
     });
 
@@ -432,17 +440,58 @@ export class AssetsService {
       });
     }
 
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
+    const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+
     const statsResult = await queryBuilder
       .clone()
-      .select('SUM(asset.quantity)', 'totalAcquired')
+      .select(
+        `SUM(
+          CASE
+            WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
+            WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
+            ELSE asset.quantity
+          END
+        )`,
+        'totalAcquired'
+      )
+      .addSelect(
+        `SUM(
+          CASE
+            WHEN asset.type = :nftType THEN asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+            WHEN asset.type = :ftType THEN
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+            WHEN asset.type = :ethType THEN
+              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
+            ELSE asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+          END
+        )`,
+        'totalAcquiredValueAda'
+      )
+      .addSelect(
+        `SUM(
+          CASE
+            WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
+            ELSE 0
+          END
+        )`,
+        'totalAcquiredEth'
+      )
       .addSelect('COUNT(DISTINCT transaction.user_id)', 'totalAcquirers')
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+        ethType: AssetType.ETH,
+        ethPriceInAda,
+      })
       .getRawOne();
 
     const totalAcquired = parseFloat(statsResult?.totalAcquired || '0');
+    const totalAcquiredValueAda = parseFloat(statsResult?.totalAcquiredValueAda || '0');
+    const totalAcquiredEth = parseFloat(statsResult?.totalAcquiredEth || '0');
     const totalAcquirers = parseInt(statsResult?.totalAcquirers || '0', 10);
 
-    const [adaPrice, marketData, [assets, total]] = await Promise.all([
-      this.priceService.getAdaPrice(),
+    const [marketData, [assets, total]] = await Promise.all([
       this.marketRepository.findOne({ where: { vault_id: vaultId } }),
       queryBuilder
         .skip((page - 1) * limit)
@@ -451,19 +500,29 @@ export class AssetsService {
         .getManyAndCount(),
     ]);
 
-    const totalAcquiredUsd = totalAcquired * adaPrice;
+    const totalAcquiredUsd = totalAcquiredValueAda * adaPrice;
 
     const totalAdaLiquidityAda = marketData?.totalAdaLiquidity != null ? Number(marketData.totalAdaLiquidity) : null;
     const totalAdaLiquidityUsd = totalAdaLiquidityAda != null ? totalAdaLiquidityAda * adaPrice : null;
 
     return {
-      items: assets.map(asset => instanceToPlain(asset)),
+      items: assets.map(asset => {
+        const plain = instanceToPlain(asset) as Record<string, unknown>;
+        const effectivePriceAda =
+          asset.dex_price ?? asset.floor_price ?? (asset.type === AssetType.ETH ? ethPriceInAda : 0);
+        const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
+        plain.quantity = asset.normalizedQuantity;
+        plain.valueAda = effectiveValueAda;
+        plain.valueUsd = effectiveValueAda * adaPrice;
+        return plain;
+      }),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       totalAcquired,
       totalAcquiredUsd,
+      totalAcquiredEth,
       totalAcquirers,
       totalAdaLiquidityAda,
       totalAdaLiquidityUsd,
