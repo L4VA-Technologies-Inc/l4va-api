@@ -229,10 +229,15 @@ export class EvmVaultEventReconciler {
 
     const transaction = await this.findParentTransactionForContribution(vault.id, log.txHash);
     if (!transaction) {
-      throw new Error(
-        `ContributionMade tx=${log.txHash} contributionId=${contributionId}: no parent Transaction ` +
-          `for vault ${vault.id} (checked tx_hash and metadata.evmChildTxHashes)`
+      // No parent Transaction row means the contribution happened outside our
+      // prepare-tx flow (nobody uses this codepath today — all contributions
+      // originate via /vaults/blockchain/evm/contribute/prepare which creates
+      // a Transaction row). Skip quietly rather than error every cron tick.
+      this.logger.debug(
+        `ContributionMade contributionId=${contributionId} tx=${log.txHash} vault=${vault.id}: ` +
+          `no parent Transaction — skipping (third-party direct call)`
       );
+      return;
     }
 
     const userAddr = transaction.user?.address?.toLowerCase();
