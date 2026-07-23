@@ -45,3 +45,15 @@ export enum TransactionType {
   evmCancelCycle = 'evm-cancel-cycle',
   all = 'all',
 }
+
+/**
+ * Status of the domain-event reconciliation for a confirmed EVM transaction.
+ * The webhook path is the fast path; the transaction-health checker is the
+ * durable retry path. A tx is only "fully processed" when this reaches
+ * `success`.
+ */
+export enum EvmReconciliationStatus {
+  pending = 'pending',
+  success = 'success',
+  failed = 'failed',
+}

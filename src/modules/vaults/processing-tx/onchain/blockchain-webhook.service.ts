@@ -13,13 +13,14 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 import { RewardActivityType } from '@/types/rewards.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType, EvmReconciliationStatus } from '@/types/transaction.types';
 import { ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
@@ -50,7 +51,9 @@ export class BlockchainWebhookService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -294,6 +297,27 @@ export class BlockchainWebhookService {
     }
 
     return this.applyTransactionStatus(txHash, txIndex, status);
+  }
+
+  /**
+   * Idempotently mark an EVM transaction fully reconciled (domain events
+   * applied). Only flips from NULL → success — never overwrites 'success'
+   * or 'failed'. Used by the Alchemy webhook fast path; the health-check
+   * cron is the durable retry path.
+   */
+  async markEvmTransactionReconciled(txHash: string): Promise<void> {
+    await this.transactionRepository
+      .createQueryBuilder()
+      .update(Transaction)
+      .set({
+        reconciliation_status: EvmReconciliationStatus.success,
+        reconciled_at: () => 'CURRENT_TIMESTAMP',
+      })
+      .where('tx_hash = :hash AND reconciled_at IS NULL AND (reconciliation_status IS NULL OR reconciliation_status = :pending)', {
+        hash: txHash,
+        pending: EvmReconciliationStatus.pending,
+      })
+      .execute();
   }
 
   /**

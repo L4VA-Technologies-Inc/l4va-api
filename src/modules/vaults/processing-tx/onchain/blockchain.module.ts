@@ -16,6 +16,7 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
+import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
@@ -75,6 +76,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmCycleCloseService,
     EvmVaultSignerService,
     EvmVaultContributionService,
+    EvmVaultEventReconciler,
     EvmWebhookService,
     VaultManagingService,
     TransactionHealthService,

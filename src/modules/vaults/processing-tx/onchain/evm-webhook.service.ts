@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
+import { EvmVaultEventReconciler, VaultLogInput } from './evm-vault-event-reconciler.service';
 
 import { TransactionStatus } from '@/types/transaction.types';
 
@@ -22,7 +23,8 @@ export class EvmWebhookService {
 
   constructor(
     private readonly blockchainWebhookService: BlockchainWebhookService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly vaultEventReconciler: EvmVaultEventReconciler
   ) {
     this.signingKey = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
   }
@@ -91,7 +93,61 @@ export class EvmWebhookService {
       });
     }
 
+    // ── Reconcile vault-emitted V3 events (ContributionMade,
+    // ContributionCancelled, CycleClosed, CycleStatusChanged,
+    // AllocationClaimed). The admin operation services are the primary
+    // writers; this pass is idempotent and only closes gaps left by
+    // crashes / missed receipts / third-party calls.
+    const vaultLogs: VaultLogInput[] = logs
+      .filter(l => Boolean(l?.account?.address) && Boolean(l?.transaction?.hash))
+      .map(l => ({
+        address: l.account!.address!,
+        data: l.data ?? '0x',
+        topics: l.topics ?? [],
+        txHash: l.transaction!.hash!,
+        blockNumber: block?.number ?? null,
+        logIndex: l.index ?? null,
+      }));
+    if (vaultLogs.length > 0) {
+      try {
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        this.logger.debug(
+          `Vault event reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
+        );
+
+        // Fast-path: when the webhook batch fully reconciled without errors,
+        // mark every parent Transaction as reconciled so the health-checker
+        // sweep doesn't re-fetch the receipt on the next tick. If errors > 0
+        // we deliberately leave reconciliation_status/reconciled_at untouched
+        // and let TransactionHealthService's cron retry the whole receipt.
+        if (stats.errors === 0) {
+          const distinctHashes = Array.from(new Set(vaultLogs.map(l => l.txHash)));
+          for (const hash of distinctHashes) {
+            await this.markTransactionReconciled(hash);
+          }
+        }
+      } catch (err) {
+        // Reconciliation failures MUST NOT roll back the tx-status updates
+        // above — those are the Alchemy-mandated ack. Log and continue; the
+        // TransactionHealthService cron will pick these up on its next tick.
+        this.logger.error(`Vault event reconciler failed: ${(err as Error).message}`);
+      }
+    }
+
     return summaries;
+  }
+
+  /**
+   * Idempotently mark an EVM transaction fully reconciled. Only flips from
+   * NULL → success — never overwrites a prior 'success' or 'failed'.
+   */
+  private async markTransactionReconciled(txHash: string): Promise<void> {
+    try {
+      await this.blockchainWebhookService.markEvmTransactionReconciled(txHash);
+    } catch (err) {
+      // Non-fatal — the health-check cron owns the retry.
+      this.logger.debug(`markTransactionReconciled(${txHash}) failed: ${(err as Error).message}`);
+    }
   }
 
   /**
