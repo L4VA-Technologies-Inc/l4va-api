@@ -485,6 +485,12 @@ export class LifecycleService {
       .andWhere(`vault.contribution_phase_start + (vault.contribution_duration * interval '1 millisecond') <= :now`, {
         now,
       })
+      // EVM (Robinhood) vaults use handleEvmAcquireToLocked / airdrop cron for
+      // their end-of-contribution flow. Never run the Cardano pricing +
+      // multiplier math against them.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
@@ -1788,6 +1794,10 @@ export class LifecycleService {
       .andWhere('vault.expansion_phase_start IS NOT NULL')
       .andWhere('vault.expansion_duration IS NOT NULL')
       .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      // Expansion is Cardano-only for now — never run against EVM vaults.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
@@ -1918,6 +1928,10 @@ export class LifecycleService {
       .andWhere('vault.expansion_phase_start IS NOT NULL')
       .andWhere('vault.expansion_duration IS NOT NULL')
       .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      // Acquire expansion is Cardano-only for now — never run against EVM vaults.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
@@ -2097,6 +2111,10 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      // Acquire-only Cardano path; EVM handled by handleEvmAcquireToLocked.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.acquire_open_window_type = :type', { type: InvestmentWindowType.uponAssetWindowClosing })
       .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
       .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
@@ -2118,6 +2136,9 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.acquire_open_window_type = :type', { type: InvestmentWindowType.custom })
       .andWhere('vault.acquire_open_window_time IS NOT NULL')
       .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
@@ -2159,6 +2180,10 @@ export class LifecycleService {
       .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
       .andWhere('vault.acquire_phase_start IS NOT NULL')
       .andWhere('vault.acquire_window_duration IS NOT NULL')
+      // EVM acquire-only vaults use handleEvmAcquireToLocked / airdrop cron.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere(`vault.acquire_phase_start + (vault.acquire_window_duration * interval '1 millisecond') <= :now`, {
         now,
       })
