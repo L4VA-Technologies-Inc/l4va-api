@@ -108,8 +108,9 @@ export class LifecycleService {
       await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
       await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
-      await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met
+      await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
       await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
+      await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
     } finally {
       this.isRunning = false;
     }
@@ -2841,6 +2842,23 @@ export class LifecycleService {
       }
     } catch (err) {
       this.logger.error(`EVM refund sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: mark `vault_status = failed` for vaults whose on-chain cycle has
+   * been cancelled AND whose active contributions (if any) have all been
+   * refunded. Mirrors Cardano's "no contributions → failed" behaviour.
+   */
+  private async handleEvmFinalizeCancelledVaults(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmRefundOrchestrator.finalizeCancelledVaults();
+      if (stats.finalized > 0) {
+        this.logger.log(`EVM finalize failed sweep: ${stats.finalized} vault(s) marked failed`);
+      }
+    } catch (err) {
+      this.logger.error(`EVM finalize failed sweep failed: ${(err as Error).message}`);
     }
   }
 }

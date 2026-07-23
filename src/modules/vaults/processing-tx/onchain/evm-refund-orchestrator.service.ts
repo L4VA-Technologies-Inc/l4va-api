@@ -128,11 +128,26 @@ export class EvmRefundOrchestrator {
       const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
       if (!acquireEnded) continue;
 
-      // Threshold check: only cancel when a non-zero threshold is set AND
-      // nativeCollected is below it. Vaults with a zero threshold never fail
-      // via this path — they succeed at closeCycle time.
-      if (cycleView.minAcquireThreshold === 0n) continue;
-      if (cycleView.nativeCollected >= cycleView.minAcquireThreshold) continue;
+      // Failure conditions:
+      //   (a) Threshold set and not met  → nativeCollected < minAcquireThreshold
+      //   (b) Nobody contributed at all  → totalContributions == 0
+      // Case (b) covers vaults that opened but no one showed up — on Cardano
+      // these transition straight to `failed`.
+      let totalContribs: bigint;
+      try {
+        totalContribs = await this.contractReader.totalContributions(vault.contract_address as Address);
+      } catch (err) {
+        this.logger.warn(
+          `detectFailedVaults: totalContributions failed for vault ${vault.id}: ${(err as Error).message}`
+        );
+        continue;
+      }
+
+      const thresholdMissed =
+        cycleView.minAcquireThreshold > 0n && cycleView.nativeCollected < cycleView.minAcquireThreshold;
+      const emptyVault = totalContribs === 0n;
+
+      if (!thresholdMissed && !emptyVault) continue;
 
       // Guard: don't cancel while a `ready` snapshot is being broadcast — the
       // closeCycle path owns the transition.
@@ -147,14 +162,11 @@ export class EvmRefundOrchestrator {
 
       this.processingVaults.add(vault.id);
       try {
-        this.logger.warn(
-          `Vault ${vault.id} cycle ${onChainCycleId}: nativeCollected=${cycleView.nativeCollected} < ` +
-            `minAcquireThreshold=${cycleView.minAcquireThreshold}, cancelling`
-        );
-        await this.cycleCloseService.cancelCurrentCycle(
-          vault.id,
-          `Acquire threshold not met: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`
-        );
+        const reason = emptyVault
+          ? `Empty vault: totalContributions=0 at end of acquire window`
+          : `Acquire threshold not met: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`;
+        this.logger.warn(`Vault ${vault.id} cycle ${onChainCycleId}: ${reason}, cancelling`);
+        await this.cycleCloseService.cancelCurrentCycle(vault.id, reason);
         result.cancellationsInitiated++;
       } catch (err) {
         result.cancellationsFailed++;
@@ -495,5 +507,47 @@ export class EvmRefundOrchestrator {
     this.logger.log(
       `Refund batch confirmed: vault=${vaultAddress} count=${batch.length} tx=${result.hash} block=${result.receipt.blockNumber}`
     );
+  }
+
+  // ==========================================================================
+  // Finalize failed vaults — flip DB `vault_status` to `failed` once the
+  // on-chain cycle has been cancelled AND there are no remaining active
+  // EvmContribution rows (either because no one contributed or every
+  // contribution has been refunded). Cardano's equivalent behaviour is a
+  // straight-to-failed transition.
+  // ==========================================================================
+  async finalizeCancelledVaults(): Promise<{ finalized: number }> {
+    const candidates = await this.vaultsRepository
+      .createQueryBuilder('vault')
+      .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.evm_cancel_cycle_tx_hash IS NOT NULL')
+      .andWhere('vault.vault_status IN (:...statuses)', {
+        statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
+      })
+      .select(['vault.id'])
+      .getMany();
+
+    let finalized = 0;
+    for (const vault of candidates) {
+      const remaining = await this.contribsRepository.count({
+        where: { vault_id: vault.id, status: EvmContributionRowStatus.active },
+      });
+      if (remaining > 0) continue;
+
+      const res = await this.vaultsRepository
+        .createQueryBuilder()
+        .update(Vault)
+        .set({ vault_status: VaultStatus.failed })
+        .where('id = :id AND vault_status IN (:...statuses)', {
+          id: vault.id,
+          statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
+        })
+        .execute();
+      if (res.affected && res.affected > 0) {
+        finalized++;
+        this.logger.log(`EVM vault ${vault.id} finalized as failed (cycle cancelled, no active contributions).`);
+      }
+    }
+    return { finalized };
   }
 }
