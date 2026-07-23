@@ -1,7 +1,8 @@
-import { ChainType } from '@/types/vault.types';
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import { IsNotEmpty, IsString, IsObject, ValidateNested, ValidateIf } from 'class-validator';
+
+import { ChainType } from '@/types/vault.types';
 
 export class SignatureData {
   @Expose()
@@ -34,7 +35,6 @@ export class LoginReq {
   })
   chainType: ChainType;
 
-  
   @Expose()
   @ValidateIf((o: LoginReq) => o.chainType === ChainType.cardano)
   @IsNotEmpty()

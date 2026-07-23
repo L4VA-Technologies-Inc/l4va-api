@@ -9,7 +9,11 @@ export class CreateVaultRes {
   // ---- Cardano fields (null for EVM vaults) --------------------------------
 
   @Expose()
-  @ApiProperty({ description: 'Presigned transaction for vault creation', example: '84a40182825820...', required: false })
+  @ApiProperty({
+    description: 'Presigned transaction for vault creation',
+    example: '84a40182825820...',
+    required: false,
+  })
   presignedTx?: string;
 
   @Expose()

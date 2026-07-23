@@ -11,8 +11,8 @@ import {
   Unique,
 } from 'typeorm';
 
-import { Vault } from './vault.entity';
 import { ColumnBigintStringTransformer } from './column-bigint-string.transformer';
+import { Vault } from './vault.entity';
 
 @Entity({ name: 'assets_whitelist' })
 @Unique(['vault', 'policy_id'])

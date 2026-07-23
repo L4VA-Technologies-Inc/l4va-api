@@ -313,10 +313,13 @@ export class BlockchainWebhookService {
         reconciliation_status: EvmReconciliationStatus.success,
         reconciled_at: () => 'CURRENT_TIMESTAMP',
       })
-      .where('tx_hash = :hash AND reconciled_at IS NULL AND (reconciliation_status IS NULL OR reconciliation_status = :pending)', {
-        hash: txHash,
-        pending: EvmReconciliationStatus.pending,
-      })
+      .where(
+        'tx_hash = :hash AND reconciled_at IS NULL AND (reconciliation_status IS NULL OR reconciliation_status = :pending)',
+        {
+          hash: txHash,
+          pending: EvmReconciliationStatus.pending,
+        }
+      )
       .execute();
   }
 

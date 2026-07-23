@@ -165,7 +165,10 @@ export class EvmVaultEventReconciler {
    * emitted more times than declared is a defensive-OK). Missing / short
    * counts are failures. Empty spec = always ok.
    */
-  verifyExpectedEvents(outcome: PerTxOutcome | undefined, expected: ExpectedEventSpec[] | null | undefined): ExpectedEventVerdict {
+  verifyExpectedEvents(
+    outcome: PerTxOutcome | undefined,
+    expected: ExpectedEventSpec[] | null | undefined
+  ): ExpectedEventVerdict {
     if (!expected || expected.length === 0) return { ok: true };
 
     if (!outcome) {
@@ -203,11 +206,7 @@ export class EvmVaultEventReconciler {
    *       the user submitted approvals + N contribute() calls under one
    *       Transaction row.
    */
-  private async handleContributionMade(
-    vault: Vault,
-    log: VaultLogInput,
-    args: Record<string, unknown>
-  ): Promise<void> {
+  private async handleContributionMade(vault: Vault, log: VaultLogInput, args: Record<string, unknown>): Promise<void> {
     const contributionId = String(args.contributionId as bigint);
     const cycleId = String(args.cycleId as bigint);
     const contributor = String(args.contributor as Address).toLowerCase();
@@ -223,9 +222,7 @@ export class EvmVaultEventReconciler {
     if (existing) {
       const drift = this.diffFields({ contributor, kind, asset, tokenId, amount, cycleId }, existing);
       if (drift.length > 0) {
-        throw new Error(
-          `ContributionMade drift on existing row ${existing.id} tx=${log.txHash}: ${drift.join('; ')}`
-        );
+        throw new Error(`ContributionMade drift on existing row ${existing.id} tx=${log.txHash}: ${drift.join('; ')}`);
       }
       return;
     }
@@ -240,9 +237,7 @@ export class EvmVaultEventReconciler {
 
     const userAddr = transaction.user?.address?.toLowerCase();
     if (!userAddr) {
-      throw new Error(
-        `ContributionMade tx=${log.txHash}: transaction ${transaction.id} has no user.address`
-      );
+      throw new Error(`ContributionMade tx=${log.txHash}: transaction ${transaction.id} has no user.address`);
     }
     if (userAddr !== contributor) {
       throw new Error(
@@ -254,7 +249,7 @@ export class EvmVaultEventReconciler {
     const metaAssets: Array<Record<string, unknown>> = Array.isArray(rawMeta)
       ? (rawMeta as Array<Record<string, unknown>>)
       : Array.isArray((rawMeta as { assets?: unknown[] })?.assets)
-        ? ((rawMeta as { assets: Array<Record<string, unknown>> }).assets)
+        ? (rawMeta as { assets: Array<Record<string, unknown>> }).assets
         : [];
     const matchingAsset = metaAssets.find(a => this.assetMatches(a, kind, asset, tokenId, amount));
     if (!matchingAsset && metaAssets.length > 0) {
@@ -300,9 +295,7 @@ export class EvmVaultEventReconciler {
         }
         const drift = this.diffFields({ contributor, kind, asset, tokenId, amount, cycleId }, raceWinner);
         if (drift.length > 0) {
-          throw new Error(
-            `ContributionMade race-winner drift on ${raceWinner.id}: ${drift.join('; ')}`
-          );
+          throw new Error(`ContributionMade race-winner drift on ${raceWinner.id}: ${drift.join('; ')}`);
         }
         // Race-winner is consistent — treat as idempotent success.
         return;
@@ -335,8 +328,7 @@ export class EvmVaultEventReconciler {
 
     if (row.contributor.toLowerCase() !== contributor) {
       throw new Error(
-        `ContributionCancelled tx=${log.txHash} contributor mismatch: ` +
-          `event=${contributor}, DB=${row.contributor}`
+        `ContributionCancelled tx=${log.txHash} contributor mismatch: ` + `event=${contributor}, DB=${row.contributor}`
       );
     }
 
@@ -454,9 +446,7 @@ export class EvmVaultEventReconciler {
         }
       );
     }
-    throw new Error(
-      `CycleClosed MISMATCH vault=${vault.id} cycle=${cycleId} tx=${log.txHash}: ${diffs.join('; ')}`
-    );
+    throw new Error(`CycleClosed MISMATCH vault=${vault.id} cycle=${cycleId} tx=${log.txHash}: ${diffs.join('; ')}`);
   }
 
   /**
@@ -548,10 +538,7 @@ export class EvmVaultEventReconciler {
    * `metadata.evmChildTxHashes` is written by the frontend when it confirms a
    * contribution (see useEvmContributeTransaction.js).
    */
-  private async findParentTransactionForContribution(
-    vaultId: string,
-    txHash: string
-  ): Promise<Transaction | null> {
+  private async findParentTransactionForContribution(vaultId: string, txHash: string): Promise<Transaction | null> {
     const direct = await this.transactionsRepository.findOne({
       where: { tx_hash: txHash, vault_id: vaultId },
       relations: ['user'],
@@ -600,11 +587,9 @@ export class EvmVaultEventReconciler {
       out.push(`contributor(event=${fromEvent.contributor}, DB=${row.contributor})`);
     if (row.kind !== fromEvent.kind) out.push(`kind(event=${fromEvent.kind}, DB=${row.kind})`);
     if (row.asset.toLowerCase() !== fromEvent.asset) out.push(`asset(event=${fromEvent.asset}, DB=${row.asset})`);
-    if (String(row.token_id) !== fromEvent.tokenId)
-      out.push(`tokenId(event=${fromEvent.tokenId}, DB=${row.token_id})`);
+    if (String(row.token_id) !== fromEvent.tokenId) out.push(`tokenId(event=${fromEvent.tokenId}, DB=${row.token_id})`);
     if (String(row.amount) !== fromEvent.amount) out.push(`amount(event=${fromEvent.amount}, DB=${row.amount})`);
-    if (String(row.cycle_id) !== fromEvent.cycleId)
-      out.push(`cycleId(event=${fromEvent.cycleId}, DB=${row.cycle_id})`);
+    if (String(row.cycle_id) !== fromEvent.cycleId) out.push(`cycleId(event=${fromEvent.cycleId}, DB=${row.cycle_id})`);
     return out;
   }
 

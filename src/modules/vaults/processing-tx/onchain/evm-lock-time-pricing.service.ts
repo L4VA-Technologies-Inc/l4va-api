@@ -7,8 +7,8 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmAssetKindOnchain } from './vault.abi';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
+import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Vault } from '@/database/vault.entity';
 import { ChainType } from '@/types/vault.types';
 
@@ -161,9 +161,7 @@ export class EvmLockTimePricingService {
     });
 
     if (contributions.length === 0) {
-      throw new BadRequestException(
-        `Vault ${vaultId} cycle ${cycleId} has no active contributions — nothing to price`
-      );
+      throw new BadRequestException(`Vault ${vaultId} cycle ${cycleId} has no active contributions — nothing to price`);
     }
 
     // Preload lookup tables once — vault-scoped whitelist + global feeds.
@@ -173,11 +171,7 @@ export class EvmLockTimePricingService {
 
     // Distinct non-Native asset addresses.
     const distinctAssets = Array.from(
-      new Set(
-        contributions
-          .filter(c => c.kind !== EvmAssetKindOnchain.Native)
-          .map(c => c.asset.toLowerCase())
-      )
+      new Set(contributions.filter(c => c.kind !== EvmAssetKindOnchain.Native).map(c => c.asset.toLowerCase()))
     );
 
     const feeds = distinctAssets.length
@@ -219,9 +213,7 @@ export class EvmLockTimePricingService {
       if (override?.custom_price_native_wei) {
         const unitPriceWei = BigInt(override.custom_price_native_wei);
         if (unitPriceWei <= 0n) {
-          throw new MissingPriceError(
-            `assets_whitelist.custom_price_native_wei for ${assetKey} is zero — must be > 0`
-          );
+          throw new MissingPriceError(`assets_whitelist.custom_price_native_wei for ${assetKey} is zero — must be > 0`);
         }
         const valueNative = await this.applyUnitPrice(c, unitPriceWei, erc20DecimalsCache, vault.chain_id);
         contributionValues.set(c.id, {
@@ -319,11 +311,7 @@ export class EvmLockTimePricingService {
     throw new BadRequestException(`Unexpected kind ${c.kind} for applyUnitPrice`);
   }
 
-  private async getErc20Decimals(
-    tokenAddress: string,
-    cache: Map<string, number>,
-    _chainId: number
-  ): Promise<number> {
+  private async getErc20Decimals(tokenAddress: string, cache: Map<string, number>, _chainId: number): Promise<number> {
     const cached = cache.get(tokenAddress);
     if (cached !== undefined) return cached;
     const decimals = (await this.contractReader.publicClient.readContract({

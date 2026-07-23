@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { createPublicClient, http, PublicClient } from 'viem';
 
 import { BlockchainWebhookService } from '../onchain/blockchain-webhook.service';
@@ -19,7 +19,7 @@ export class TransactionHealthService {
   private readonly logger = new Logger(TransactionHealthService.name);
   private readonly blockfrost: BlockFrostAPI;
   private readonly evmClient?: PublicClient;
-  private readonly STUCK_TRANSACTION_TIMEOUT_MINUTES = 2;
+  private readonly STUCK_TRANSACTION_TIMEOUT_MINUTES = 1;
   private readonly MAX_RECONCILIATION_ATTEMPTS = 12;
   private readonly RECONCILIATION_BATCH_SIZE = 50;
 
@@ -56,7 +56,7 @@ export class TransactionHealthService {
    *      PATH for the Alchemy webhook. An EVM tx is only fully processed
    *      when reconciled_at is set.
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async checkStuckTransactions(): Promise<void> {
     this.logger.log('Starting health check for stuck transactions');
 
@@ -309,10 +309,9 @@ export class TransactionHealthService {
       .andWhere('transaction.tx_hash IS NOT NULL')
       .andWhere('transaction.chain_id IS NOT NULL')
       .andWhere('transaction.reconciled_at IS NULL')
-      .andWhere(
-        `(transaction.reconciliation_status IS NULL OR transaction.reconciliation_status = :pending)`,
-        { pending: EvmReconciliationStatus.pending }
-      )
+      .andWhere(`(transaction.reconciliation_status IS NULL OR transaction.reconciliation_status = :pending)`, {
+        pending: EvmReconciliationStatus.pending,
+      })
       .andWhere('transaction.reconciliation_attempts < :maxAttempts', {
         maxAttempts: this.MAX_RECONCILIATION_ATTEMPTS,
       })

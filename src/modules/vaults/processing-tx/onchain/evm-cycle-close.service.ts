@@ -175,7 +175,7 @@ export class EvmCycleCloseService {
         ['CycleClosed'],
         // onBroadcast: persist hash on BOTH the snapshot AND the admin Tx row
         // BEFORE waiting for receipt. This makes the flow crash-safe.
-        async (hash) => {
+        async hash => {
           await this.dataSource.transaction(async manager => {
             await manager.update(
               EvmValuationSnapshot,
@@ -302,7 +302,14 @@ export class EvmCycleCloseService {
       cycleView.totalNativeAllocation === BigInt(snapshot.total_native_allocation) &&
       cycleView.status === EvmCycleStatus.Locked
     ) {
-      await this.commitConfirmed(snapshot, null, vault.id, BigInt(snapshot.cycle_id), onChainRoot, snapshot.submit_tx_hash as Hex);
+      await this.commitConfirmed(
+        snapshot,
+        null,
+        vault.id,
+        BigInt(snapshot.cycle_id),
+        onChainRoot,
+        snapshot.submit_tx_hash as Hex
+      );
       this.logger.log(`Reconciled snapshot ${snapshotId} → confirmed (root matches on-chain)`);
       return { status: EvmSnapshotStatus.confirmed, onChainRoot };
     }
@@ -390,14 +397,10 @@ export class EvmCycleCloseService {
       },
       ['CycleStatusChanged'],
       // Persist the hash the moment we have it — on BOTH the vault and the tx row.
-      async (hash) => {
+      async hash => {
         await this.dataSource.transaction(async manager => {
           await manager.update(Vault, { id: vaultId }, { evm_cancel_cycle_tx_hash: hash });
-          await manager.update(
-            Transaction,
-            { id: adminTx.id },
-            { tx_hash: hash, status: TransactionStatus.submitted }
-          );
+          await manager.update(Transaction, { id: adminTx.id }, { tx_hash: hash, status: TransactionStatus.submitted });
         });
       }
     );

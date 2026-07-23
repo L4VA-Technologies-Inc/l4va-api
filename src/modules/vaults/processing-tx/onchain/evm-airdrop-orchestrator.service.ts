@@ -11,11 +11,7 @@ import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import {
-  EvmReconciliationStatus,
-  TransactionStatus,
-  TransactionType,
-} from '@/types/transaction.types';
+import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
 
 /**
@@ -167,11 +163,7 @@ export class EvmAirdropOrchestrator {
     const batch: PickedAllocation[] = [];
     let alreadyClaimedSkipped = 0;
     for (const row of candidates) {
-      const onChainClaimed = await this.contractReader.isClaimed(
-        vaultAddress,
-        cycleId,
-        BigInt(row.claim_index)
-      );
+      const onChainClaimed = await this.contractReader.isClaimed(vaultAddress, cycleId, BigInt(row.claim_index));
       if (onChainClaimed) {
         await this.allocationsRepository
           .createQueryBuilder()
@@ -223,7 +215,7 @@ export class EvmAirdropOrchestrator {
           args,
         },
         ['AllocationClaimed'],
-        async (hash) => {
+        async hash => {
           await this.dataSource.transaction(async manager => {
             // Persist hash on the admin Tx row.
             await manager.update(
@@ -393,8 +385,7 @@ export class EvmAirdropOrchestrator {
           .set({
             claimed_at: new Date(),
             claim_tx_hash: result.hash,
-            claim_block_number:
-              result.receipt.blockNumber != null ? String(result.receipt.blockNumber) : null,
+            claim_block_number: result.receipt.blockNumber != null ? String(result.receipt.blockNumber) : null,
           })
           .where('id = :id AND claimed_at IS NULL', { id: row.id })
           .execute();
