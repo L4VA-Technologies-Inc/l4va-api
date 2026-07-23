@@ -450,7 +450,7 @@ export class EvmVaultEventReconciler {
   }
 
   /**
-   * CycleStatusChanged(cycleId, newStatus)
+   * CycleStatusChanged(cycleId, previous, next)
    */
   private async handleCycleStatusChanged(
     vault: Vault,
@@ -458,8 +458,8 @@ export class EvmVaultEventReconciler {
     args: Record<string, unknown>
   ): Promise<void> {
     const cycleId = String(args.cycleId as bigint);
-    const newStatus = Number(args.newStatus);
-    if (newStatus !== EvmCycleStatus.Cancelled) return;
+    const nextStatus = Number(args.next);
+    if (nextStatus !== EvmCycleStatus.Cancelled) return;
     if (vault.evm_cancel_cycle_tx_hash) return; // idempotent
     await this.vaultsRepository
       .createQueryBuilder()

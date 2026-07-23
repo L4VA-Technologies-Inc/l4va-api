@@ -21,11 +21,15 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
+import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
+import { EvmLockTimePricingService } from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
 import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { EvmCycleStatus } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -78,7 +82,10 @@ export class LifecycleService {
     private readonly evmCycleCloseService: EvmCycleCloseService,
     private readonly evmContractReader: EvmContractReader,
     private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
-    private readonly evmRefundOrchestrator: EvmRefundOrchestrator
+    private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
+    private readonly evmAllocationService: EvmAllocationService,
+    private readonly evmLockTimePricingService: EvmLockTimePricingService,
+    private readonly evmContributionBackfillService: EvmContributionBackfillService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -97,6 +104,8 @@ export class LifecycleService {
       await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
+      await this.handleEvmContributionBackfill(); // EVM: reconcile missing evm_contributions rows against on-chain state
+      await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
       await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
       await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met
@@ -2538,6 +2547,150 @@ export class LifecycleService {
       }
     } catch (error) {
       this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM: reconcile missing evm_contributions rows against on-chain state.
+  //
+  // The webhook path is the primary writer, but any missed / dropped event
+  // leaves the vault with fewer DB rows than on-chain contributions and
+  // blocks the snapshot builder. This sweep runs before the snapshot
+  // handler so any gap closes on the next tick automatically.
+  //
+  // Gated by the same feature flag as the rest of the EVM cycle automation.
+  // ---------------------------------------------------------------------------
+  private async handleEvmContributionBackfill(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      await this.evmContributionBackfillService.sweepAllVaults();
+    } catch (err) {
+      this.logger.error(`EVM contribution backfill sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM: contribution/acquire → ready snapshot.
+  //
+  // Bridges the gap between "user contributions have flowed in" and
+  // handleEvmAcquireToLocked (which needs a `ready` snapshot to broadcast
+  // closeCycle). For every EVM vault whose on-chain cycle windows have closed
+  // and whose native collection meets the on-chain min threshold, this method:
+  //   1. Reads the on-chain cycle (currentCycleId + getCycle).
+  //   2. Skips vaults whose cycle is not Active, whose windows are still open,
+  //      or whose collection is below `minAcquireThreshold` (those go to the
+  //      refund pipeline instead).
+  //   3. Skips vaults that already have a non-`calculated` snapshot for this
+  //      cycle — we never recompute a snapshot that has been marked ready or
+  //      committed on-chain.
+  //   4. Runs the lock-time pricing pipeline, computes the allocation snapshot,
+  //      and marks it `ready`.
+  //
+  // Gated by the same feature flag as the rest of the EVM cycle automation.
+  // ---------------------------------------------------------------------------
+  private async handleEvmContributionToSnapshotReady(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+
+    // Candidate vaults: EVM, deployed, no root yet committed, not cancelled,
+    // in a pre-lock DB status. We intentionally include `published` in case
+    // the DB row lags behind on-chain state (createVault confirmed, cycle
+    // opened, contributions already routed).
+    const candidates = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.contract_address IS NOT NULL')
+      .andWhere('vault.evm_root_committed_at IS NULL')
+      .andWhere('vault.evm_cancel_cycle_tx_hash IS NULL')
+      .andWhere('vault.vault_status IN (:...statuses)', {
+        statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
+      })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .select(['vault.id', 'vault.contract_address'])
+      .getMany();
+
+    if (candidates.length === 0) return;
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const snapshotsRepo = this.dataSource.getRepository(EvmValuationSnapshot);
+
+    for (const vault of candidates) {
+      if (this.processingVaults.has(vault.id)) continue;
+
+      let cycleId: bigint;
+      let nativeCollected: bigint;
+      let minThreshold: bigint;
+      try {
+        cycleId = await this.evmContractReader.currentCycleId(vault.contract_address as `0x${string}`);
+        if (cycleId === 0n) continue; // no cycle opened yet
+
+        const cycleView = await this.evmContractReader.getCycle(vault.contract_address as `0x${string}`, cycleId);
+
+        // Only act on Active cycles — Locked/Cancelled are handled elsewhere.
+        if (cycleView.status !== EvmCycleStatus.Active) continue;
+
+        // Both configured windows must have ended. Zero-length windows are
+        // treated as already closed.
+        const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
+        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        if (!assetEnded || !acquireEnded) continue;
+
+        nativeCollected = cycleView.nativeCollected;
+        minThreshold = cycleView.minAcquireThreshold;
+      } catch (err) {
+        this.logger.debug(
+          `EVM handleEvmContributionToSnapshotReady: read failed for vault ${vault.id}: ${(err as Error).message}`
+        );
+        continue;
+      }
+
+      // Threshold not met → refund path picks it up. Nothing to snapshot here.
+      if (nativeCollected < minThreshold) continue;
+
+      // Idempotency: skip if a non-`calculated` snapshot already exists.
+      // (`computeSnapshot` also enforces this, but querying first avoids
+      // unnecessary pricing work.)
+      const existing = await snapshotsRepo.findOne({
+        where: { vault_id: vault.id, cycle_id: cycleId.toString() },
+        select: ['id', 'status'],
+      });
+      if (existing && existing.status !== EvmSnapshotStatus.calculated) continue;
+
+      this.processingVaults.add(vault.id);
+      try {
+        this.logger.log(
+          `EVM snapshot build: vault=${vault.id} cycle=${cycleId} nativeCollected=${nativeCollected} threshold=${minThreshold}`
+        );
+
+        // 1. Price every active contribution at lock-time.
+        const pricing = await this.evmLockTimePricingService.resolvePricesForCycle(vault.id, cycleId);
+
+        // 2. Compute + persist the snapshot (status='calculated').
+        const { snapshotId, leafCount } = await this.evmAllocationService.computeSnapshot({
+          vaultId: vault.id,
+          cycleId,
+          contributionValues: pricing.contributionValues,
+          priceSource: pricing.priceSource,
+          rawPrices: pricing.rawPrices,
+          normalizedPrices: pricing.normalizedPrices,
+        });
+
+        // 3. Advance to 'ready' so handleEvmAcquireToLocked will broadcast
+        //    closeCycle on the next tick.
+        await this.evmAllocationService.markReady(snapshotId);
+
+        this.logger.log(
+          `EVM snapshot ready: vault=${vault.id} cycle=${cycleId} snapshot=${snapshotId} leaves=${leafCount}`
+        );
+      } catch (err) {
+        this.logger.error(
+          `EVM handleEvmContributionToSnapshotReady failed for vault ${vault.id} cycle ${cycleId}: ${(err as Error).message}`
+        );
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
     }
   }
 

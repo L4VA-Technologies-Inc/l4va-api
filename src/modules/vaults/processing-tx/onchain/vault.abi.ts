@@ -39,24 +39,28 @@ const ALLOCATION_CLAIM = [
   { name: 'proof', type: 'bytes32[]' as const },
 ];
 
+// CycleView — MUST mirror the tuple returned by Vault.getCycle(uint256).
+// Any drift here produces "Position N out of bounds" decode errors at runtime.
+// Source of truth: vault-contract-solidity/src/Vault.sol#CycleView
 const CYCLE_VIEW = [
-  { name: 'cycleId', type: 'uint256' as const },
   { name: 'status', type: 'uint8' as const },
   { name: 'assetWindow', type: 'tuple' as const, components: TIME_WINDOW },
   { name: 'acquireWindow', type: 'tuple' as const, components: TIME_WINDOW },
+  { name: 'openedAt', type: 'uint64' as const },
+  { name: 'nativeCollected', type: 'uint256' as const },
   { name: 'minAcquireThreshold', type: 'uint256' as const },
   { name: 'adaPairVtPerNativeUnit', type: 'uint256' as const },
   { name: 'allocationRoot', type: 'bytes32' as const },
   { name: 'valuationHash', type: 'bytes32' as const },
   { name: 'totalVtAllocation', type: 'uint256' as const },
-  { name: 'claimedVt', type: 'uint256' as const },
   { name: 'totalNativeAllocation', type: 'uint256' as const },
+  { name: 'claimedVt', type: 'uint256' as const },
   { name: 'claimedNative', type: 'uint256' as const },
-  { name: 'nativeCollected', type: 'uint256' as const },
 ];
 
+// Contribution — MUST mirror the tuple returned by Vault.getContribution(uint256).
+// Source of truth: vault-contract-solidity/src/libraries/VaultTypes.sol#Contribution
 const CONTRIBUTION_VIEW = [
-  { name: 'id', type: 'uint256' as const },
   { name: 'cycleId', type: 'uint256' as const },
   { name: 'contributor', type: 'address' as const },
   { name: 'kind', type: 'uint8' as const },
@@ -64,6 +68,9 @@ const CONTRIBUTION_VIEW = [
   { name: 'tokenId', type: 'uint256' as const },
   { name: 'amount', type: 'uint256' as const },
   { name: 'status', type: 'uint8' as const },
+  { name: 'authDigest', type: 'bytes32' as const },
+  { name: 'authNonce', type: 'uint256' as const },
+  { name: 'depositedAt', type: 'uint64' as const },
 ];
 
 // -----------------------------------------------------------------------------
@@ -215,6 +222,13 @@ export const VAULT_ABI = [
   {
     type: 'function',
     stateMutability: 'view',
+    name: 'totalContributions',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
     name: 'status',
     inputs: [],
     outputs: [{ type: 'uint8' }],
@@ -242,6 +256,9 @@ export const VAULT_ABI = [
   },
 
   // --- Events (decoded from receipts + Alchemy webhooks) -------------------
+  // NOTE: signatures MUST mirror IVault.sol exactly — any drift changes
+  // topic0 and makes both `viem.getLogs({event})` and `decodeEventLog` fail
+  // silently (returning zero results). See IVault.sol for the source of truth.
   {
     type: 'event',
     name: 'ContributionMade',
@@ -253,6 +270,7 @@ export const VAULT_ABI = [
       { name: 'asset', type: 'address', indexed: false },
       { name: 'tokenId', type: 'uint256', indexed: false },
       { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'authDigest', type: 'bytes32', indexed: false },
     ],
   },
   {
@@ -268,7 +286,7 @@ export const VAULT_ABI = [
     name: 'CycleClosed',
     inputs: [
       { name: 'cycleId', type: 'uint256', indexed: true },
-      { name: 'allocationRoot', type: 'bytes32', indexed: false },
+      { name: 'allocationRoot', type: 'bytes32', indexed: true },
       { name: 'valuationHash', type: 'bytes32', indexed: false },
       { name: 'totalVtAllocation', type: 'uint256', indexed: false },
       { name: 'totalNativeAllocation', type: 'uint256', indexed: false },
@@ -279,7 +297,8 @@ export const VAULT_ABI = [
     name: 'CycleStatusChanged',
     inputs: [
       { name: 'cycleId', type: 'uint256', indexed: true },
-      { name: 'newStatus', type: 'uint8', indexed: false },
+      { name: 'previous', type: 'uint8', indexed: true },
+      { name: 'next', type: 'uint8', indexed: true },
     ],
   },
   {

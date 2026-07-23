@@ -16,7 +16,7 @@ import {
   TransactionStatus,
   TransactionType,
 } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 /**
  * Broadcast + reconciliation half of Phase B.
@@ -596,6 +596,8 @@ export class EvmCycleCloseService {
         Vault,
         { id: vaultId },
         {
+          vault_status: VaultStatus.locked,
+          locked_at: new Date(),
           evm_current_cycle_id: cycleId.toString(),
           evm_allocation_root: root,
           evm_close_cycle_tx_hash: txHash,

@@ -14,6 +14,7 @@ import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmAirdropOrchestrator } from './evm-airdrop-orchestrator.service';
 import { EvmAllocationService } from './evm-allocation.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
@@ -81,6 +82,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmVaultSignerService,
     EvmVaultContributionService,
     EvmVaultEventReconciler,
+    EvmContributionBackfillService,
     EvmWebhookService,
     VaultManagingService,
     TransactionHealthService,
@@ -99,6 +101,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmCycleCloseService,
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
+    EvmContributionBackfillService,
   ],
 })
 export class BlockchainModule {}

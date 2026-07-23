@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { type Address, type Hex } from 'viem';
@@ -56,6 +57,7 @@ export interface RefundBatchResult {
 export class EvmRefundOrchestrator {
   private readonly logger = new Logger(EvmRefundOrchestrator.name);
   private readonly processingVaults = new Set<string>();
+  private readonly factoryAddress?: string;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -65,8 +67,15 @@ export class EvmRefundOrchestrator {
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
-    private readonly cycleCloseService: EvmCycleCloseService
-  ) {}
+    private readonly cycleCloseService: EvmCycleCloseService,
+    configService: ConfigService
+  ) {
+    // Cache the factory address so we can exclude vaults whose contract_address
+    // is accidentally the factory (an early-flow bug leaves some rows in this
+    // state; the factory does not implement currentCycleId / getCycle).
+    const raw = configService.get<string>('EVM_FACTORY_ADDRESS');
+    this.factoryAddress = raw ? raw.toLowerCase() : undefined;
+  }
 
   // ==========================================================================
   // Failed-vault detection: cancelCurrentCycle when threshold missed.
@@ -77,7 +86,7 @@ export class EvmRefundOrchestrator {
 
     // Candidate vaults: EVM, in acquire/contribution phase, no cancel tx yet,
     // no confirmed snapshot (i.e. we haven't just locked them).
-    const candidates = await this.vaultsRepository
+    const query = this.vaultsRepository
       .createQueryBuilder('vault')
       .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
       .andWhere('vault.contract_address IS NOT NULL')
@@ -85,8 +94,18 @@ export class EvmRefundOrchestrator {
       .andWhere('vault.evm_root_committed_at IS NULL')
       .andWhere('vault.vault_status IN (:...statuses)', {
         statuses: [VaultStatus.acquire, VaultStatus.contribution, VaultStatus.published],
-      })
-      .getMany();
+      });
+
+    // Exclude vaults whose contract_address is the factory (bookkeeping bug
+    // in early creation flow). Otherwise every tick will retry currentCycleId
+    // against the factory and log noise.
+    if (this.factoryAddress) {
+      query.andWhere('LOWER(vault.contract_address) <> :factoryAddr', {
+        factoryAddr: this.factoryAddress,
+      });
+    }
+
+    const candidates = await query.getMany();
 
     for (const vault of candidates) {
       if (this.processingVaults.has(vault.id)) continue;

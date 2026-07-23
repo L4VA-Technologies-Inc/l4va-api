@@ -6,24 +6,23 @@ import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
 /** Shape returned by Vault.getCycle(cycleId). Mirrors CycleView in Vault.sol. */
 export interface OnchainCycleView {
-  cycleId: bigint;
   status: number;
   assetWindow: { start: bigint; end: bigint };
   acquireWindow: { start: bigint; end: bigint };
+  openedAt: bigint;
+  nativeCollected: bigint;
   minAcquireThreshold: bigint;
   adaPairVtPerNativeUnit: bigint;
   allocationRoot: Hex;
   valuationHash: Hex;
   totalVtAllocation: bigint;
-  claimedVt: bigint;
   totalNativeAllocation: bigint;
+  claimedVt: bigint;
   claimedNative: bigint;
-  nativeCollected: bigint;
 }
 
-/** Shape returned by Vault.getContribution(id). Mirrors Contribution in Vault.sol. */
+/** Shape returned by Vault.getContribution(id). Mirrors Contribution in VaultTypes.sol. */
 export interface OnchainContributionView {
-  id: bigint;
   cycleId: bigint;
   contributor: Address;
   kind: number;
@@ -31,6 +30,9 @@ export interface OnchainContributionView {
   tokenId: bigint;
   amount: bigint;
   status: number;
+  authDigest: Hex;
+  authNonce: bigint;
+  depositedAt: bigint;
 }
 
 /**
@@ -103,6 +105,14 @@ export class EvmContractReader {
       address: vault,
       abi: VAULT_ABI,
       functionName: 'currentCycleId',
+    }) as Promise<bigint>;
+  }
+
+  async totalContributions(vault: Address): Promise<bigint> {
+    return this.client.readContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'totalContributions',
     }) as Promise<bigint>;
   }
 
