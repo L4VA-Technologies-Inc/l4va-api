@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
@@ -105,12 +105,33 @@ export class TransactionsService {
 
     if (transaction.type === TransactionType.acquire) {
       pendingAssets.forEach(assetItem => {
+        const rawType = String(assetItem.type ?? assetItem.asset_type ?? '')
+          .trim()
+          .toLowerCase();
+        const policyId = String(assetItem.policyId ?? assetItem.policy_id ?? '')
+          .trim()
+          .toLowerCase();
+        const assetName = String(assetItem.assetName ?? assetItem.asset_id ?? '')
+          .trim()
+          .toLowerCase();
+        const isNativeEthAddress = policyId === '0x0000000000000000000000000000000000000000';
+
+        // Acquire flow supports only native assets: ADA (Cardano) or ETH (EVM).
+        if (rawType && rawType !== AssetType.ADA && rawType !== AssetType.ETH) {
+          throw new BadRequestException(
+            `Invalid acquire asset type "${rawType}". Acquire supports only "${AssetType.ADA}" or "${AssetType.ETH}".`
+          );
+        }
+
+        const resolvedType: AssetType =
+          rawType === AssetType.ETH || isNativeEthAddress || assetName === 'eth' ? AssetType.ETH : AssetType.ADA;
+
         assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
-          type: AssetType.ADA, // Using ADA type for acquire
-          policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName || '', // Default to empty string for EVM assets
+          type: resolvedType,
+          policy_id: policyId,
+          asset_id: assetName || (resolvedType === AssetType.ETH ? 'eth' : ''),
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
