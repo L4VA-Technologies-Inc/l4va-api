@@ -3035,7 +3035,7 @@ export class TaptoolsService {
               name: meta?.name ?? contractAddress,
               displayName: meta?.name ?? contractAddress,
               ticker: meta?.symbol ?? undefined,
-              quantity: balance,
+              quantity: tokenBalance,
               isNft: false,
               isFungibleToken: true,
               priceAda,
