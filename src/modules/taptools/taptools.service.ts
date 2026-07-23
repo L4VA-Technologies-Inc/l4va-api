@@ -2557,8 +2557,9 @@ export class TaptoolsService {
         client.readContract({ address: addr, abi: ERC20_ABI, functionName: 'decimals' }).catch(() => 18),
       ]);
 
-      const balance = Number(rawBalance) / Math.pow(10, Number(decimals));
-      if (balance <= 0) return null;
+      const rawQuantity = Number(rawBalance);
+      const decimalAdjustedBalance = rawQuantity / Math.pow(10, Number(decimals));
+      if (decimalAdjustedBalance <= 0) return null;
 
       const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, false, adaPriceUsd);
       if (priceAda === null) return null;
@@ -2572,15 +2573,15 @@ export class TaptoolsService {
           name: String(name),
           displayName: String(name),
           ticker: String(symbol),
-          quantity: balance,
+          quantity: rawQuantity, // Return raw quantity, not decimal-adjusted
           isNft: false,
           isFungibleToken: true,
           priceAda,
           priceUsd,
           priceEth,
-          valueAda: +(balance * priceAda).toFixed(6),
-          valueUsd: +(balance * priceUsd).toFixed(6),
-          valueEth: +(balance * priceEth).toFixed(6),
+          valueAda: +(decimalAdjustedBalance * priceAda).toFixed(6),
+          valueUsd: +(decimalAdjustedBalance * priceUsd).toFixed(6),
+          valueEth: +(decimalAdjustedBalance * priceEth).toFixed(6),
           metadata: {
             policyId: contractAddress,
             decimals: Number(decimals),
@@ -3009,13 +3010,17 @@ export class TaptoolsService {
       await Promise.all(
         withMeta.map(async ({ contractAddress, tokenBalance, meta }) => {
           const decimals: number = meta?.decimals ?? 18;
-          let balance = 0;
+          let rawQuantity = 0;
+          let decimalAdjustedBalance = 0;
           try {
-            balance = Number(BigInt(tokenBalance)) / Math.pow(10, decimals);
+            // Convert hex string to raw decimal number
+            rawQuantity = Number(BigInt(tokenBalance));
+            // Calculate human-readable balance for value computation
+            decimalAdjustedBalance = rawQuantity / Math.pow(10, decimals);
           } catch {
             return null;
           }
-          if (balance <= 0) return null;
+          if (decimalAdjustedBalance <= 0) return null;
 
           const priceAda = await this.getEvmPriceAda(
             contractAddress,
@@ -3035,15 +3040,15 @@ export class TaptoolsService {
               name: meta?.name ?? contractAddress,
               displayName: meta?.name ?? contractAddress,
               ticker: meta?.symbol ?? undefined,
-              quantity: tokenBalance,
+              quantity: rawQuantity, // Return raw quantity as number, not hex string
               isNft: false,
               isFungibleToken: true,
               priceAda,
               priceUsd,
               priceEth,
-              valueAda: +(balance * priceAda).toFixed(6),
-              valueUsd: +(balance * priceUsd).toFixed(6),
-              valueEth: +(balance * priceEth).toFixed(6),
+              valueAda: +(decimalAdjustedBalance * priceAda).toFixed(6),
+              valueUsd: +(decimalAdjustedBalance * priceUsd).toFixed(6),
+              valueEth: +(decimalAdjustedBalance * priceEth).toFixed(6),
               metadata: {
                 policyId: contractAddress,
                 decimals,

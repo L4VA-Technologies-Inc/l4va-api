@@ -25,7 +25,10 @@ import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
-import { EvmLockTimePricingService } from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
+import {
+  EvmLockTimePricingService,
+  MissingPriceError,
+} from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
 import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
@@ -2650,6 +2653,26 @@ export class LifecycleService {
       // Threshold not met → refund path picks it up. Nothing to snapshot here.
       if (nativeCollected < minThreshold) continue;
 
+      // Parity with Cardano flow: enforce asset whitelist min/max caps before
+      // preparing lock snapshot. If violated, cancel on-chain cycle and mark
+      // vault failed with explicit details + notifications.
+      const whitelistCheck = await this.validateEvmAssetWhitelistThresholds(vault.id);
+      if (!whitelistCheck.isValid) {
+        await this.cancelAndFailEvmVault(vault.id, cycleId, {
+          failureReason: VaultFailureReason.ASSET_THRESHOLD_VIOLATION,
+          failureDetails: {
+            message: 'Assets do not meet threshold requirements',
+            thresholdViolations: whitelistCheck.thresholdViolations,
+            hasAnyAssets: whitelistCheck.hasAnyAssets,
+            contributedAssetsCount: whitelistCheck.contributedAssetsCount,
+          },
+          cancelReason: `Asset whitelist threshold violation at cycle close: ${JSON.stringify(
+            whitelistCheck.thresholdViolations
+          )}`,
+        });
+        continue;
+      }
+
       // Idempotency: skip if a non-`calculated` snapshot already exists.
       // (`computeSnapshot` also enforces this, but querying first avoids
       // unnecessary pricing work.)
@@ -2686,6 +2709,17 @@ export class LifecycleService {
           `EVM snapshot ready: vault=${vault.id} cycle=${cycleId} snapshot=${snapshotId} leaves=${leafCount}`
         );
       } catch (err) {
+        if (err instanceof MissingPriceError) {
+          await this.cancelAndFailEvmVault(vault.id, cycleId, {
+            failureReason: VaultFailureReason.ASSET_THRESHOLD_VIOLATION,
+            failureDetails: {
+              message: 'Missing lock-time pricing for one or more contributed assets',
+              error: err.message,
+            },
+            cancelReason: `Missing lock-time pricing at cycle close: ${err.message}`,
+          });
+          continue;
+        }
         this.logger.error(
           `EVM handleEvmContributionToSnapshotReady failed for vault ${vault.id} cycle ${cycleId}: ${(err as Error).message}`
         );
@@ -2772,6 +2806,132 @@ export class LifecycleService {
       } finally {
         this.processingVaults.delete(snap.vault_id);
       }
+    }
+  }
+
+  private async validateEvmAssetWhitelistThresholds(vaultId: string): Promise<{
+    isValid: boolean;
+    thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }>;
+    hasAnyAssets: boolean;
+    contributedAssetsCount: number;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['assets_whitelist'],
+    });
+
+    if (!vault || !vault.assets_whitelist?.length) {
+      return {
+        isValid: true,
+        thresholdViolations: [],
+        hasAnyAssets: false,
+        contributedAssetsCount: 0,
+      };
+    }
+
+    const contributedAssets = await this.assetsRepository.find({
+      where: {
+        vault: { id: vaultId },
+        deleted: false,
+        origin_type: AssetOriginType.CONTRIBUTED,
+      },
+    });
+
+    const policyIdCounts = contributedAssets.reduce(
+      (counts, asset) => {
+        const policyId = (asset.policy_id || '').toLowerCase();
+        if (!policyId) return counts;
+        if (!counts[policyId]) {
+          counts[policyId] = 0;
+        }
+        counts[policyId] += asset.normalizedQuantity;
+        return counts;
+      },
+      {} as Record<string, number>
+    );
+
+    const hasAnyAssets = contributedAssets.length > 0;
+    const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
+
+    for (const whitelistItem of vault.assets_whitelist) {
+      const policyId = (whitelistItem.policy_id || '').toLowerCase();
+      const count = Number(policyIdCounts[policyId]) || 0;
+      const minRequired = Number(whitelistItem.asset_count_cap_min);
+      const maxAllowed = Number(whitelistItem.asset_count_cap_max);
+
+      const isSoftRequirement = hasAnyAssets && minRequired === 1;
+      const violatesMinimum = !isSoftRequirement && count < minRequired;
+      const violatesMaximum = count > maxAllowed;
+
+      if (violatesMinimum || violatesMaximum) {
+        thresholdViolations.push({
+          policyId: whitelistItem.policy_id,
+          count,
+          min: minRequired,
+          max: maxAllowed,
+        });
+      }
+    }
+
+    return {
+      isValid: thresholdViolations.length === 0,
+      thresholdViolations,
+      hasAnyAssets,
+      contributedAssetsCount: contributedAssets.length,
+    };
+  }
+
+  private async cancelAndFailEvmVault(
+    vaultId: string,
+    cycleId: bigint,
+    data: {
+      failureReason: VaultFailureReason;
+      failureDetails: Record<string, any>;
+      cancelReason: string;
+    }
+  ): Promise<void> {
+    try {
+      const cancelResponse = await this.evmCycleCloseService.cancelCurrentCycle(vaultId, data.cancelReason);
+
+      await this.executePhaseTransition({
+        vaultId,
+        newStatus: VaultStatus.failed,
+        newScStatus: SmartContractVaultStatus.CANCELLED,
+        txHash: cancelResponse.txHash,
+        failureReason: data.failureReason,
+        failureDetails: {
+          ...data.failureDetails,
+          cycleId: cycleId.toString(),
+          chainType: ChainType.robinhood,
+        },
+      });
+
+      await this.emitEvmVaultFailedEvents(vaultId);
+    } catch (err) {
+      this.logger.error(`EVM cancelAndFail failed for vault ${vaultId} cycle ${cycleId}: ${(err as Error).message}`);
+    }
+  }
+
+  private async emitEvmVaultFailedEvents(vaultId: string): Promise<void> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        relations: ['owner', 'assets', 'assets.added_by'],
+      });
+      if (!vault) return;
+
+      const contributorIds = [
+        ...new Set(vault.assets.map(asset => asset.added_by?.id).filter((id): id is string => Boolean(id))),
+      ];
+
+      this.eventEmitter.emit('vault.failed', {
+        vaultId: vault.id,
+        vaultName: vault.name,
+        contributorIds,
+      });
+      this.eventEmitter.emit('vault.failed.email', { vault });
+    } catch (err) {
+      this.logger.error(`Error emitting EVM vault.failed events for vault ${vaultId}:`, err);
     }
   }
 
