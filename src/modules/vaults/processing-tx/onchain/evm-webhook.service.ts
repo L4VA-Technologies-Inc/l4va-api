@@ -151,7 +151,10 @@ export class EvmWebhookService {
         return;
       }
       if ((outcome?.errors ?? []).length > 0) return;
-      await this.blockchainWebhookService.markEvmTransactionReconciled(txHash);
+      // When `tx` was resolved via metadata.evmChildTxHashes, `txHash` here is
+      // the child hash — but markEvmTransactionReconciled matches on the
+      // parent's tx_hash column. Prefer the row's canonical hash.
+      await this.blockchainWebhookService.markEvmTransactionReconciled(String(tx.tx_hash ?? txHash));
     } catch (err) {
       this.logger.debug(`markTransactionReconciledIfSpecMet(${txHash}) failed: ${(err as Error).message}`);
     }

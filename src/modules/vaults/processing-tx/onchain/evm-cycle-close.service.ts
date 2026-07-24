@@ -410,7 +410,7 @@ export class EvmCycleCloseService {
       e =>
         e.eventName === 'CycleStatusChanged' &&
         e.address.toLowerCase() === vaultAddress.toLowerCase() &&
-        Number((e.args as { newStatus: number }).newStatus) === EvmCycleStatus.Cancelled
+        Number((e.args as { next: number }).next) === EvmCycleStatus.Cancelled
     );
     if (!evt) {
       // Success receipt but no matching event decoded — leave reconciliation
