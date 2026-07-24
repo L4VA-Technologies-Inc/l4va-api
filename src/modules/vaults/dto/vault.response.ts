@@ -215,12 +215,30 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   type: VaultType;
 
+  @ApiProperty({
+    description: 'Minimum acquire threshold in native units (ADA for Cardano, ETH for Robinhood)',
+    required: false,
+    nullable: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'minAcquireThreshold' },
+  })
+  minAcquireThreshold?: number | null;
+
   @ApiProperty({ description: 'Required values cost for success acquire phase in ada' })
   @DtoRepresent({
     transform: false,
     expose: { name: 'requireReservedCostAda' },
   })
   requireReservedCostAda: number;
+
+  @ApiProperty({ description: 'Required values cost for success acquire phase in eth', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'requireReservedCostEth' },
+  })
+  requireReservedCostEth?: number;
 
   @ApiProperty({ description: 'Count of contributed assets  ' })
   @DtoRepresent({

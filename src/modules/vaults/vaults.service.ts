@@ -1152,7 +1152,7 @@ export class VaultsService {
         }).length
       : 0;
 
-    const adaPrice = await this.priceService.getAdaPrice();
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
     const totalAcquiredAda = Number(vault.total_acquired_value_ada ?? 0);
     const assetsPrices = {
       adaPrice,
@@ -1173,17 +1173,35 @@ export class VaultsService {
     // For normal vaults, calculate based on asset value and reserve percentages
     let requireReservedCostAda: number;
     let requireReservedCostUsd: number;
+    let requireReservedCostEth: number;
+    const isRobinhoodVault = vault.chain_type === ChainType.robinhood;
 
     if (vault.is_acquire_only) {
-      // Acquire-only vault: use min_acquire_threshold (in lovelace) or 0 if not set
-      requireReservedCostAda = vault.min_acquire_threshold ? vault.min_acquire_threshold / 1_000_000 : 0;
-      requireReservedCostUsd = requireReservedCostAda * adaPrice;
+      // Acquire-only vault threshold is stored in chain-native units:
+      // Cardano: lovelace; Robinhood: ETH.
+      if (isRobinhoodVault) {
+        requireReservedCostEth = Number(vault.min_acquire_threshold ?? 0);
+        requireReservedCostUsd = requireReservedCostEth * ethPrice;
+        requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
+      } else {
+        requireReservedCostAda = vault.min_acquire_threshold ? vault.min_acquire_threshold / 1_000_000 : 0;
+        requireReservedCostUsd = requireReservedCostAda * adaPrice;
+        requireReservedCostEth = ethPrice > 0 ? requireReservedCostUsd / ethPrice : 0;
+      }
     } else {
-      // Normal vault: calculate based on asset value and percentages
-      requireReservedCostAda =
-        assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
-      requireReservedCostUsd =
-        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+      // Normal vault: derive reserve threshold in each currency.
+      if (isRobinhoodVault) {
+        requireReservedCostEth =
+          assetsPrices.totalValueEth * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+        requireReservedCostUsd = requireReservedCostEth * ethPrice;
+        requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
+      } else {
+        requireReservedCostAda =
+          assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+        requireReservedCostUsd =
+          assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+        requireReservedCostEth = ethPrice > 0 ? requireReservedCostUsd / ethPrice : 0;
+      }
     }
 
     // Use raw units for LP calculations (on-chain transactions need decimal-adjusted amounts)
@@ -1209,6 +1227,8 @@ export class VaultsService {
       maxContributeAssets: Number(vault.max_contribute_assets),
       requireReservedCostUsd,
       requireReservedCostAda,
+      requireReservedCostEth,
+      minAcquireThreshold: vault.min_acquire_threshold != null ? Number(vault.min_acquire_threshold) : null,
       lpMinLiquidityAda,
       lpMinLiquidityUsd,
       projectedLpAdaAmount,
