@@ -1237,7 +1237,7 @@ export class TaptoolsService {
 
     // Load custom prices from vault whitelist
     const { customPrices: customPriceMap } = await this.getVaultCustomPrices(vaultId);
-    const adaPrice = await this.priceService.getAdaPrice();
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
 
     // Group assets by policyId and assetId to handle quantities
     const assetMap = new Map<
@@ -1247,6 +1247,7 @@ export class TaptoolsService {
         policyId: string;
         assetId: string;
         quantity: number;
+        acquiredQuantity: number;
         isNft: boolean;
         cachedPrice?: number;
         metadata?: Record<string, unknown>;
@@ -1256,7 +1257,7 @@ export class TaptoolsService {
 
     let totalAcquiredAda = 0;
 
-    // Group assets and track acquired ADA in one pass
+    // Group assets and track acquired quantities in one pass
     for (const asset of vault.assets) {
       // Skip assets that are not in a valid status for valuation
       // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
@@ -1268,16 +1269,14 @@ export class TaptoolsService {
         continue;
       }
 
-      // Track acquired ADA (already stored in ADA units, not lovelace)
-      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.type === AssetType.ADA) {
-        totalAcquiredAda += asset.normalizedQuantity;
-      }
-
       const key = `${asset.policy_id}_${asset.asset_id}`;
       const existingAsset = assetMap.get(key);
 
       if (existingAsset) {
         existingAsset.quantity += asset.normalizedQuantity;
+        if (asset.origin_type === AssetOriginType.ACQUIRED) {
+          existingAsset.acquiredQuantity += asset.normalizedQuantity;
+        }
       } else {
         // Check for custom price first, then use cached market price
         let cachedPrice: number | undefined;
@@ -1294,6 +1293,7 @@ export class TaptoolsService {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
           quantity: asset.normalizedQuantity,
+          acquiredQuantity: asset.origin_type === AssetOriginType.ACQUIRED ? asset.normalizedQuantity : 0,
           isNft: asset.type === AssetType.NFT,
           cachedPrice,
           metadata: asset.metadata || {},
@@ -1322,6 +1322,7 @@ export class TaptoolsService {
 
         if (asset.assetId === 'lovelace') {
           const totalAdaValue = asset.quantity * 1e-6;
+          const acquiredAdaValue = asset.acquiredQuantity * 1e-6;
           assetsWithValues.push({
             ...asset,
             assetName: 'ADA',
@@ -1330,6 +1331,7 @@ export class TaptoolsService {
           });
           totalValueAda += totalAdaValue;
           totalValueUsd += totalAdaValue * adaPrice;
+          totalAcquiredAda += acquiredAdaValue;
           continue;
         }
 
@@ -1372,6 +1374,7 @@ export class TaptoolsService {
 
         totalValueAda += totalAssetValueAda;
         totalValueUsd += totalAssetValueUsd;
+        totalAcquiredAda += valueAda * asset.acquiredQuantity;
       } catch (error: any) {
         console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
       }
@@ -1452,7 +1455,6 @@ export class TaptoolsService {
     }
 
     // Create and return the summary
-    const ethPrice = await this.priceService.getEthPrice();
     return {
       totalValueAda: +totalValueAda.toFixed(6),
       totalValueUsd: +totalValueUsd.toFixed(2),
@@ -1546,9 +1548,14 @@ export class TaptoolsService {
             continue;
           }
 
-          // Track acquired ADA
-          if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
-            totalAcquiredAda += Number(asset.quantity);
+          // Track acquired value in ADA-equivalent (reserve checks use ADA value)
+          if (asset.origin_type === AssetOriginType.ACQUIRED) {
+            if (asset.type === AssetType.ADA) {
+              totalAcquiredAda += asset.normalizedQuantity;
+            } else if (asset.type === AssetType.ETH) {
+              const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+              totalAcquiredAda += asset.normalizedQuantity * ethPriceInAda;
+            }
           }
 
           // Process vault-owned assets for TVL:
@@ -1739,6 +1746,7 @@ export class TaptoolsService {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
         total_assets_cost_eth: summary.totalValueEth,
+        total_acquired_value_ada: summary.totalAcquiredAda,
         last_valuation_update: new Date(),
       };
 
