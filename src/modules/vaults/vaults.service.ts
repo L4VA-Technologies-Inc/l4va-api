@@ -495,6 +495,7 @@ export class VaultsService {
               asset_count_cap_max: assetItem.countCapMax,
               valuation_method: assetItem.valuationMethod || 'market',
               custom_price_ada: assetItem.customPriceAda || null,
+              custom_price_native_wei: assetItem.customPriceNativeWei ?? null,
               lp_pool_onchain_id: lpData?.onchainId || null,
             })
             .orIgnore()
@@ -882,6 +883,7 @@ export class VaultsService {
           'asset_count_cap_max',
           'valuation_method',
           'custom_price_ada',
+          'custom_price_native_wei',
         ],
       }),
       this.acquirerWhitelistRepository.find({

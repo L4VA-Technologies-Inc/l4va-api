@@ -409,6 +409,7 @@ export class LifecycleService {
         {
           valuation_method: 'market',
           custom_price_ada: null, // Clear custom price since we're switching to market
+          custom_price_native_wei: null,
         }
       );
 

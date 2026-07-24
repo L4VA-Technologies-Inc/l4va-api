@@ -139,6 +139,7 @@ export class Proposal {
       collectionName?: string | null;
       valuationMethod?: string;
       customPriceAda?: number | null;
+      customPriceNativeWei?: string | null;
       lpPoolOnchainId?: string | null;
     }>;
 

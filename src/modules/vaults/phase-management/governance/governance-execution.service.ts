@@ -2347,6 +2347,7 @@ export class GovernanceExecutionService {
             collection_name: item.collectionName ?? null,
             valuation_method: item.valuationMethod || 'market',
             custom_price_ada: item.customPriceAda ?? null,
+            custom_price_native_wei: item.customPriceNativeWei ?? null,
             lp_pool_onchain_id: item.lpPoolOnchainId ?? null,
           })
           .orIgnore()
