@@ -9,10 +9,12 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
+import { Asset } from '@/database/asset.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetStatus } from '@/types/asset.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
@@ -25,6 +27,7 @@ interface PickedContribution {
   cycle_id: string;
   on_chain_contribution_id: string;
   contributor: string;
+  asset_id?: string;
 }
 
 export interface CancelSweepResult {
@@ -287,18 +290,33 @@ export class EvmRefundOrchestrator {
         stillActive = true;
       }
       if (!stillActive) {
-        await this.contribsRepository
-          .createQueryBuilder()
-          .update(EvmContribution)
-          .set({
-            status: EvmContributionRowStatus.refunded,
-            refunded_at: () => 'CURRENT_TIMESTAMP',
-          })
-          .where('id = :id AND status = :expected', {
-            id: row.id,
-            expected: EvmContributionRowStatus.active,
-          })
-          .execute();
+        await this.dataSource.transaction(async manager => {
+          await manager
+            .createQueryBuilder()
+            .update(EvmContribution)
+            .set({
+              status: EvmContributionRowStatus.refunded,
+              refunded_at: () => 'CURRENT_TIMESTAMP',
+            })
+            .where('id = :id AND status = :expected', {
+              id: row.id,
+              expected: EvmContributionRowStatus.active,
+            })
+            .execute();
+
+          // Also release the associated asset if present
+          if (row.asset_id) {
+            await manager.update(
+              Asset,
+              { id: row.asset_id },
+              {
+                status: AssetStatus.RELEASED,
+                released_at: new Date(),
+                updated_at: new Date(),
+              }
+            );
+          }
+        });
         alreadyRefundedSkipped++;
         continue;
       }
@@ -477,6 +495,8 @@ export class EvmRefundOrchestrator {
     // handleContributionCancelled will also do this idempotently when the
     // event flows through the webhook path, so races are safe.
     await this.dataSource.transaction(async manager => {
+      const assetIdsToRelease: string[] = [];
+
       for (const row of batch) {
         await manager
           .createQueryBuilder()
@@ -491,7 +511,27 @@ export class EvmRefundOrchestrator {
             active: EvmContributionRowStatus.active,
           })
           .execute();
+
+        // Collect asset IDs to release
+        if (row.asset_id) {
+          assetIdsToRelease.push(row.asset_id);
+        }
       }
+
+      // Update asset statuses to RELEASED
+      if (assetIdsToRelease.length > 0) {
+        await manager.update(
+          Asset,
+          { id: In(assetIdsToRelease) },
+          {
+            status: AssetStatus.RELEASED,
+            released_at: new Date(),
+            updated_at: new Date(),
+          }
+        );
+        this.logger.log(`Released ${assetIdsToRelease.length} assets for refund batch tx=${result.hash}`);
+      }
+
       await manager.update(
         Transaction,
         { id: adminTxId },

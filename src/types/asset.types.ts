@@ -9,7 +9,7 @@ export enum AssetStatus {
   PENDING = 'pending',
   /** Asset is locked in the vault */
   LOCKED = 'locked',
-  /** Removed from vault back to user */
+  /** Removed from vault back to user (Cardano: cancellation claims, EVM: refunded contributions) */
   RELEASED = 'released',
   /** Status For ADA that have been sent across Contributors and LP */
   DISTRIBUTED = 'distributed',
@@ -23,8 +23,6 @@ export enum AssetStatus {
   OFFERED = 'offered',
   /** Offer was canceled or rejected on WayUp */
   CANCEL_OFFER = 'cancel_offer',
-  /** Asset was refunded on-chain (EVM: contribution cancelled / cycle cancelled). */
-  REFUNDED = 'refunded',
 }
 
 export enum AssetOriginType {

@@ -354,7 +354,11 @@ export class EvmVaultEventReconciler {
       if ((gate.affected ?? 0) === 0) return; // raced
 
       if (row.asset_id) {
-        await manager.update(Asset, { id: row.asset_id }, { status: AssetStatus.REFUNDED, updated_at: new Date() });
+        await manager.update(
+          Asset,
+          { id: row.asset_id },
+          { status: AssetStatus.RELEASED, released_at: new Date(), updated_at: new Date() }
+        );
       }
 
       const remainingActive = await manager.count(EvmContribution, {

@@ -25,7 +25,6 @@ export class EvmClaimRefundAndReconciliation1784814704081 implements MigrationIn
     await queryRunner.query(`ALTER TYPE "transactions_type_enum" ADD VALUE IF NOT EXISTS 'evm-claim'`);
     await queryRunner.query(`ALTER TYPE "transactions_type_enum" ADD VALUE IF NOT EXISTS 'evm-refund'`);
     await queryRunner.query(`ALTER TYPE "transactions_type_enum" ADD VALUE IF NOT EXISTS 'evm-cancel-cycle'`);
-    await queryRunner.query(`ALTER TYPE "assets_status_enum" ADD VALUE IF NOT EXISTS 'refunded'`);
 
     // vaults — cycle-close bookkeeping (no threshold column: use getCycle view)
     await queryRunner.query(`
