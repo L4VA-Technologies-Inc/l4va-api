@@ -27,6 +27,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmSnapshotService } from './evm-snapshot.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { SnapshotService } from './snapshot.service';
@@ -56,7 +57,7 @@ import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
 /*
@@ -142,7 +143,8 @@ export class GovernanceService {
     private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly snapshotService: SnapshotService
+    private readonly snapshotService: SnapshotService,
+    private readonly evmSnapshotService: EvmSnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -175,7 +177,9 @@ export class GovernanceService {
     this.logger.log('Starting daily snapshot creation');
 
     try {
-      // Include both locked and expansion vaults for snapshot creation
+      // Include both locked and expansion vaults for snapshot creation.
+      // Cardano vaults are identified by script_hash + asset_vault_name; EVM
+      // (Robinhood) vaults have neither and are identified by contract_address.
       const lockedVaults = await this.vaultRepository.find({
         where: [
           {
@@ -190,8 +194,20 @@ export class GovernanceService {
             script_hash: Not(IsNull()),
             distribution_processed: true,
           },
+          {
+            vault_status: VaultStatus.locked,
+            chain_type: ChainType.robinhood,
+            contract_address: Not(IsNull()),
+            distribution_processed: true,
+          },
+          {
+            vault_status: VaultStatus.expansion,
+            chain_type: ChainType.robinhood,
+            contract_address: Not(IsNull()),
+            distribution_processed: true,
+          },
         ],
-        select: ['id', 'asset_vault_name', 'script_hash'],
+        select: ['id', 'asset_vault_name', 'script_hash', 'chain_type'],
       });
 
       if (lockedVaults.length === 0) {
@@ -206,7 +222,11 @@ export class GovernanceService {
           if (index > 0) {
             await new Promise(resolve => setTimeout(resolve, 1000)); //  Add delay between requests to avoid overwhelming BlockFrost
           }
-          return await this.createAutomaticSnapshot(vault.id, `${vault.script_hash}${vault.asset_vault_name}`);
+          // assetId is only meaningful for Cardano; the EVM branch derives the
+          // token address from the vault contract and ignores this argument.
+          const assetId =
+            vault.chain_type === ChainType.robinhood ? '' : `${vault.script_hash}${vault.asset_vault_name}`;
+          return await this.createAutomaticSnapshot(vault.id, assetId);
         })
       );
 
@@ -228,14 +248,40 @@ export class GovernanceService {
   async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     try {
       // Fetch vault info including token unit for LP detection
-      const vault: Pick<Vault, 'id' | 'ft_token_decimals' | 'policy_id' | 'asset_vault_name' | 'has_active_lp'> =
-        await this.vaultRepository.findOne({
-          where: { id: vaultId },
-          select: ['id', 'ft_token_decimals', 'policy_id', 'asset_vault_name', 'has_active_lp'],
-        });
+      const vault: Pick<
+        Vault,
+        | 'id'
+        | 'ft_token_decimals'
+        | 'policy_id'
+        | 'asset_vault_name'
+        | 'has_active_lp'
+        | 'chain_type'
+        | 'contract_address'
+        | 'publication_hash'
+      > = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: [
+          'id',
+          'ft_token_decimals',
+          'policy_id',
+          'asset_vault_name',
+          'has_active_lp',
+          'chain_type',
+          'contract_address',
+          'publication_hash',
+        ],
+      });
 
       if (!vault) {
         throw new NotFoundException(`Vault ${vaultId} not found`);
+      }
+
+      // EVM (Robinhood) vaults resolve holders from the chain API instead of Blockfrost.
+      // The claim-based eligibility guard below is Cardano-specific (EVM vaults do not
+      // populate the claims table), so EVM eligibility is answered directly by the
+      // on-chain holder enumeration inside createEvmAutomaticSnapshot.
+      if (vault.chain_type === ChainType.robinhood) {
+        return await this.createEvmAutomaticSnapshot(vaultId, vault.contract_address, vault.publication_hash);
       }
 
       // First, check if there's at least one claimed contribution or acquisition for this vault
@@ -417,6 +463,57 @@ export class GovernanceService {
       this.logger.error(`Failed to create automatic snapshot: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Creates an automatic snapshot for an EVM (Robinhood) vault.
+   *
+   * The Cardano path enumerates VT holders via Blockfrost `assetsAddresses`.
+   * For EVM we resolve the same "walletsByToken" mapping purely from the chain
+   * API: read the VT ERC-20 address from the vault contract, scan Transfer logs
+   * for holders, and read their current `balanceOf` (see {@link EvmSnapshotService}).
+   *
+   * @param vaultId - The ID of the vault
+   * @param vaultContractAddress - Deployed EVM vault contract address
+   * @param creationTxHash - Vault-creation tx hash, used to start the log scan at the deployment block
+   */
+  private async createEvmAutomaticSnapshot(
+    vaultId: string,
+    vaultContractAddress: string,
+    creationTxHash?: string
+  ): Promise<Snapshot> {
+    const { tokenAddress, decimals, totalSupplyRaw, addressBalances } =
+      await this.evmSnapshotService.getVaultTokenBalances(vaultContractAddress, creationTxHash);
+
+    const divisor = BigInt(10) ** BigInt(decimals);
+    const adjustedSupply = divisor > BigInt(0) ? Number(totalSupplyRaw / divisor) : 0;
+
+    // Update vault supply with TOTAL supply (matches Cardano behaviour).
+    await this.vaultRepository.update(vaultId, {
+      ft_token_supply: adjustedSupply,
+    });
+
+    // Store balances as strings to preserve bigint precision, addresses lowercased
+    // to match how EVM wallet addresses are stored on users.
+    const addressBalancesForSnapshot: Record<string, string> = {};
+    for (const [address, balance] of Object.entries(addressBalances)) {
+      addressBalancesForSnapshot[address] = String(balance);
+    }
+
+    const snapshot = this.snapshotRepository.create({
+      vaultId,
+      assetId: tokenAddress,
+      addressBalances: addressBalancesForSnapshot,
+    });
+
+    await this.snapshotRepository.save(snapshot);
+
+    this.logger.log(
+      `EVM automatic snapshot created for vault ${vaultId} (token ${tokenAddress}) with ` +
+        `${Object.keys(addressBalances).length} voting addresses`
+    );
+
+    return snapshot;
   }
 
   async createProposal(

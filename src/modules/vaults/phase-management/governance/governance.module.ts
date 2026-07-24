@@ -8,6 +8,7 @@ import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module'
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { DistributionService } from './distribution.service';
+import { EvmSnapshotService } from './evm-snapshot.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceFeeService } from './governance-fee.service';
@@ -84,6 +85,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     VoteCountingService,
     TerminationService,
     DistributionService,
+    EvmSnapshotService,
     {
       provide: ProposalHealthService,
       useFactory: (
