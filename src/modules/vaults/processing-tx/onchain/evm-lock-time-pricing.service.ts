@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { type Address } from 'viem';
@@ -6,6 +7,7 @@ import { type Address } from 'viem';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmAssetKindOnchain } from './vault.abi';
 
+import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
@@ -119,6 +121,7 @@ export class UnsupportedPriceQuoteError extends Error {
 @Injectable()
 export class EvmLockTimePricingService {
   private readonly logger = new Logger(EvmLockTimePricingService.name);
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -127,8 +130,12 @@ export class EvmLockTimePricingService {
     private readonly whitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(EvmAssetPriceFeedEntity)
     private readonly feedsRepository: Repository<EvmAssetPriceFeedEntity>,
-    private readonly contractReader: EvmContractReader
-  ) {}
+    @InjectRepository(Asset) private readonly assetsRepository: Repository<Asset>,
+    private readonly contractReader: EvmContractReader,
+    private readonly configService: ConfigService
+  ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   /**
    * Price every ACTIVE (i.e. not refunded / not cancelled) confirmed
@@ -185,6 +192,23 @@ export class EvmLockTimePricingService {
     const feedByAsset = new Map<string, EvmAssetPriceFeedEntity>();
     for (const f of feeds) feedByAsset.set(f.token_address.toLowerCase(), f);
 
+    // Preload asset dex_price for testnet fallback (reuse what taptools already stored).
+    // For EVM assets dex_price is stored in ETH; for Cardano it would be in ADA.
+    const dexPriceByAsset = new Map<string, number>();
+    if (!this.isMainnet && distinctAssets.length) {
+      const assetRows = await this.assetsRepository
+        .createQueryBuilder('a')
+        .select(['a.policy_id', 'a.dex_price'])
+        .where('a.vault_id = :vaultId', { vaultId })
+        .andWhere('LOWER(a.policy_id) IN (:...policies)', { policies: distinctAssets })
+        .andWhere('a.dex_price IS NOT NULL')
+        .andWhere('a.deleted = false')
+        .getMany();
+      for (const a of assetRows) {
+        if (a.dex_price) dexPriceByAsset.set(a.policy_id.toLowerCase(), a.dex_price);
+      }
+    }
+
     // ERC20 decimals cache (avoid repeated RPC).
     const erc20DecimalsCache = new Map<string, number>();
     const contributionValues: ContributionValueMap = new Map();
@@ -239,6 +263,28 @@ export class EvmLockTimePricingService {
       // --- ERC-20 via Chainlink --------------------------------------------
       const feed = feedByAsset.get(assetKey);
       if (!feed) {
+        if (!this.isMainnet) {
+          // Testnet: no Chainlink feeds exist — derive price from dex_price already
+          // stored on the Asset entity by taptools. For EVM assets dex_price is in
+          // ETH, so multiplying by 1e18 gives wei directly. Falls back to
+          // WHOLE_UNIT_SCALE (1 ETH per whole token) if taptools hasn't run yet.
+          const dexPriceEth = dexPriceByAsset.get(assetKey);
+          const unitPriceWei =
+            dexPriceEth && dexPriceEth > 0 ? BigInt(Math.round(dexPriceEth * 1e18)) : WHOLE_UNIT_SCALE;
+          const valueNative = await this.applyUnitPrice(c, unitPriceWei, erc20DecimalsCache, vault.chain_id);
+          this.logger.warn(
+            `[TESTNET] No price feed for ERC-20 ${assetKey} — using asset.dex_price=${dexPriceEth ?? 'null'} ETH → ${unitPriceWei} wei/unit`
+          );
+          contributionValues.set(c.id, {
+            valueNative,
+            unitPriceNative: unitPriceWei.toString(),
+            source: 'testnet-asset-dex-price',
+          });
+          priceSource[assetKey] = 'testnet-asset-dex-price';
+          rawPrices[assetKey] = { dexPriceEth: dexPriceEth ?? null, unitPriceWei: unitPriceWei.toString() };
+          normalizedPrices[assetKey] = unitPriceWei.toString();
+          continue;
+        }
         throw new MissingPriceError(
           `ERC-20 ${assetKey} has neither a whitelist override nor an enabled Chainlink feed on chain ${vault.chain_id}`
         );
