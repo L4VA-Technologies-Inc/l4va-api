@@ -124,16 +124,9 @@ export class EvmContributionBackfillService {
       return { onChain: Number(onChain), inDb, inserted: 0 };
     }
 
-    this.logger.log(
-      `EVM contribution backfill: vault=${vault.id} onChain=${onChain} inDb=${inDb} — scanning ContributionMade logs`
-    );
-
     // 3. Fetch ContributionMade logs from a bounded range.
     const logs = await this.fetchContributionLogs(address);
     if (logs.length === 0) {
-      this.logger.warn(
-        `EVM contribution backfill: no ContributionMade logs found in the last ${this.lookbackBlocks} blocks for vault ${vault.id}`
-      );
       return { onChain: Number(onChain), inDb, inserted: 0 };
     }
 

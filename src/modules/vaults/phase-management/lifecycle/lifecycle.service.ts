@@ -54,6 +54,8 @@ export class LifecycleService {
   private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
   private readonly MAX_FAILED_ATTEMPTS = 3; // Maximum allowed failed attempts before skipping
   private isRunning = false;
+  private readonly EVM_BACKFILL_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+  private lastEvmBackfillSweepAt = 0;
 
   constructor(
     @InjectRepository(Asset)
@@ -2567,6 +2569,10 @@ export class LifecycleService {
   // ---------------------------------------------------------------------------
   private async handleEvmContributionBackfill(): Promise<void> {
     if (!this.isEvmCycleAutomationEnabled()) return;
+    const now = Date.now();
+    if (now - this.lastEvmBackfillSweepAt < this.EVM_BACKFILL_SWEEP_INTERVAL_MS) return;
+
+    this.lastEvmBackfillSweepAt = now;
     try {
       await this.evmContributionBackfillService.sweepAllVaults();
     } catch (err) {

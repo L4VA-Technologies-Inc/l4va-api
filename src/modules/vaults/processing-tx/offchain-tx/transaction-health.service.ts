@@ -56,7 +56,7 @@ export class TransactionHealthService {
    *      PATH for the Alchemy webhook. An EVM tx is only fully processed
    *      when reconciled_at is set.
    */
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async checkStuckTransactions(): Promise<void> {
     this.logger.log('Starting health check for stuck transactions');
 
@@ -319,10 +319,7 @@ export class TransactionHealthService {
       .limit(this.RECONCILIATION_BATCH_SIZE)
       .getMany();
 
-    if (pending.length === 0) {
-      this.logger.debug('EVM reconciliation sweep: nothing to do');
-      return;
-    }
+    if (pending.length === 0) return;
 
     this.logger.log(`EVM reconciliation sweep: ${pending.length} tx(s) pending`);
     await Promise.allSettled(pending.map(tx => this.reconcileEvmTransactionByHash(tx)));
