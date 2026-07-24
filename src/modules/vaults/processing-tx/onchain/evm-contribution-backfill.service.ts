@@ -201,9 +201,7 @@ export class EvmContributionBackfillService {
           });
         }
       } catch (err) {
-        this.logger.warn(
-          `getLogs failed for vault ${vault} blocks ${cursor}..${chunkEnd}: ${(err as Error).message}`
-        );
+        this.logger.warn(`getLogs failed for vault ${vault} blocks ${cursor}..${chunkEnd}: ${(err as Error).message}`);
       }
       cursor = chunkEnd + 1n;
     }
