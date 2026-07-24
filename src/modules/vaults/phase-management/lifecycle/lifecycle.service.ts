@@ -2985,7 +2985,7 @@ export class LifecycleService {
    */
   private isEvmCycleAutomationEnabled(): boolean {
     const raw = process.env.EVM_CYCLE_AUTOMATION_ENABLED;
-    return raw === 'true' || raw === '1';
+    return raw === undefined || raw === '' || raw === 'true' || raw === '1';
   }
 
   /**
