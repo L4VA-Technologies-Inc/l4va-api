@@ -155,12 +155,24 @@ export class EvmContributionBackfillService {
 
     // 5. Feed the missing logs to the reconciler.
     const stats = await this.reconciler.reconcileLogs(missing);
-    const inserted = stats.processed;
-    this.logger.log(
-      `EVM contribution backfill: vault=${vault.id} inserted=${inserted} skipped=${stats.skipped} errors=${stats.errors}`
-    );
 
-    return { onChain: Number(onChain), inDb, inserted };
+    // Count actual DB inserts vs "processed but skipped" (e.g. no-parent-Tx
+    // third-party contributions that the reconciler silently ignores). Re-read
+    // the DB to see the true delta.
+    const inDbAfter = await this.contribsRepository.count({ where: { vault_id: vault.id } });
+    const inserted = Math.max(0, inDbAfter - inDb);
+    const skipped = Math.max(0, stats.processed - inserted) + stats.skipped;
+    if (inserted > 0 || stats.errors > 0) {
+      this.logger.log(
+        `EVM contribution backfill: vault=${vault.id} inserted=${inserted} skipped=${skipped} errors=${stats.errors}`
+      );
+    } else {
+      this.logger.debug(
+        `EVM contribution backfill: vault=${vault.id} onChain=${onChain} inDb=${inDbAfter} — no new rows (skipped=${skipped})`
+      );
+    }
+
+    return { onChain: Number(onChain), inDb: inDbAfter, inserted };
   }
 
   /**

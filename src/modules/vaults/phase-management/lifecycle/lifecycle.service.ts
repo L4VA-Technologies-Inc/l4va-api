@@ -108,6 +108,7 @@ export class LifecycleService {
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
       await this.handleEvmContributionBackfill(); // EVM: reconcile missing evm_contributions rows against on-chain state
+      await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
       await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
       await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
@@ -2570,6 +2571,41 @@ export class LifecycleService {
       await this.evmContributionBackfillService.sweepAllVaults();
     } catch (err) {
       this.logger.error(`EVM contribution backfill sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: DB-only status flip from `contribution` → `acquire` once the
+   * configured contribution window has elapsed. This is a UI label only —
+   * the on-chain contract has independent asset and acquire windows that
+   * run in parallel; the DB status is what the client uses to render the
+   * current phase.
+   *
+   * Nothing on-chain changes here. The real transition to `locked` still
+   * requires closeCycle via handleEvmContributionToSnapshotReady +
+   * handleEvmAcquireToLocked.
+   */
+  private async handleEvmContributionToAcquireLabel(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    const now = new Date();
+    try {
+      const result = await this.vaultRepository
+        .createQueryBuilder()
+        .update(Vault)
+        .set({ vault_status: VaultStatus.acquire, acquire_phase_start: now })
+        .where('chain_type = :evmChain', { evmChain: ChainType.robinhood })
+        .andWhere('vault_status = :status', { status: VaultStatus.contribution })
+        .andWhere('contribution_phase_start IS NOT NULL')
+        .andWhere('contribution_duration IS NOT NULL')
+        .andWhere(`contribution_phase_start + (contribution_duration * interval '1 millisecond') <= :now`, { now })
+        .andWhere('evm_root_committed_at IS NULL')
+        .andWhere('evm_cancel_cycle_tx_hash IS NULL')
+        .execute();
+      if (result.affected && result.affected > 0) {
+        this.logger.log(`EVM label flip: ${result.affected} vault(s) contribution → acquire`);
+      }
+    } catch (err) {
+      this.logger.error(`EVM contribution→acquire label sweep failed: ${(err as Error).message}`);
     }
   }
 
