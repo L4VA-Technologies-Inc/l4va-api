@@ -43,6 +43,23 @@ export class EvmAssetPriceFeedEntity {
   @Column({ type: 'boolean', default: true })
   allow_dexscreener_fallback: boolean;
 
+  /**
+   * Denomination of the Chainlink answer.
+   *   'native' — wei per whole token (direct use).
+   *   'usd'    — USD * 10^feed_decimals (requires ETH/USD companion feed).
+   * The lock-time pricer currently supports 'native' only; 'usd' is rejected
+   * until the USD-conversion path is wired in.
+   */
+  @Column({ type: 'varchar', length: 16, default: 'native' })
+  quote_asset: string;
+
+  /**
+   * Cached Chainlink `decimals()`. Optional — the pricer will fall back to
+   * reading it on-chain if null. Set this to skip an RPC round-trip.
+   */
+  @Column({ type: 'smallint', nullable: true })
+  feed_decimals?: number;
+
   @BeforeInsert()
   @BeforeUpdate()
   normalizeAddresses(): void {

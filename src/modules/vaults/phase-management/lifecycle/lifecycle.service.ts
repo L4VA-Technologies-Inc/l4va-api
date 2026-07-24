@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
@@ -11,6 +11,7 @@ import { ExpansionService } from '../governance/expansion.service';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -19,8 +20,19 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
+import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-backfill.service';
+import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
+import {
+  EvmLockTimePricingService,
+  MissingPriceError,
+} from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
+import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { EvmCycleStatus } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -28,11 +40,12 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
-  VaultStatus,
+  ChainType,
   ContributionWindowType,
   InvestmentWindowType,
   SmartContractVaultStatus,
   VaultFailureReason,
+  VaultStatus,
 } from '@/types/vault.types';
 
 @Injectable()
@@ -41,6 +54,8 @@ export class LifecycleService {
   private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
   private readonly MAX_FAILED_ATTEMPTS = 3; // Maximum allowed failed attempts before skipping
   private isRunning = false;
+  private readonly EVM_BACKFILL_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+  private lastEvmBackfillSweepAt = 0;
 
   constructor(
     @InjectRepository(Asset)
@@ -67,7 +82,15 @@ export class LifecycleService {
     private readonly eventEmitter: EventEmitter2,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly expansionService: ExpansionService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly dataSource: DataSource,
+    private readonly evmCycleCloseService: EvmCycleCloseService,
+    private readonly evmContractReader: EvmContractReader,
+    private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
+    private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
+    private readonly evmAllocationService: EvmAllocationService,
+    private readonly evmLockTimePricingService: EvmLockTimePricingService,
+    private readonly evmContributionBackfillService: EvmContributionBackfillService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -86,6 +109,14 @@ export class LifecycleService {
       await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
+      await this.handleEvmContributionBackfill(); // EVM: reconcile missing evm_contributions rows against on-chain state
+      await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
+      await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
+      await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
+      await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
+      await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
+      await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
+      await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
     } finally {
       this.isRunning = false;
     }
@@ -378,6 +409,7 @@ export class LifecycleService {
         {
           valuation_method: 'market',
           custom_price_ada: null, // Clear custom price since we're switching to market
+          custom_price_native_wei: null,
         }
       );
 
@@ -469,6 +501,12 @@ export class LifecycleService {
       .andWhere('vault.contribution_duration IS NOT NULL')
       .andWhere(`vault.contribution_phase_start + (vault.contribution_duration * interval '1 millisecond') <= :now`, {
         now,
+      })
+      // EVM (Robinhood) vaults use handleEvmAcquireToLocked / airdrop cron for
+      // their end-of-contribution flow. Never run the Cardano pricing +
+      // multiplier math against them.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
       })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
@@ -754,6 +792,10 @@ export class LifecycleService {
         now,
       })
       .andWhere('vault.is_acquire_only IS NOT TRUE')
+      // EVM (Robinhood) vaults are handled by handleEvmAcquireToLocked instead.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: 'robinhood',
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
@@ -1769,6 +1811,10 @@ export class LifecycleService {
       .andWhere('vault.expansion_phase_start IS NOT NULL')
       .andWhere('vault.expansion_duration IS NOT NULL')
       .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      // Expansion is Cardano-only for now — never run against EVM vaults.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
@@ -1899,6 +1945,10 @@ export class LifecycleService {
       .andWhere('vault.expansion_phase_start IS NOT NULL')
       .andWhere('vault.expansion_duration IS NOT NULL')
       .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      // Acquire expansion is Cardano-only for now — never run against EVM vaults.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
@@ -2078,6 +2128,10 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      // Acquire-only Cardano path; EVM handled by handleEvmAcquireToLocked.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.acquire_open_window_type = :type', { type: InvestmentWindowType.uponAssetWindowClosing })
       .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
       .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
@@ -2099,6 +2153,9 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere('vault.acquire_open_window_type = :type', { type: InvestmentWindowType.custom })
       .andWhere('vault.acquire_open_window_time IS NOT NULL')
       .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
@@ -2140,6 +2197,10 @@ export class LifecycleService {
       .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
       .andWhere('vault.acquire_phase_start IS NOT NULL')
       .andWhere('vault.acquire_window_duration IS NOT NULL')
+      // EVM acquire-only vaults use handleEvmAcquireToLocked / airdrop cron.
+      .andWhere(`(vault.chain_type IS NULL OR vault.chain_type <> :evmChain)`, {
+        evmChain: ChainType.robinhood,
+      })
       .andWhere(`vault.acquire_phase_start + (vault.acquire_window_duration * interval '1 millisecond') <= :now`, {
         now,
       })
@@ -2494,6 +2555,513 @@ export class LifecycleService {
       }
     } catch (error) {
       this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM: reconcile missing evm_contributions rows against on-chain state.
+  //
+  // The webhook path is the primary writer, but any missed / dropped event
+  // leaves the vault with fewer DB rows than on-chain contributions and
+  // blocks the snapshot builder. This sweep runs before the snapshot
+  // handler so any gap closes on the next tick automatically.
+  //
+  // Gated by the same feature flag as the rest of the EVM cycle automation.
+  // ---------------------------------------------------------------------------
+  private async handleEvmContributionBackfill(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    const now = Date.now();
+    if (now - this.lastEvmBackfillSweepAt < this.EVM_BACKFILL_SWEEP_INTERVAL_MS) return;
+
+    this.lastEvmBackfillSweepAt = now;
+    try {
+      await this.evmContributionBackfillService.sweepAllVaults();
+    } catch (err) {
+      this.logger.error(`EVM contribution backfill sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: DB-only status flip from `contribution` → `acquire` once the
+   * configured contribution window has elapsed. This is a UI label only —
+   * the on-chain contract has independent asset and acquire windows that
+   * run in parallel; the DB status is what the client uses to render the
+   * current phase.
+   *
+   * Nothing on-chain changes here. The real transition to `locked` still
+   * requires closeCycle via handleEvmContributionToSnapshotReady +
+   * handleEvmAcquireToLocked.
+   */
+  private async handleEvmContributionToAcquireLabel(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    const now = new Date();
+    try {
+      const result = await this.vaultRepository
+        .createQueryBuilder()
+        .update(Vault)
+        .set({ vault_status: VaultStatus.acquire, acquire_phase_start: now })
+        .where('chain_type = :evmChain', { evmChain: ChainType.robinhood })
+        .andWhere('vault_status = :status', { status: VaultStatus.contribution })
+        .andWhere('contribution_phase_start IS NOT NULL')
+        .andWhere('contribution_duration IS NOT NULL')
+        .andWhere(`contribution_phase_start + (contribution_duration * interval '1 millisecond') <= :now`, { now })
+        .andWhere('evm_root_committed_at IS NULL')
+        .andWhere('evm_cancel_cycle_tx_hash IS NULL')
+        .execute();
+      if (result.affected && result.affected > 0) {
+        this.logger.log(`EVM label flip: ${result.affected} vault(s) contribution → acquire`);
+      }
+    } catch (err) {
+      this.logger.error(`EVM contribution→acquire label sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM: contribution/acquire → ready snapshot.
+  //
+  // Bridges the gap between "user contributions have flowed in" and
+  // handleEvmAcquireToLocked (which needs a `ready` snapshot to broadcast
+  // closeCycle). For every EVM vault whose on-chain cycle windows have closed
+  // and whose native collection meets the on-chain min threshold, this method:
+  //   1. Reads the on-chain cycle (currentCycleId + getCycle).
+  //   2. Skips vaults whose cycle is not Active, whose windows are still open,
+  //      or whose collection is below `minAcquireThreshold` (those go to the
+  //      refund pipeline instead).
+  //   3. Skips vaults that already have a non-`calculated` snapshot for this
+  //      cycle — we never recompute a snapshot that has been marked ready or
+  //      committed on-chain.
+  //   4. Runs the lock-time pricing pipeline, computes the allocation snapshot,
+  //      and marks it `ready`.
+  //
+  // Gated by the same feature flag as the rest of the EVM cycle automation.
+  // ---------------------------------------------------------------------------
+  private async handleEvmContributionToSnapshotReady(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+
+    // Candidate vaults: EVM, deployed, no root yet committed, not cancelled,
+    // in a pre-lock DB status. We intentionally include `published` in case
+    // the DB row lags behind on-chain state (createVault confirmed, cycle
+    // opened, contributions already routed).
+    const candidates = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.contract_address IS NOT NULL')
+      .andWhere('vault.evm_root_committed_at IS NULL')
+      .andWhere('vault.evm_cancel_cycle_tx_hash IS NULL')
+      .andWhere('vault.vault_status IN (:...statuses)', {
+        statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
+      })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .select(['vault.id', 'vault.contract_address'])
+      .getMany();
+
+    if (candidates.length === 0) return;
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const snapshotsRepo = this.dataSource.getRepository(EvmValuationSnapshot);
+
+    for (const vault of candidates) {
+      if (this.processingVaults.has(vault.id)) continue;
+
+      let cycleId: bigint;
+      let nativeCollected: bigint;
+      let minThreshold: bigint;
+      try {
+        cycleId = await this.evmContractReader.currentCycleId(vault.contract_address as `0x${string}`);
+        if (cycleId === 0n) continue; // no cycle opened yet
+
+        const cycleView = await this.evmContractReader.getCycle(vault.contract_address as `0x${string}`, cycleId);
+
+        // Only act on Active cycles — Locked/Cancelled are handled elsewhere.
+        if (cycleView.status !== EvmCycleStatus.Active) continue;
+
+        // Both configured windows must have ended. Zero-length windows are
+        // treated as already closed.
+        const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
+        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        if (!assetEnded || !acquireEnded) continue;
+
+        nativeCollected = cycleView.nativeCollected;
+        minThreshold = cycleView.minAcquireThreshold;
+      } catch (err) {
+        this.logger.debug(
+          `EVM handleEvmContributionToSnapshotReady: read failed for vault ${vault.id}: ${(err as Error).message}`
+        );
+        continue;
+      }
+
+      // Threshold not met → refund path picks it up. Nothing to snapshot here.
+      if (nativeCollected < minThreshold) continue;
+
+      // Parity with Cardano flow: enforce asset whitelist min/max caps before
+      // preparing lock snapshot. If violated, cancel on-chain cycle and mark
+      // vault failed with explicit details + notifications.
+      const whitelistCheck = await this.validateEvmAssetWhitelistThresholds(vault.id);
+      if (!whitelistCheck.isValid) {
+        await this.cancelAndFailEvmVault(vault.id, cycleId, {
+          failureReason: VaultFailureReason.ASSET_THRESHOLD_VIOLATION,
+          failureDetails: {
+            message: 'Assets do not meet threshold requirements',
+            thresholdViolations: whitelistCheck.thresholdViolations,
+            hasAnyAssets: whitelistCheck.hasAnyAssets,
+            contributedAssetsCount: whitelistCheck.contributedAssetsCount,
+          },
+          cancelReason: `Asset whitelist threshold violation at cycle close: ${JSON.stringify(
+            whitelistCheck.thresholdViolations
+          )}`,
+        });
+        continue;
+      }
+
+      // Idempotency: skip if a non-`calculated` snapshot already exists.
+      // (`computeSnapshot` also enforces this, but querying first avoids
+      // unnecessary pricing work.)
+      const existing = await snapshotsRepo.findOne({
+        where: { vault_id: vault.id, cycle_id: cycleId.toString() },
+        select: ['id', 'status'],
+      });
+      if (existing && existing.status !== EvmSnapshotStatus.calculated) continue;
+
+      this.processingVaults.add(vault.id);
+      try {
+        this.logger.log(
+          `EVM snapshot build: vault=${vault.id} cycle=${cycleId} nativeCollected=${nativeCollected} threshold=${minThreshold}`
+        );
+
+        // 1. Price every active contribution at lock-time.
+        const pricing = await this.evmLockTimePricingService.resolvePricesForCycle(vault.id, cycleId);
+
+        // 2. Compute + persist the snapshot (status='calculated').
+        const { snapshotId, leafCount } = await this.evmAllocationService.computeSnapshot({
+          vaultId: vault.id,
+          cycleId,
+          contributionValues: pricing.contributionValues,
+          priceSource: pricing.priceSource,
+          rawPrices: pricing.rawPrices,
+          normalizedPrices: pricing.normalizedPrices,
+        });
+
+        // 3. Advance to 'ready' so handleEvmAcquireToLocked will broadcast
+        //    closeCycle on the next tick.
+        await this.evmAllocationService.markReady(snapshotId);
+
+        this.logger.log(
+          `EVM snapshot ready: vault=${vault.id} cycle=${cycleId} snapshot=${snapshotId} leaves=${leafCount}`
+        );
+      } catch (err) {
+        if (err instanceof MissingPriceError) {
+          await this.cancelAndFailEvmVault(vault.id, cycleId, {
+            failureReason: VaultFailureReason.ASSET_THRESHOLD_VIOLATION,
+            failureDetails: {
+              message: 'Missing lock-time pricing for one or more contributed assets',
+              error: err.message,
+            },
+            cancelReason: `Missing lock-time pricing at cycle close: ${err.message}`,
+          });
+          continue;
+        }
+        this.logger.error(
+          `EVM handleEvmContributionToSnapshotReady failed for vault ${vault.id} cycle ${cycleId}: ${(err as Error).message}`
+        );
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EVM: broadcast closeCycle for vaults whose snapshot is ready.
+  //
+  // Lifecycle paths supported (all three end at Locked):
+  //   Contribution → Locked                     (Acquire window absent/zero-length)
+  //   Acquire      → Locked                     (Asset window absent/zero-length)
+  //   Contribution → Acquire → Locked           (standard two-window flow)
+  //
+  // We do NOT filter by DB `vault_status` — the source of truth for close
+  // eligibility is the on-chain cycle. This method requires:
+  //   1. A snapshot for the vault + cycle is in status='ready'.
+  //   2. On-chain cycle status is Active AND both configured windows have ended.
+  //      (closeCycleForVault's own preflight enforces (1) and Cycle=Active.
+  //       We enforce (2) here so we don't broadcast during a still-open window.)
+  //
+  // Gated by env `EVM_CYCLE_AUTOMATION_ENABLED=true`. Defaults to false while
+  // pricing, reconciliation, and webhook handlers are still being built out.
+  // ---------------------------------------------------------------------------
+  private async handleEvmAcquireToLocked(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+
+    const readySnapshots = await this.dataSource
+      .getRepository(EvmValuationSnapshot)
+      .createQueryBuilder('snap')
+      .innerJoin(Vault, 'vault', 'vault.id = snap.vault_id')
+      .where('snap.status = :status', { status: EvmSnapshotStatus.ready })
+      .andWhere('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.evm_root_committed_at IS NULL')
+      .select(['snap.id', 'snap.vault_id', 'snap.cycle_id'])
+      .getMany();
+
+    if (readySnapshots.length === 0) return;
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+
+    for (const snap of readySnapshots) {
+      if (this.processingVaults.has(snap.vault_id)) continue;
+
+      // On-chain gate: both windows must have ended AND cycle must still be Active.
+      // Note: closeCycleForVault repeats the Active check under its DB gate.
+      let bothWindowsClosed = false;
+      try {
+        const vault = await this.vaultRepository.findOne({
+          where: { id: snap.vault_id },
+          select: ['id', 'contract_address', 'chain_id'],
+        });
+        if (!vault?.contract_address) continue;
+        const cycleView = await this.evmContractReader.getCycle(
+          vault.contract_address as `0x${string}`,
+          BigInt(snap.cycle_id)
+        );
+        // Cycle must still be Active on-chain.
+        if (cycleView.status !== 0 /* EvmCycleStatus.Active */) continue;
+        // Both windows must have ended. Zero-length windows (start==end==0)
+        // are treated as already closed.
+        const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
+        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        bothWindowsClosed = assetEnded && acquireEnded;
+      } catch (err) {
+        this.logger.warn(
+          `EVM handleEvmAcquireToLocked window check failed for vault ${snap.vault_id}: ${(err as Error).message}`
+        );
+        continue;
+      }
+      if (!bothWindowsClosed) continue;
+
+      this.processingVaults.add(snap.vault_id);
+      try {
+        this.logger.log(`EVM closeCycle: vault=${snap.vault_id} cycle=${snap.cycle_id} snapshot=${snap.id}`);
+        await this.evmCycleCloseService.closeCycleForVault(snap.vault_id, BigInt(snap.cycle_id));
+      } catch (err) {
+        this.logger.error(
+          `EVM closeCycle failed for vault ${snap.vault_id} cycle ${snap.cycle_id}: ${(err as Error).message}`
+        );
+      } finally {
+        this.processingVaults.delete(snap.vault_id);
+      }
+    }
+  }
+
+  private async validateEvmAssetWhitelistThresholds(vaultId: string): Promise<{
+    isValid: boolean;
+    thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }>;
+    hasAnyAssets: boolean;
+    contributedAssetsCount: number;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['assets_whitelist'],
+    });
+
+    if (!vault || !vault.assets_whitelist?.length) {
+      return {
+        isValid: true,
+        thresholdViolations: [],
+        hasAnyAssets: false,
+        contributedAssetsCount: 0,
+      };
+    }
+
+    const contributedAssets = await this.assetsRepository.find({
+      where: {
+        vault: { id: vaultId },
+        deleted: false,
+        origin_type: AssetOriginType.CONTRIBUTED,
+      },
+    });
+
+    const policyIdCounts = contributedAssets.reduce(
+      (counts, asset) => {
+        const policyId = (asset.policy_id || '').toLowerCase();
+        if (!policyId) return counts;
+        if (!counts[policyId]) {
+          counts[policyId] = 0;
+        }
+        counts[policyId] += asset.normalizedQuantity;
+        return counts;
+      },
+      {} as Record<string, number>
+    );
+
+    const hasAnyAssets = contributedAssets.length > 0;
+    const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
+
+    for (const whitelistItem of vault.assets_whitelist) {
+      const policyId = (whitelistItem.policy_id || '').toLowerCase();
+      const count = Number(policyIdCounts[policyId]) || 0;
+      const minRequired = Number(whitelistItem.asset_count_cap_min);
+      const maxAllowed = Number(whitelistItem.asset_count_cap_max);
+
+      const isSoftRequirement = hasAnyAssets && minRequired === 1;
+      const violatesMinimum = !isSoftRequirement && count < minRequired;
+      const violatesMaximum = count > maxAllowed;
+
+      if (violatesMinimum || violatesMaximum) {
+        thresholdViolations.push({
+          policyId: whitelistItem.policy_id,
+          count,
+          min: minRequired,
+          max: maxAllowed,
+        });
+      }
+    }
+
+    return {
+      isValid: thresholdViolations.length === 0,
+      thresholdViolations,
+      hasAnyAssets,
+      contributedAssetsCount: contributedAssets.length,
+    };
+  }
+
+  private async cancelAndFailEvmVault(
+    vaultId: string,
+    cycleId: bigint,
+    data: {
+      failureReason: VaultFailureReason;
+      failureDetails: Record<string, any>;
+      cancelReason: string;
+    }
+  ): Promise<void> {
+    try {
+      const cancelResponse = await this.evmCycleCloseService.cancelCurrentCycle(vaultId, data.cancelReason);
+
+      await this.executePhaseTransition({
+        vaultId,
+        newStatus: VaultStatus.failed,
+        newScStatus: SmartContractVaultStatus.CANCELLED,
+        txHash: cancelResponse.txHash,
+        failureReason: data.failureReason,
+        failureDetails: {
+          ...data.failureDetails,
+          cycleId: cycleId.toString(),
+          chainType: ChainType.robinhood,
+        },
+      });
+
+      await this.emitEvmVaultFailedEvents(vaultId);
+    } catch (err) {
+      this.logger.error(`EVM cancelAndFail failed for vault ${vaultId} cycle ${cycleId}: ${(err as Error).message}`);
+    }
+  }
+
+  private async emitEvmVaultFailedEvents(vaultId: string): Promise<void> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        relations: ['owner', 'assets', 'assets.added_by'],
+      });
+      if (!vault) return;
+
+      const contributorIds = [
+        ...new Set(vault.assets.map(asset => asset.added_by?.id).filter((id): id is string => Boolean(id))),
+      ];
+
+      this.eventEmitter.emit('vault.failed', {
+        vaultId: vault.id,
+        vaultName: vault.name,
+        contributorIds,
+      });
+      this.eventEmitter.emit('vault.failed.email', { vault });
+    } catch (err) {
+      this.logger.error(`Error emitting EVM vault.failed events for vault ${vaultId}:`, err);
+    }
+  }
+
+  /**
+   * Feature flag for the automated EVM close-cycle pipeline. Defaults to
+   * FALSE so the cron does nothing until pricing, reconciliation, and
+   * webhook handlers are all wired up.
+   */
+  private isEvmCycleAutomationEnabled(): boolean {
+    const raw = process.env.EVM_CYCLE_AUTOMATION_ENABLED;
+    return raw === 'true' || raw === '1';
+  }
+
+  /**
+   * EVM: fan out claim batches for vaults whose snapshots are confirmed
+   * and still have unclaimed allocation rows. Delegates all the heavy
+   * lifting (candidate selection, RPC guards, batch broadcast, event
+   * reconciliation) to EvmAirdropOrchestrator. Gated by the same feature
+   * flag as closeCycle automation.
+   */
+  private async handleEvmAirdropClaims(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmAirdropOrchestrator.pushAllVaults();
+      if (stats.batchesBroadcast > 0 || stats.alreadyClaimedSkipped > 0) {
+        this.logger.log(
+          `EVM airdrop sweep: batches=${stats.batchesBroadcast} claims=${stats.claimsBroadcast} alreadyOnChain=${stats.alreadyClaimedSkipped}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM airdrop sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: detect vaults whose acquire window has ended without meeting the
+   * on-chain minAcquireThreshold and broadcast `cancelCurrentCycle()`.
+   * Feeds the refund pipeline below.
+   */
+  private async handleEvmFailedVaultDetection(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmRefundOrchestrator.detectAndCancelFailedVaults();
+      if (stats.cancellationsInitiated > 0 || stats.cancellationsFailed > 0) {
+        this.logger.log(
+          `EVM failed-vault sweep: checked=${stats.vaultsChecked} cancelled=${stats.cancellationsInitiated} failed=${stats.cancellationsFailed}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM failed-vault detection failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: fan out refund batches for vaults whose cycle is Cancelled on-chain
+   * and still have active EvmContribution rows. Delegates candidate
+   * selection, RPC guards, batch broadcast, and event reconciliation to
+   * EvmRefundOrchestrator.
+   */
+  private async handleEvmRefundBatches(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmRefundOrchestrator.pushAllVaults();
+      if (stats.batchesBroadcast > 0 || stats.alreadyRefundedSkipped > 0) {
+        this.logger.log(
+          `EVM refund sweep: batches=${stats.batchesBroadcast} refunds=${stats.refundsBroadcast} alreadyOnChain=${stats.alreadyRefundedSkipped}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM refund sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM: mark `vault_status = failed` for vaults whose on-chain cycle has
+   * been cancelled AND whose active contributions (if any) have all been
+   * refunded. Mirrors Cardano's "no contributions → failed" behaviour.
+   */
+  private async handleEvmFinalizeCancelledVaults(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const stats = await this.evmRefundOrchestrator.finalizeCancelledVaults();
+      if (stats.finalized > 0) {
+        this.logger.log(`EVM finalize failed sweep: ${stats.finalized} vault(s) marked failed`);
+      }
+    } catch (err) {
+      this.logger.error(`EVM finalize failed sweep failed: ${(err as Error).message}`);
     }
   }
 }

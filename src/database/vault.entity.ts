@@ -813,6 +813,44 @@ export class Vault {
   @Column({ name: 'evm_vault_id', nullable: true })
   evm_vault_id?: string;
 
+  // ---------------------------------------------------------------------------
+  // EVM cycle-close bookkeeping (Phase A of claim/refund/cycle-close work).
+  // All null for Cardano rows.
+  //
+  // No `min_acquire_threshold_eth` column: Vault.getCycle().minAcquireThreshold
+  // + nativeCollected on-chain are the source of truth for close-vs-cancel
+  // decisions. Any DB-side threshold would just be a stale copy.
+  // ---------------------------------------------------------------------------
+
+  /** Cycle currently active on-chain (1 for the initial cycle; incremented on reopen). */
+  @Expose({ name: 'evmCurrentCycleId' })
+  @Column({ name: 'evm_current_cycle_id', type: 'bigint', nullable: true })
+  evm_current_cycle_id?: string;
+
+  /** Merkle root committed to the contract by `closeCycle`. */
+  @Expose({ name: 'evmAllocationRoot' })
+  @Column({ name: 'evm_allocation_root', nullable: true })
+  evm_allocation_root?: string;
+
+  /** Hash of the admin `closeCycle` transaction. */
+  @Expose({ name: 'evmCloseCycleTxHash' })
+  @Column({ name: 'evm_close_cycle_tx_hash', nullable: true })
+  evm_close_cycle_tx_hash?: string;
+
+  /**
+   * Set ONLY after a CycleClosed event is decoded from the receipt AND every
+   * field (cycleId, root, valuationHash, totalVt, totalNative) exactly matches
+   * the prepared snapshot. Never write earlier.
+   */
+  @Expose({ name: 'evmRootCommittedAt' })
+  @Column({ name: 'evm_root_committed_at', type: 'timestamptz', nullable: true })
+  evm_root_committed_at?: Date;
+
+  /** Hash of the admin `cancelCurrentCycle` transaction (failed-vault path). */
+  @Expose({ name: 'evmCancelCycleTxHash' })
+  @Column({ name: 'evm_cancel_cycle_tx_hash', nullable: true })
+  evm_cancel_cycle_tx_hash?: string;
+
   @BeforeInsert()
   setDate(): void {
     const now = new Date();

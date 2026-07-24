@@ -680,8 +680,8 @@ export class TapToolsClient {
   }
 
   /**
-  * Get OHLCV (Open, High, Low, Close, Volume) data for a token.
-  * Data is sourced from DexHunter charts.
+   * Get OHLCV (Open, High, Low, Close, Volume) data for a token.
+   * Data is sourced from DexHunter charts.
    *
    * @param scriptHash - Token policy ID (script hash)
    * @param assetName - Token asset name in hex
@@ -710,7 +710,12 @@ export class TapToolsClient {
     if (cached !== undefined) return cached;
 
     try {
-      const dexHunterData = await this.dexHunterPricingClient.getTokenOHLCV(scriptHash, assetName, interval, numIntervals);
+      const dexHunterData = await this.dexHunterPricingClient.getTokenOHLCV(
+        scriptHash,
+        assetName,
+        interval,
+        numIntervals
+      );
       if (dexHunterData && dexHunterData.length > 0) {
         this.ohlcvCache.set(cacheKey, dexHunterData);
         return dexHunterData;
@@ -755,9 +760,9 @@ export class TapToolsClient {
   }
 
   /**
-  * Get market cap data for a token.
-  * Price is sourced from DexHunter and supply is sourced from Blockfrost.
-  * FDV is computed as price * totalSupply (when supply is available).
+   * Get market cap data for a token.
+   * Price is sourced from DexHunter and supply is sourced from Blockfrost.
+   * FDV is computed as price * totalSupply (when supply is available).
    * @param unit - Token unit (policyId + assetName in hex)
    * @returns Market cap data or null if unavailable
    */
@@ -802,7 +807,6 @@ export class TapToolsClient {
     };
     this.marketDataCache.set(cacheKey, result);
     return result;
-
   }
 
   /**

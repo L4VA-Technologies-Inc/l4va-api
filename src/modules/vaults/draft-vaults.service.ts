@@ -366,6 +366,7 @@ export class DraftVaultsService {
               asset_count_cap_max: whitelistItem?.countCapMax,
               valuation_method: whitelistItem?.valuationMethod || 'market',
               custom_price_ada: whitelistItem?.customPriceAda || null,
+              custom_price_native_wei: whitelistItem?.customPriceNativeWei ?? null,
               lp_pool_onchain_id: lpData?.onchainId || null,
             });
           })

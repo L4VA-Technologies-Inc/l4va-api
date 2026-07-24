@@ -12,7 +12,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-import { TransactionStatus, TransactionType } from '../types/transaction.types';
+import { TransactionStatus, TransactionType, EvmReconciliationStatus } from '../types/transaction.types';
 
 import { Asset } from './asset.entity';
 import { ColumnNumericTransformer } from './column-numeric.transformer';
@@ -161,4 +161,65 @@ export class Transaction {
   @Expose({ name: 'logIndex' })
   @Column({ name: 'log_index', type: 'integer', nullable: true })
   log_index?: number;
+
+  // ---------------------------------------------------------------------------
+  // EVM refund linkage. On-chain contribution IDs are NOT stored here — a
+  // single DB Transaction can carry multiple assets (each becomes its own
+  // Solidity contribution). See evm_contributions for the canonical mapping.
+  //
+  // INVARIANT (enforced by EvmRefundOrchestrator, Phase C):
+  //   Parent Transaction becomes `refunded` ONLY after every child
+  //   EvmContribution row for this Transaction has status='refunded'. Child
+  //   rows are the source of truth; the fields below are a fast rollup.
+  // ---------------------------------------------------------------------------
+
+  /** Hash of the last refund tx touching this Transaction (informational). */
+  @Expose({ name: 'refundTxHash' })
+  @Column({ name: 'refund_tx_hash', nullable: true })
+  refund_tx_hash?: string;
+
+  /** Set when ALL child EvmContributions of this Transaction are refunded. */
+  @Expose({ name: 'refundedAt' })
+  @Column({ name: 'refunded_at', type: 'timestamptz', nullable: true })
+  refunded_at?: Date;
+
+  // ---------------------------------------------------------------------------
+  // EVM domain-event reconciliation. A successful receipt is NOT a completion
+  // signal on its own — the tx is complete only when every relevant Vault
+  // event has been reconciled into the domain tables. The Alchemy webhook is
+  // the fast path; TransactionHealthService is the durable retry path.
+  // ---------------------------------------------------------------------------
+
+  /** null for Cardano rows; 'pending' → 'success' | 'failed' for EVM. */
+  @Expose({ name: 'reconciliationStatus' })
+  @Column({
+    name: 'reconciliation_status',
+    type: 'enum',
+    enum: EvmReconciliationStatus,
+    enumName: 'evm_reconciliation_status_enum',
+    nullable: true,
+  })
+  reconciliation_status?: EvmReconciliationStatus;
+
+  @Expose({ name: 'reconciliationAttempts' })
+  @Column({ name: 'reconciliation_attempts', type: 'integer', default: 0 })
+  reconciliation_attempts: number;
+
+  @Expose({ name: 'reconciliationLastError' })
+  @Column({ name: 'reconciliation_last_error', type: 'text', nullable: true })
+  reconciliation_last_error?: string;
+
+  /** Set exactly once when reconciliation succeeds. */
+  @Expose({ name: 'reconciledAt' })
+  @Column({ name: 'reconciled_at', type: 'timestamptz', nullable: true })
+  reconciled_at?: Date;
+
+  /**
+   * JSONB array of ExpectedEventSpec entries the reconciler MUST see for this
+   * tx to reach `success`. Empty / null means "no expectations" (legacy or
+   * unrelated tx). Any non-empty spec must be fully satisfied.
+   */
+  @Expose({ name: 'expectedEvents' })
+  @Column({ name: 'expected_events', type: 'jsonb', nullable: true })
+  expected_events?: Array<{ name: string; count?: number }>;
 }

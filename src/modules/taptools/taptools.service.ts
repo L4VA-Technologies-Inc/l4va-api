@@ -6,7 +6,7 @@ import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
-import { createPublicClient, defineChain, http, parseAbi, type Address } from 'viem';
+import { createPublicClient, defineChain, formatUnits, http, parseAbi, type Address } from 'viem';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
@@ -1237,7 +1237,7 @@ export class TaptoolsService {
 
     // Load custom prices from vault whitelist
     const { customPrices: customPriceMap } = await this.getVaultCustomPrices(vaultId);
-    const adaPrice = await this.priceService.getAdaPrice();
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
 
     // Group assets by policyId and assetId to handle quantities
     const assetMap = new Map<
@@ -1247,6 +1247,7 @@ export class TaptoolsService {
         policyId: string;
         assetId: string;
         quantity: number;
+        acquiredQuantity: number;
         isNft: boolean;
         cachedPrice?: number;
         metadata?: Record<string, unknown>;
@@ -1256,7 +1257,7 @@ export class TaptoolsService {
 
     let totalAcquiredAda = 0;
 
-    // Group assets and track acquired ADA in one pass
+    // Group assets and track acquired quantities in one pass
     for (const asset of vault.assets) {
       // Skip assets that are not in a valid status for valuation
       // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
@@ -1268,16 +1269,14 @@ export class TaptoolsService {
         continue;
       }
 
-      // Track acquired ADA (already stored in ADA units, not lovelace)
-      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.type === AssetType.ADA) {
-        totalAcquiredAda += asset.normalizedQuantity;
-      }
-
       const key = `${asset.policy_id}_${asset.asset_id}`;
       const existingAsset = assetMap.get(key);
 
       if (existingAsset) {
         existingAsset.quantity += asset.normalizedQuantity;
+        if (asset.origin_type === AssetOriginType.ACQUIRED) {
+          existingAsset.acquiredQuantity += asset.normalizedQuantity;
+        }
       } else {
         // Check for custom price first, then use cached market price
         let cachedPrice: number | undefined;
@@ -1294,6 +1293,7 @@ export class TaptoolsService {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
           quantity: asset.normalizedQuantity,
+          acquiredQuantity: asset.origin_type === AssetOriginType.ACQUIRED ? asset.normalizedQuantity : 0,
           isNft: asset.type === AssetType.NFT,
           cachedPrice,
           metadata: asset.metadata || {},
@@ -1322,6 +1322,7 @@ export class TaptoolsService {
 
         if (asset.assetId === 'lovelace') {
           const totalAdaValue = asset.quantity * 1e-6;
+          const acquiredAdaValue = asset.acquiredQuantity * 1e-6;
           assetsWithValues.push({
             ...asset,
             assetName: 'ADA',
@@ -1330,6 +1331,7 @@ export class TaptoolsService {
           });
           totalValueAda += totalAdaValue;
           totalValueUsd += totalAdaValue * adaPrice;
+          totalAcquiredAda += acquiredAdaValue;
           continue;
         }
 
@@ -1372,6 +1374,7 @@ export class TaptoolsService {
 
         totalValueAda += totalAssetValueAda;
         totalValueUsd += totalAssetValueUsd;
+        totalAcquiredAda += valueAda * asset.acquiredQuantity;
       } catch (error: any) {
         console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
       }
@@ -1452,7 +1455,6 @@ export class TaptoolsService {
     }
 
     // Create and return the summary
-    const ethPrice = await this.priceService.getEthPrice();
     return {
       totalValueAda: +totalValueAda.toFixed(6),
       totalValueUsd: +totalValueUsd.toFixed(2),
@@ -1546,9 +1548,14 @@ export class TaptoolsService {
             continue;
           }
 
-          // Track acquired ADA
-          if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
-            totalAcquiredAda += Number(asset.quantity);
+          // Track acquired value in ADA-equivalent (reserve checks use ADA value)
+          if (asset.origin_type === AssetOriginType.ACQUIRED) {
+            if (asset.type === AssetType.ADA) {
+              totalAcquiredAda += asset.normalizedQuantity;
+            } else if (asset.type === AssetType.ETH) {
+              const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+              totalAcquiredAda += asset.normalizedQuantity * ethPriceInAda;
+            }
           }
 
           // Process vault-owned assets for TVL:
@@ -1739,6 +1746,7 @@ export class TaptoolsService {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
         total_assets_cost_eth: summary.totalValueEth,
+        total_acquired_value_ada: summary.totalAcquiredAda,
         last_valuation_update: new Date(),
       };
 
@@ -2557,8 +2565,12 @@ export class TaptoolsService {
         client.readContract({ address: addr, abi: ERC20_ABI, functionName: 'decimals' }).catch(() => 18),
       ]);
 
-      const balance = Number(rawBalance) / Math.pow(10, Number(decimals));
-      if (balance <= 0) return null;
+      // Raw uint256 balance — NEVER convert to JS number. Only formatUnits
+      // for display / valuation math.
+      const rawBalanceBigInt: bigint = typeof rawBalance === 'bigint' ? rawBalance : BigInt(rawBalance as any);
+      const decimalsNum = Number(decimals);
+      const decimalAdjustedBalance = Number(formatUnits(rawBalanceBigInt, decimalsNum));
+      if (rawBalanceBigInt <= 0n) return null;
 
       const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, false, adaPriceUsd);
       if (priceAda === null) return null;
@@ -2572,18 +2584,23 @@ export class TaptoolsService {
           name: String(name),
           displayName: String(name),
           ticker: String(symbol),
-          quantity: balance,
+          // `quantity` is the decimal-adjusted amount for FE display; the exact
+          // base-unit value lives in `rawQuantity`. Any caller doing on-chain
+          // or financial math MUST read rawQuantity, not quantity.
+          quantity: decimalAdjustedBalance,
+          rawQuantity: rawBalanceBigInt.toString(10),
+          decimals: decimalsNum,
           isNft: false,
           isFungibleToken: true,
           priceAda,
           priceUsd,
           priceEth,
-          valueAda: +(balance * priceAda).toFixed(6),
-          valueUsd: +(balance * priceUsd).toFixed(6),
-          valueEth: +(balance * priceEth).toFixed(6),
+          valueAda: +(decimalAdjustedBalance * priceAda).toFixed(6),
+          valueUsd: +(decimalAdjustedBalance * priceUsd).toFixed(6),
+          valueEth: +(decimalAdjustedBalance * priceEth).toFixed(6),
           metadata: {
             policyId: contractAddress,
-            decimals: Number(decimals),
+            decimals: decimalsNum,
           },
         },
         { excludeExtraneousValues: true }
@@ -2617,8 +2634,15 @@ export class TaptoolsService {
         client.readContract({ address: addr, abi: ERC721_ABI, functionName: 'symbol' }).catch(() => ''),
       ]);
 
-      const count = Number(balance);
-      if (count === 0) return [];
+      const balanceBigInt: bigint = typeof balance === 'bigint' ? balance : BigInt(balance as any);
+      // ERC-721 balanceOf returns the count of NFTs held; small integer.
+      if (balanceBigInt <= 0n) return [];
+      if (balanceBigInt > 10_000n) {
+        this.logger.warn(
+          `ERC721 ${contractAddress}: balanceOf returned ${balanceBigInt.toString(10)} — truncating enumeration to 10_000`
+        );
+      }
+      const count = Number(balanceBigInt > 10_000n ? 10_000n : balanceBigInt);
 
       // Enumerate token IDs via tokenOfOwnerByIndex (ERC721Enumerable)
       const indexCalls = Array.from({ length: count }, (_, i) => ({
@@ -2665,6 +2689,8 @@ export class TaptoolsService {
             displayName: meta?.name ?? `${String(collectionName)} #${tokenIdStr}`,
             ticker: String(symbol),
             quantity: 1,
+            rawQuantity: '1',
+            decimals: 0,
             isNft: true,
             isFungibleToken: false,
             priceAda,
@@ -2791,8 +2817,13 @@ export class TaptoolsService {
         const result = balanceResults[i];
         if (result.status !== 'success') continue;
 
-        const qty = Number(result.result as bigint);
-        if (qty <= 0) continue;
+        const qtyBigInt: bigint =
+          typeof result.result === 'bigint' ? (result.result as bigint) : BigInt(result.result as any);
+        if (qtyBigInt <= 0n) continue;
+        // ERC-1155 balance may in theory be a large uint256, but for asset-list
+        // purposes we cap the displayed count at safe-integer range and preserve
+        // the raw value separately.
+        const qty = qtyBigInt > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(qtyBigInt);
 
         const tokenIdStr = tokenIds[i].toString();
         const meta = metadataList1155[i];
@@ -2804,6 +2835,8 @@ export class TaptoolsService {
               name: meta?.name ?? `Token #${tokenIdStr}`,
               displayName: meta?.name ?? `Token #${tokenIdStr}`,
               quantity: qty,
+              rawQuantity: qtyBigInt.toString(10),
+              decimals: 0,
               isNft: true,
               isFungibleToken: false,
               priceAda,
@@ -2901,7 +2934,16 @@ export class TaptoolsService {
         ownedNfts.map(async nft => {
           const contractAddress: string = nft.contract?.address ?? '';
           const tokenId: string = nft.tokenId ?? '0';
-          const qty = parseInt(nft.balance ?? '1', 10) || 1;
+          // NFT balance is a small integer; keep the exact base-unit value in
+          // rawQuantity so downstream code can rely on it without parsing.
+          let qtyBigInt: bigint;
+          try {
+            qtyBigInt = BigInt(nft.balance ?? '1');
+          } catch {
+            qtyBigInt = 1n;
+          }
+          if (qtyBigInt <= 0n) qtyBigInt = 1n;
+          const qty = qtyBigInt > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(qtyBigInt);
 
           const priceAda = await this.getEvmPriceAda(
             contractAddress,
@@ -2925,6 +2967,8 @@ export class TaptoolsService {
               displayName: name,
               ticker: nft.contract?.symbol ?? undefined,
               quantity: qty,
+              rawQuantity: qtyBigInt.toString(10),
+              decimals: 0,
               isNft: true,
               isFungibleToken: false,
               priceAda,
@@ -3008,14 +3052,33 @@ export class TaptoolsService {
     return (
       await Promise.all(
         withMeta.map(async ({ contractAddress, tokenBalance, meta }) => {
-          const decimals: number = meta?.decimals ?? 18;
-          let balance = 0;
+          // Root-cause guard for the ERC-721-classified-as-ERC-20 bug:
+          // alchemy_getTokenMetadata returns null decimals/symbol/name for
+          // non-ERC20 contracts (ERC-721 / ERC-1155). Previously we defaulted
+          // decimals to 18 and divided balanceOf() (an NFT count) by 1e18,
+          // producing values like `3e-17` with isFungibleToken=true.
+          // Skip anything that does not look like a real ERC-20.
+          const rawDecimals = meta?.decimals;
+          if (rawDecimals === null || rawDecimals === undefined || !Number.isInteger(rawDecimals)) {
+            this.logger.debug(
+              `Skipping ${contractAddress} in ERC-20 path: Alchemy metadata has no valid decimals (likely NFT contract)`
+            );
+            return null;
+          }
+          const decimals: number = rawDecimals;
+
+          let rawBalanceBigInt: bigint;
           try {
-            balance = Number(BigInt(tokenBalance)) / Math.pow(10, decimals);
+            rawBalanceBigInt = BigInt(tokenBalance);
           } catch {
             return null;
           }
-          if (balance <= 0) return null;
+          if (rawBalanceBigInt <= 0n) return null;
+
+          // Never coerce a uint256 wei value to `Number`. Use formatUnits for
+          // display-scale math only.
+          const decimalAdjustedBalance = Number(formatUnits(rawBalanceBigInt, decimals));
+          if (!Number.isFinite(decimalAdjustedBalance) || decimalAdjustedBalance <= 0) return null;
 
           const priceAda = await this.getEvmPriceAda(
             contractAddress,
@@ -3035,15 +3098,18 @@ export class TaptoolsService {
               name: meta?.name ?? contractAddress,
               displayName: meta?.name ?? contractAddress,
               ticker: meta?.symbol ?? undefined,
-              quantity: tokenBalance,
+              // Decimal-adjusted for display; exact base units in rawQuantity.
+              quantity: decimalAdjustedBalance,
+              rawQuantity: rawBalanceBigInt.toString(10),
+              decimals,
               isNft: false,
               isFungibleToken: true,
               priceAda,
               priceUsd,
               priceEth,
-              valueAda: +(balance * priceAda).toFixed(6),
-              valueUsd: +(balance * priceUsd).toFixed(6),
-              valueEth: +(balance * priceEth).toFixed(6),
+              valueAda: +(decimalAdjustedBalance * priceAda).toFixed(6),
+              valueUsd: +(decimalAdjustedBalance * priceUsd).toFixed(6),
+              valueEth: +(decimalAdjustedBalance * priceEth).toFixed(6),
               metadata: {
                 policyId: contractAddress,
                 decimals,

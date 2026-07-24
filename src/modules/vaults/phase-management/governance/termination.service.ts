@@ -169,7 +169,7 @@ export class TerminationService {
       // Returns 'OK' if lock acquired, null if already exists
       const result = await this.redis.set(lockKey, '1', 'EX', ttlSeconds, 'NX');
       return result === 'OK';
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to acquire lock ${lockKey}: ${error.message}`);
       return false;
     }
@@ -181,7 +181,7 @@ export class TerminationService {
   private async releaseLock(lockKey: string): Promise<void> {
     try {
       await this.redis.del(lockKey);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to release lock ${lockKey}: ${error.message}`);
     }
   }
@@ -212,16 +212,14 @@ export class TerminationService {
         return;
       }
 
-      this.logger.log(`Monitoring ${terminatingVaults.length} terminating vault(s)`);
-
       for (const vault of terminatingVaults) {
         try {
           await this.processTerminationStep(vault);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error processing termination for vault ${vault.id}: ${error.message}`, error.stack);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error in termination monitor: ${error.message}`, error.stack);
     } finally {
       await this.releaseLock(lockKey);
@@ -429,7 +427,7 @@ export class TerminationService {
         nftsBurned: nftsToburn.length,
         ftsExtracted: ftsToDistribute.length,
       });
-    } catch (error) {
+    } catch (error: any) {
       // If extraction fails (e.g., non-mainnet, no assets in UTXOs), log and continue
       if (error.message?.includes('non-mainnet') || error.message?.includes('only available on mainnet')) {
         this.logger.warn(`[TESTNET] Skipping on-chain asset extraction for vault ${vault.id}`);
@@ -562,7 +560,7 @@ export class TerminationService {
         expectedVtReturn: expectedVt,
         expectedAdaReturn: expectedAda,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to remove liquidity for vault ${vault.id}: ${error.message}`, error.stack);
 
       // If pool not found, skip to claims creation (vault might not have LP)
@@ -798,7 +796,7 @@ export class TerminationService {
             `Will continue monitoring.`
         );
       }
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
 
@@ -1138,20 +1136,20 @@ export class TerminationService {
         );
         await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_COMPLETE);
       } else {
-        // Count claims that haven't been processed yet
-        const pendingClaims = await this.claimRepository.count({
-          where: {
-            vault: { id: vault.id },
-            type: ClaimType.TERMINATION,
-            status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
-          },
-        });
+        // // Count claims that haven't been processed yet
+        // const pendingClaims = await this.claimRepository.count({
+        //   where: {
+        //     vault: { id: vault.id },
+        //     type: ClaimType.TERMINATION,
+        //     status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
+        //   },
+        // });
 
-        this.logger.debug(
-          `Termination in progress for vault ${vault.id}: ` +
-            `${pendingClaims} pending claims, ` +
-            `${circulatingSupplyNum / 1_000_000} VT still circulating`
-        );
+        // this.logger.debug(
+        //   `Termination in progress for vault ${vault.id}: ` +
+        //     `${pendingClaims} pending claims, ` +
+        //     `${circulatingSupplyNum / 1_000_000} VT still circulating`
+        // );
 
         // Ensure status is CLAIMS_PROCESSING
         const termination = vault.termination_metadata as TerminationMetadata;
@@ -1159,7 +1157,7 @@ export class TerminationService {
           await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_PROCESSING);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error checking claims completion for vault ${vault.id}: ${error.message}`, error.stack);
     }
   }
@@ -1207,7 +1205,7 @@ export class TerminationService {
       this.logger.log(`Vault ${vault.id} burned successfully - proceeding to treasury cleanup`);
 
       await this.stepCleanupTreasuryWallet(vault);
-    } catch (error) {
+    } catch (error: any) {
       // Handle case where vault UTXO is not found (already burned)
       if (error.message?.includes('not found') || error.status === 404) {
         this.logger.warn(`Vault UTXO not found for ${vault.asset_vault_name} - may already be burned`);
@@ -1296,7 +1294,7 @@ export class TerminationService {
       }
 
       this.logger.log(`Treasury wallet cleanup complete for vault ${vault.id}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to cleanup treasury wallet for vault ${vault.id}: ${error.message}`, error.stack);
       await this.updateTerminationMetadata(vault.id, {
         error: `Treasury cleanup failed: ${error.message}`,
@@ -1373,7 +1371,7 @@ export class TerminationService {
       }, BigInt(0));
 
       return totalVt;
-    } catch (error) {
+    } catch (error: any) {
       // If address has no UTXOs with this asset, Blockfrost returns 404
       if (error.status_code === 404) {
         return BigInt(0);
@@ -1407,7 +1405,7 @@ export class TerminationService {
         // No VT at burn wallet
         return totalMinted;
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to get VT supply for vault ${vault.id}: ${error.message}`);
       throw error;
     }
@@ -1445,7 +1443,7 @@ export class TerminationService {
       this.treasuryBalanceCache.set(cacheKey, balance.toString());
 
       return balance;
-    } catch (error) {
+    } catch (error: any) {
       // If treasury wallet has never received transactions, Blockfrost returns 404
       if (error.status_code === 404 || error.message?.includes('not been found')) {
         this.logger.log(`Treasury wallet for vault ${vault.id} is empty (no transactions yet)`);
@@ -2293,7 +2291,7 @@ export class TerminationService {
         adaReceived,
         ftsReceived: ftsReceived.length > 0 ? ftsReceived : undefined,
       };
-    } catch (error) {
+    } catch (error: any) {
       // Mark transaction and claim as failed
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
       this.logger.error(`Failed to submit termination claim transaction: ${error.message}`, error.stack);

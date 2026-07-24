@@ -38,7 +38,8 @@ export class CreateVaultReq {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  @Expose()  id?: string;
+  @Expose()
+  id?: string;
 
   @ApiProperty({ required: true })
   @IsNotEmpty()

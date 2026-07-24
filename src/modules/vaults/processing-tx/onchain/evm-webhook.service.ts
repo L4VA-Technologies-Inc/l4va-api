@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
+import { EvmVaultEventReconciler, VaultLogInput, PerTxOutcome } from './evm-vault-event-reconciler.service';
 
 import { TransactionStatus } from '@/types/transaction.types';
 
@@ -22,7 +23,8 @@ export class EvmWebhookService {
 
   constructor(
     private readonly blockchainWebhookService: BlockchainWebhookService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly vaultEventReconciler: EvmVaultEventReconciler
   ) {
     this.signingKey = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
   }
@@ -91,7 +93,71 @@ export class EvmWebhookService {
       });
     }
 
+    // ── Reconcile vault-emitted V3 events (ContributionMade,
+    // ContributionCancelled, CycleClosed, CycleStatusChanged,
+    // AllocationClaimed). The admin operation services are the primary
+    // writers; this pass is idempotent and only closes gaps left by
+    // crashes / missed receipts / third-party calls.
+    const vaultLogs: VaultLogInput[] = logs
+      .filter(l => Boolean(l?.account?.address) && Boolean(l?.transaction?.hash))
+      .map(l => ({
+        address: l.account!.address!,
+        data: l.data ?? '0x',
+        topics: l.topics ?? [],
+        txHash: l.transaction!.hash!,
+        blockNumber: block?.number ?? null,
+        logIndex: l.index ?? null,
+      }));
+    if (vaultLogs.length > 0) {
+      try {
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        this.logger.debug(
+          `Vault event reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
+        );
+
+        // Fast-path: mark each parent Transaction reconciled ONLY if its
+        // per-tx outcome satisfies its expected_events spec. Anything short
+        // is left for the health-check cron to retry against a fresh
+        // canonical receipt. Never blindly trust webhook logs — Alchemy may
+        // drop or reorder items across redeliveries.
+        const distinctHashes = Array.from(new Set(vaultLogs.map(l => l.txHash)));
+        for (const hash of distinctHashes) {
+          await this.markTransactionReconciledIfSpecMet(hash, stats.perTx.get(hash));
+        }
+      } catch (err) {
+        // Reconciliation failures MUST NOT roll back the tx-status updates
+        // above — those are the Alchemy-mandated ack. Log and continue; the
+        // TransactionHealthService cron will pick these up on its next tick.
+        this.logger.error(`Vault event reconciler failed: ${(err as Error).message}`);
+      }
+    }
+
     return summaries;
+  }
+
+  /**
+   * Idempotently mark an EVM transaction fully reconciled — but ONLY if its
+   * expected_events spec is fully satisfied by this webhook batch. If the
+   * spec is missing (legacy row) treat any errors-free outcome as ok. On
+   * anything short, leave the row untouched so the durable cron retries.
+   */
+  private async markTransactionReconciledIfSpecMet(txHash: string, outcome?: PerTxOutcome): Promise<void> {
+    try {
+      const tx = await this.blockchainWebhookService.findEvmTransactionByHashOrChildHash(txHash);
+      if (!tx) return;
+      const verdict = this.vaultEventReconciler.verifyExpectedEvents(outcome, tx.expected_events);
+      if (!verdict.ok) {
+        this.logger.debug(`Webhook fast-path skip: tx ${txHash} did not satisfy expected_events (${verdict.reason})`);
+        return;
+      }
+      if ((outcome?.errors ?? []).length > 0) return;
+      // When `tx` was resolved via metadata.evmChildTxHashes, `txHash` here is
+      // the child hash — but markEvmTransactionReconciled matches on the
+      // parent's tx_hash column. Prefer the row's canonical hash.
+      await this.blockchainWebhookService.markEvmTransactionReconciled(String(tx.tx_hash ?? txHash));
+    } catch (err) {
+      this.logger.debug(`markTransactionReconciledIfSpecMet(${txHash}) failed: ${(err as Error).message}`);
+    }
   }
 
   /**

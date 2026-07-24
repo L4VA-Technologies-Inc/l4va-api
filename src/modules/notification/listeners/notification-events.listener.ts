@@ -147,10 +147,16 @@ export class NotificationEventsListener {
 
   @OnEvent('vault.failed.email')
   async handleVaultFailedEmail(event: { vault: any }) {
+    const ownerId = event?.vault?.owner?.id;
+    if (!ownerId) {
+      this.logger.warn(`Skipping vault.failed.email for vault ${event?.vault?.id || 'unknown'}: missing owner id`);
+      return;
+    }
+
     const user = await this.userRepository.findOne({
-      where: { id: event.vault.owner.id },
+      where: { id: ownerId },
     });
-    if (!user.email) return;
+    if (!user?.email) return;
 
     await this.notificationService.sendFailedEmailNotification({
       email: user.email,

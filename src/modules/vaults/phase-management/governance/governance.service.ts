@@ -1669,6 +1669,7 @@ export class GovernanceService {
             collectionName: fallbackCollectionName,
             valuationMethod: assetItem.valuationMethod || AssetValuationMethod.MARKET,
             customPriceAda: assetItem.customPriceAda ?? null,
+            customPriceNativeWei: assetItem.customPriceNativeWei ?? null,
             lpPoolOnchainId: lpData?.onchainId || null,
           };
         });
