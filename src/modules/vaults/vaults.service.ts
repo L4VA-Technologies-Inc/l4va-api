@@ -460,6 +460,8 @@ export class VaultsService {
         const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
         const vaultData = transformToSnakeCase({
           ...data,
+          // EVM VT follows the standard 18-decimal precision.
+          ftTokenDecimals: 18,
           minAcquireThreshold: minAcquireThresholdForDb,
           owner,
           contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
