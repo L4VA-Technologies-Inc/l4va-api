@@ -3,8 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import {
+  bigintDecimalAdjustedToNumber,
   getContributionQuantityForLimits,
   normalizeContributionAssets,
+  parseFtRawQuantity,
+  resolveFtDecimals,
   sumContributionQuantitiesForLimits,
 } from './contribution-asset.utils';
 import { countAssetsForProtocolFee } from './contribution-fee.utils';
@@ -115,18 +118,21 @@ export class ContributionService {
         })
         .getRawMany();
 
-      // Calculate decimal-adjusted counts per policy
+      // Calculate decimal-adjusted counts per policy.
+      // `asset.rawQuantity` is a base-unit string (numeric(78,0) via
+      // ColumnBigintStringTransformer) — parse as bigint so tokens with
+      // 18 decimals do not silently overflow Number.MAX_SAFE_INTEGER.
       const policyCountsMap = new Map<string, number>();
       existingAssets.forEach(asset => {
-        const rawQuantity = Number(asset.rawQuantity) || 0;
         let decimalQuantity: number;
 
         if (asset.assetType === AssetType.NFT) {
           decimalQuantity = 1;
         } else {
-          // FT: convert raw to decimal
-          const decimals = Number(asset.decimals) || 6;
-          decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+          const rawStr = asset.rawQuantity != null ? String(asset.rawQuantity).trim() : '0';
+          const rawBigInt = rawStr === '' || !/^\d+$/.test(rawStr) ? 0n : BigInt(rawStr);
+          const decimals = Number.isInteger(Number(asset.decimals)) ? Number(asset.decimals) : 6;
+          decimalQuantity = bigintDecimalAdjustedToNumber(rawBigInt, decimals);
         }
 
         const currentCount = policyCountsMap.get(asset.policyId) || 0;
@@ -214,25 +220,23 @@ export class ContributionService {
           0
         );
 
-        // Additional safety check: prevent unreasonably large decimal-adjusted FT quantities
-        // Note: Raw quantities for EVM tokens (18 decimals) will exceed MAX_SAFE_INTEGER,
-        // so we validate the decimal-adjusted (human-readable) amount instead.
+        // Additional safety check: prevent unreasonably large FT quantities.
+        // Perform threshold comparisons entirely in bigint base units so raw
+        // wei values (up to uint256) are handled without floating-point loss.
         for (const asset of assetsByPolicy[policyId]) {
           if (asset.type === 'ft') {
-            const rawQty = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
-            const decimals = asset.decimals ?? 6;
-            const decimalAdjustedQty = decimals > 0 ? rawQty / Math.pow(10, decimals) : rawQty;
+            const rawQuantity = parseFtRawQuantity(asset);
+            const decimals = resolveFtDecimals(asset);
+            const warnRawThreshold = BigInt(LARGE_QUANTITY_WARNING_THRESHOLD) * 10n ** BigInt(decimals);
+            const rejectRawThreshold = warnRawThreshold * 1000n;
 
-            // Validate decimal-adjusted quantity is within reasonable bounds (1 trillion tokens)
-            if (decimalAdjustedQty > LARGE_QUANTITY_WARNING_THRESHOLD) {
+            if (rawQuantity > warnRawThreshold) {
               this.logger.warn(
-                `Large quantity contribution detected: ${decimalAdjustedQty} tokens (${rawQty} raw) for policy ${policyId} by user ${userId}`
+                `Large quantity contribution detected: raw=${rawQuantity.toString(10)} decimals=${decimals} for policy ${policyId} by user ${userId}`
               );
-
-              // Reject if truly unreasonable (>1 quadrillion tokens)
-              if (decimalAdjustedQty > LARGE_QUANTITY_WARNING_THRESHOLD * 1000) {
+              if (rawQuantity > rejectRawThreshold) {
                 throw new BadRequestException(
-                  `Asset quantity ${decimalAdjustedQty} tokens exceeds maximum reasonable value for policy ${policyId}`
+                  `Asset quantity ${rawQuantity.toString(10)} (base units) exceeds maximum reasonable value for policy ${policyId}`
                 );
               }
             }
@@ -359,11 +363,12 @@ export class ContributionService {
         if (asset.assetType === AssetType.NFT) {
           return total + 1;
         }
-        // FT: convert raw to decimal
-        const rawQuantity = Number(asset.rawQuantity) || 0;
-        const decimals = Number(asset.decimals) || 6;
-        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-        return total + decimalQuantity;
+        // FT raw quantities are stored as numeric(78,0) strings — parse as
+        // bigint to preserve exact 18-decimal wei values before scaling down.
+        const rawStr = asset.rawQuantity != null ? String(asset.rawQuantity).trim() : '0';
+        const rawBigInt = rawStr === '' || !/^\d+$/.test(rawStr) ? 0n : BigInt(rawStr);
+        const decimals = Number.isInteger(Number(asset.decimals)) ? Number(asset.decimals) : 6;
+        return total + bigintDecimalAdjustedToNumber(rawBigInt, decimals);
       }, 0);
 
       const projectedCount = currentAssetCount + contributionAssetCount;

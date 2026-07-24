@@ -216,7 +216,8 @@ export class VaultFullResponse extends VaultShortResponse {
   type: VaultType;
 
   @ApiProperty({
-    description: 'Minimum acquire threshold in native units (ADA for Cardano, ETH for Robinhood)',
+    description:
+      'Minimum acquire threshold in native units (ADA for Cardano, ETH for Robinhood). Approximate JS number for display only.',
     required: false,
     nullable: true,
   })
@@ -225,6 +226,18 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: { name: 'minAcquireThreshold' },
   })
   minAcquireThreshold?: number | null;
+
+  @ApiProperty({
+    description:
+      'Exact minimum acquire threshold as a base-unit decimal string. Cardano: lovelace (1 ADA = 1e6). Robinhood: whole-ETH units as stored in the DB — the on-chain uint256 threshold (wei) is held in the V3 contract cycle, not here. Use this field when precision matters.',
+    required: false,
+    nullable: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'minAcquireThresholdRaw' },
+  })
+  minAcquireThresholdRaw?: string | null;
 
   @ApiProperty({ description: 'Required values cost for success acquire phase in ada' })
   @DtoRepresent({

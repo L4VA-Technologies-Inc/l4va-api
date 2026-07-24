@@ -85,6 +85,37 @@ import {
  * - Integrating with AWS S3 for CSV parsing and file management
  * - Integrating with blockchain services for on-chain operations
  */
+
+/**
+ * Parse a bigint DB value that may arrive as a bigint, string, or number.
+ * Returns 0n for null/undefined. Rejects invalid inputs by returning 0n so
+ * that a garbage DB value does not tank the response endpoint.
+ */
+function safeBigIntFromDb(value: bigint | number | string | null | undefined): bigint {
+  if (value === null || value === undefined) return 0n;
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return Number.isInteger(value) ? BigInt(value) : 0n;
+  const trimmed = String(value).trim();
+  if (!/^-?\d+$/.test(trimmed)) return 0n;
+  try {
+    return BigInt(trimmed);
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * Convert a bigint to a JS number for display-scale use. Values exceeding
+ * Number.MAX_SAFE_INTEGER are clamped to that ceiling — the caller decides
+ * whether the resulting approximation is acceptable (min_acquire_threshold is
+ * currently always well within safe range for lovelace / whole-ETH storage).
+ */
+function bigIntToSafeNumber(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) return Number.MAX_SAFE_INTEGER;
+  if (value < BigInt(Number.MIN_SAFE_INTEGER)) return Number.MIN_SAFE_INTEGER;
+  return Number(value);
+}
+
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
@@ -1179,12 +1210,19 @@ export class VaultsService {
     if (vault.is_acquire_only) {
       // Acquire-only vault threshold is stored in chain-native units:
       // Cardano: lovelace; Robinhood: ETH.
+      // NOTE: For Robinhood, the on-chain uint256 threshold (wei) is the source
+      // of truth for lifecycle decisions and is read via getCycle() in
+      // evm-refund-orchestrator / evm-allocation.service. The DB value here is
+      // only used for API display and Cardano lifecycle. Parse as bigint first
+      // so we never silently truncate an oversized value.
+      const rawThresholdBigInt = safeBigIntFromDb(vault.min_acquire_threshold);
       if (isRobinhoodVault) {
-        requireReservedCostEth = Number(vault.min_acquire_threshold ?? 0);
+        requireReservedCostEth = bigIntToSafeNumber(rawThresholdBigInt);
         requireReservedCostUsd = requireReservedCostEth * ethPrice;
         requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
       } else {
-        requireReservedCostAda = vault.min_acquire_threshold ? vault.min_acquire_threshold / 1_000_000 : 0;
+        const lovelace = bigIntToSafeNumber(rawThresholdBigInt);
+        requireReservedCostAda = lovelace ? lovelace / 1_000_000 : 0;
         requireReservedCostUsd = requireReservedCostAda * adaPrice;
         requireReservedCostEth = ethPrice > 0 ? requireReservedCostUsd / ethPrice : 0;
       }
@@ -1228,7 +1266,10 @@ export class VaultsService {
       requireReservedCostUsd,
       requireReservedCostAda,
       requireReservedCostEth,
-      minAcquireThreshold: vault.min_acquire_threshold != null ? Number(vault.min_acquire_threshold) : null,
+      minAcquireThreshold:
+        vault.min_acquire_threshold != null ? bigIntToSafeNumber(safeBigIntFromDb(vault.min_acquire_threshold)) : null,
+      minAcquireThresholdRaw:
+        vault.min_acquire_threshold != null ? safeBigIntFromDb(vault.min_acquire_threshold).toString(10) : null,
       lpMinLiquidityAda,
       lpMinLiquidityUsd,
       projectedLpAdaAmount,
