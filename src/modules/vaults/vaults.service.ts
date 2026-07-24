@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import { Brackets, In, Not, Repository } from 'typeorm';
-import { keccak256, encodePacked } from 'viem';
+import { keccak256, encodePacked, formatEther, parseEther } from 'viem';
 
 import { DexHunterService } from '../dexhunter/dexhunter.service';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
@@ -114,6 +114,41 @@ function bigIntToSafeNumber(value: bigint): number {
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) return Number.MAX_SAFE_INTEGER;
   if (value < BigInt(Number.MIN_SAFE_INTEGER)) return Number.MIN_SAFE_INTEGER;
   return Number(value);
+}
+
+/**
+ * Normalize minAcquireThreshold into a bigint-safe base-unit string for DB.
+ * - Cardano expects integer lovelace.
+ * - Robinhood accepts fractional ETH and stores wei.
+ */
+function normalizeMinAcquireThresholdForDb(
+  value: number | null | undefined,
+  chainType: ChainType | undefined
+): string | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value) || value < 0) {
+    throw new BadRequestException('minAcquireThreshold must be a non-negative number');
+  }
+
+  if (chainType === ChainType.robinhood) {
+    if (value < 0.01) {
+      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold must be at least 0.01 ETH');
+    }
+    if (value > 10000) {
+      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold cannot exceed 10000 ETH');
+    }
+    try {
+      return parseEther(String(value)).toString();
+    } catch {
+      throw new BadRequestException('Invalid minAcquireThreshold for Robinhood chain');
+    }
+  }
+
+  if (!Number.isInteger(value)) {
+    throw new BadRequestException('For Cardano vaults, minAcquireThreshold must be an integer lovelace value');
+  }
+
+  return String(value);
 }
 
 @Injectable()
@@ -418,12 +453,14 @@ export class VaultsService {
       let evmVaultId: `0x${string}` | undefined;
 
       if (data.chainType === ChainType.robinhood) {
+        const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
         evmVaultId = keccak256(
           encodePacked(['address', 'uint256'], [owner.address as `0x${string}`, BigInt(Date.now())])
         );
         const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
         const vaultData = transformToSnakeCase({
           ...data,
+          minAcquireThreshold: minAcquireThresholdForDb,
           owner,
           contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
           acquireWindowDuration: data.acquireWindowDuration,
@@ -445,8 +482,10 @@ export class VaultsService {
         delete vaultData.contributor_whitelist_csv;
         newVault = await this.vaultsRepository.save(vaultData as Vault);
       } else {
+        const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
         const vaultData = transformToSnakeCase({
           ...data,
+          minAcquireThreshold: minAcquireThresholdForDb,
           owner,
           contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
           acquireWindowDuration: data.acquireWindowDuration,
@@ -1217,7 +1256,7 @@ export class VaultsService {
       // so we never silently truncate an oversized value.
       const rawThresholdBigInt = safeBigIntFromDb(vault.min_acquire_threshold);
       if (isRobinhoodVault) {
-        requireReservedCostEth = bigIntToSafeNumber(rawThresholdBigInt);
+        requireReservedCostEth = Number(formatEther(rawThresholdBigInt));
         requireReservedCostUsd = requireReservedCostEth * ethPrice;
         requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
       } else {
@@ -1267,7 +1306,11 @@ export class VaultsService {
       requireReservedCostAda,
       requireReservedCostEth,
       minAcquireThreshold:
-        vault.min_acquire_threshold != null ? bigIntToSafeNumber(safeBigIntFromDb(vault.min_acquire_threshold)) : null,
+        vault.min_acquire_threshold != null
+          ? isRobinhoodVault
+            ? Number(formatEther(safeBigIntFromDb(vault.min_acquire_threshold)))
+            : bigIntToSafeNumber(safeBigIntFromDb(vault.min_acquire_threshold))
+          : null,
       minAcquireThresholdRaw:
         vault.min_acquire_threshold != null ? safeBigIntFromDb(vault.min_acquire_threshold).toString(10) : null,
       lpMinLiquidityAda,
