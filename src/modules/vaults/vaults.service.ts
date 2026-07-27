@@ -594,6 +594,7 @@ export class VaultsService {
         ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
         : [];
       const allContributors = new Set([
+        ...(owner.address ? [owner.address] : []),
         ...(data.contributorWhitelist?.map(i => i.walletAddress) ?? []),
         ...contributorsFromCsv,
       ]);
@@ -658,7 +659,13 @@ export class VaultsService {
 
       const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
       const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
-      const allowedContributors = [...new Set([...contributorAddresses, ...acquirerAddresses])];
+      const allowedContributors = [
+        ...new Set([
+          ...(finalVault.owner?.address ? [finalVault.owner.address] : []),
+          ...contributorAddresses,
+          ...acquirerAddresses,
+        ]),
+      ];
 
       const MAX_COMBINED_WHITELIST_SIZE = 100;
       if (allowedContributors.length > MAX_COMBINED_WHITELIST_SIZE) {
