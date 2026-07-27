@@ -18,7 +18,7 @@ import { ValidityIntervalException } from './exceptions/validity-interval.except
 import { ValueNotConservedException } from './exceptions/value-not-conserved.exception';
 import { BuildTransactionParams, TransactionSubmitResponse } from './types/transaction-status.enum';
 import { Redeemer } from './types/type';
-import { getUtxosExtract } from './utils/lib';
+import { getPaymentKeyHashFromAddress, getUtxosExtract } from './utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -259,7 +259,7 @@ export class VaultContributionService {
               ]
             : []),
         ],
-        requiredSigners: [this.adminHash],
+        requiredSigners: [this.adminHash, getPaymentKeyHashFromAddress(params.changeAddress)],
         requiredInputs, // Add the required inputs here
         referenceInputs: [
           {
