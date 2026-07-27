@@ -32,6 +32,16 @@ export class NotificationService {
   private readonly novu: Novu;
   private readonly logger = new Logger(NotificationService.name);
 
+  private getEmailFooterPayload(): { currentYear: number; footerCopyright: string; content: string } {
+    const currentYear = new Date().getFullYear();
+    const footerCopyright = `Copyright © ${currentYear}. All Rights Reserved by L4VA`;
+    return {
+      currentYear,
+      footerCopyright,
+      content: footerCopyright,
+    };
+  }
+
   constructor() {
     this.novu = new Novu({
       secretKey: process.env['NOVU_API_KEY'],
@@ -81,6 +91,7 @@ export class NotificationService {
 
   async sendFailedEmailNotification(body: IEmailNotificationBody): Promise<EventsControllerTriggerResponse> {
     try {
+      const footerPayload = this.getEmailFooterPayload();
       const res = await this.novu.trigger({
         workflowId: 'failed',
         to: {
@@ -95,6 +106,7 @@ export class NotificationService {
           vaultUrl: body.vaultUrl,
           failed_at: body.failed_at || new Date(),
           vaultName: body.vaultName,
+          ...footerPayload,
         },
       });
       return res;
@@ -105,6 +117,7 @@ export class NotificationService {
 
   async sendPhaseEmailNotification(body: any): Promise<EventsControllerTriggerResponse> {
     try {
+      const footerPayload = this.getEmailFooterPayload();
       const res = await this.novu.trigger({
         workflowId: 'phase',
         to: {
@@ -118,6 +131,7 @@ export class NotificationService {
           phase: body.phase,
           phaseStatus: body.phaseStatus,
           timeAt: body.timeAt,
+          ...footerPayload,
         },
       });
       return res;
@@ -128,6 +142,7 @@ export class NotificationService {
 
   async sendLaunchEmailNotification(body: any): Promise<EventsControllerTriggerResponse> {
     try {
+      const footerPayload = this.getEmailFooterPayload();
       const res = await this.novu.trigger({
         workflowId: 'created',
         to: {
@@ -139,6 +154,7 @@ export class NotificationService {
           vaultUrl: body.vaultUrl,
           vaultName: body.vaultName,
           timeAt: body.timeAt,
+          ...footerPayload,
         },
       });
       return res;
