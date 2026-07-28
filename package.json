@@ -29,7 +29,7 @@
     "docs:serve": "npx @compodoc/compodoc -p tsconfig.json -d documentation -s"
   },
   "dependencies": {
-    "@blaze-cardano/uplc": "0.3.0",
+    "@blaze-cardano/uplc": "^0.5.1",
     "@blockfrost/blockfrost-js": "^6.0.0",
     "@emurgo/cardano-message-signing-nodejs": "^1.1.0",
     "@emurgo/cardano-serialization-lib-nodejs": "^14.1.2",
@@ -66,18 +66,18 @@
     "class-validator": "^0.14.1",
     "csv-parse": "^5.6.0",
     "dotenv": "^17.2.3",
-    "multer": "^2.1.1",
+    "multer": "^2.2.0",
     "node-cache": "^5.1.2",
     "pg": "^8.13.1",
     "raw-body": "^3.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "stream-chat": "^9.22.1",
     "typeorm": "^0.3.20",
     "typeorm-naming-strategies": "^4.1.0",
     "unique-username-generator": "^1.4.0",
-    "uuid": "^11.1.0",
+    "uuid": "^11.1.1",
     "viem": "^2.55.4"
   },
   "overrides": {
@@ -88,7 +88,11 @@
     "webpack": "^5.105.0",
     "js-yaml": "^4.1.1",
     "lodash": "^4.17.22",
-    "inquirer": "^8.2.7"
+    "inquirer": "^8.2.7",
+    "tar": "^7.5.22",
+    "qs": "^6.15.3",
+    "picomatch": "^4.0.5",
+    "ip-address": "^10.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^8.57.0",
