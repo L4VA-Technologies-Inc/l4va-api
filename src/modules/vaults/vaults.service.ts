@@ -801,7 +801,7 @@ export class VaultsService {
       await this.vaultsRepository.save(finalVault);
 
       return { vaultId: finalVault.id, presignedTx, txId: transactionId };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error creating vault:', error);
 
       // Revert the partially-created vault to draft so the user can retry from their drafts.
@@ -2432,7 +2432,7 @@ export class VaultsService {
           platform: VerificationPlatform.WAYUP,
         })
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to fetch collection info for policyId ${policyId}: ${error.message}`);
 
       return Object.assign(new TokenVerification(), {
