@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import { createPublicClient, http, PublicClient } from 'viem';
 
 import { BlockchainWebhookService } from '../onchain/blockchain-webhook.service';
+import { EvmContributionBackfillService } from '../onchain/evm-contribution-backfill.service';
 import { EvmVaultEventReconciler, VaultLogInput } from '../onchain/evm-vault-event-reconciler.service';
 
 import { TransactionsService } from './transactions.service';
@@ -29,7 +30,8 @@ export class TransactionHealthService {
     private readonly transactionsService: TransactionsService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly configService: ConfigService,
-    private readonly vaultEventReconciler: EvmVaultEventReconciler
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly evmContributionBackfillService: EvmContributionBackfillService
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -56,7 +58,7 @@ export class TransactionHealthService {
    *      PATH for the Alchemy webhook. An EVM tx is only fully processed
    *      when reconciled_at is set.
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async checkStuckTransactions(): Promise<void> {
     this.logger.log('Starting health check for stuck transactions');
 
@@ -91,6 +93,15 @@ export class TransactionHealthService {
       await this.sweepEvmReconciliation();
     } catch (error) {
       this.logger.error('Error during EVM reconciliation sweep', error);
+    }
+
+    // Third sweep — backfill any evm_contributions rows that were missed
+    // (dropped webhook, ordering issues, Alchemy outage). This is the
+    // safety net now that the primary path handles it in confirmContribution.
+    try {
+      await this.evmContributionBackfillService.sweepAllVaults();
+    } catch (error) {
+      this.logger.error('Error during EVM contribution backfill sweep', error);
     }
   }
 

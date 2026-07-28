@@ -23,7 +23,6 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
-import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
 import {
   EvmLockTimePricingService,
@@ -54,8 +53,6 @@ export class LifecycleService {
   private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
   private readonly MAX_FAILED_ATTEMPTS = 3; // Maximum allowed failed attempts before skipping
   private isRunning = false;
-  private readonly EVM_BACKFILL_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
-  private lastEvmBackfillSweepAt = 0;
 
   constructor(
     @InjectRepository(Asset)
@@ -89,8 +86,7 @@ export class LifecycleService {
     private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
     private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
     private readonly evmAllocationService: EvmAllocationService,
-    private readonly evmLockTimePricingService: EvmLockTimePricingService,
-    private readonly evmContributionBackfillService: EvmContributionBackfillService
+    private readonly evmLockTimePricingService: EvmLockTimePricingService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -109,7 +105,6 @@ export class LifecycleService {
       await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
-      await this.handleEvmContributionBackfill(); // EVM: reconcile missing evm_contributions rows against on-chain state
       await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
       await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
@@ -2555,29 +2550,6 @@ export class LifecycleService {
       }
     } catch (error) {
       this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // EVM: reconcile missing evm_contributions rows against on-chain state.
-  //
-  // The webhook path is the primary writer, but any missed / dropped event
-  // leaves the vault with fewer DB rows than on-chain contributions and
-  // blocks the snapshot builder. This sweep runs before the snapshot
-  // handler so any gap closes on the next tick automatically.
-  //
-  // Gated by the same feature flag as the rest of the EVM cycle automation.
-  // ---------------------------------------------------------------------------
-  private async handleEvmContributionBackfill(): Promise<void> {
-    if (!this.isEvmCycleAutomationEnabled()) return;
-    const now = Date.now();
-    if (now - this.lastEvmBackfillSweepAt < this.EVM_BACKFILL_SWEEP_INTERVAL_MS) return;
-
-    this.lastEvmBackfillSweepAt = now;
-    try {
-      await this.evmContributionBackfillService.sweepAllVaults();
-    } catch (err) {
-      this.logger.error(`EVM contribution backfill sweep failed: ${(err as Error).message}`);
     }
   }
 
