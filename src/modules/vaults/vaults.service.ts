@@ -1377,11 +1377,11 @@ export class VaultsService {
     };
 
     let canCreateProposal = false;
-    if (userId !== undefined && userId !== null) {
+    if (vault.chain_type !== ChainType.robinhood && userId !== undefined && userId !== null) {
       canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
     }
     let canCancelVault = false;
-    if (userId !== undefined && userId !== null) {
+    if (vault.chain_type !== ChainType.robinhood && userId !== undefined && userId !== null) {
       canCancelVault = await this.canCancelVaultByOwner(vaultId, userId);
     }
     const isChatVisible = await this.verifyChatAccess(userId, vaultId);
