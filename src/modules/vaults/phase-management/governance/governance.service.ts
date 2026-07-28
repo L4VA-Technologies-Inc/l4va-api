@@ -1977,7 +1977,11 @@ export class GovernanceService {
     };
   }
 
-  async getProposals(vaultId: string): Promise<GetProposalsResItem[]> {
+  async getProposals(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10
+  ): Promise<PaginatedResponseDto<GetProposalsResItem>> {
     const vaultExists = await this.vaultRepository.exists({
       where: { id: vaultId },
     });
@@ -1987,16 +1991,18 @@ export class GovernanceService {
     }
 
     // Exclude UNPAID proposals from public list (they're awaiting payment)
-    const proposals = await this.proposalRepository.find({
+    const [proposals, total] = await this.proposalRepository.findAndCount({
       where: {
         vaultId,
         status: Not(ProposalStatus.UNPAID),
       },
       order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
 
     // Process each proposal to add vote information
-    return await Promise.all(
+    const items = await Promise.all(
       proposals.map(async proposal => {
         const baseProposal = {
           id: proposal.id,
@@ -2035,6 +2041,14 @@ export class GovernanceService {
         }
       })
     );
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
