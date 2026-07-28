@@ -10,7 +10,7 @@ import { GetAssetsToListRes } from './dto/get-assets-to-list.res';
 import { GetAssetsToStakeRes } from './dto/get-assets-to-stake.res';
 import { GetOffersToCancelDto, PaginatedOffersToCancelResponseDto } from './dto/get-offers-to-cancel.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
-import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
+import { GetProposalsDto, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
 import {
   BuildGovernanceFeeTransactionRes,
@@ -80,9 +80,12 @@ export class GovernanceController {
   @Get('vaults/:vaultId/proposals')
   @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: 'Get all proposals for a vault' })
-  @ApiResponse({ status: 200, description: 'List of proposals', type: [GetProposalsRes] })
-  async getProposals(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetProposalsResItem[]> {
-    return this.governanceService.getProposals(vaultId);
+  @ApiResponse({ status: 200, description: 'Paginated list of proposals', type: PaginatedResponseDto })
+  async getProposals(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query() query: GetProposalsDto
+  ): Promise<PaginatedResponseDto<GetProposalsResItem>> {
+    return this.governanceService.getProposals(vaultId, query.page, query.limit);
   }
 
   @Post('proposals/:proposalId/vote')
