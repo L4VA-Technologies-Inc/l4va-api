@@ -7,6 +7,10 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
+import { BlockchainWebhookService } from './blockchain-webhook.service';
+import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
+
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetType } from '@/types/asset.types';
@@ -123,7 +127,10 @@ export class EvmVaultContributionService {
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(Transaction) private readonly transactionRepository: Repository<Transaction>,
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly blockchainWebhookService: BlockchainWebhookService,
+    private readonly contractReader: EvmContractReader,
+    private readonly vaultEventReconciler: EvmVaultEventReconciler
   ) {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
@@ -263,6 +270,17 @@ export class EvmVaultContributionService {
       await this.transactionsService.createAssets(txId);
       await this.transactionsService.updateTransactionHash(txId, txHash);
       this.logger.log(`EVM contribution confirmed — txId=${txId} txHash=${txHash}`);
+
+      // The Alchemy webhook almost always fires before this endpoint is called
+      // (block confirmed → Alchemy fires → frontend calls /confirm). By the time
+      // we persist the tx_hash above, the webhook has already tried and failed
+      // to find the TX. Immediately check whether the receipt is already
+      // on-chain and apply the confirmation side-effects (lock assets, reward
+      // event) right now instead of waiting for the next health-check cron.
+      this.applyReceiptIfAlreadyMined(txHash).catch(err =>
+        this.logger.warn(`Post-confirm catch-up failed for ${txHash}: ${(err as Error).message}`)
+      );
+
       return { success: true, txHash };
     } catch (err) {
       await this.transactionsService.updateTransactionStatusById(txId, TransactionStatus.failed);
@@ -274,6 +292,62 @@ export class EvmVaultContributionService {
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
+
+  /**
+   * Fire-and-forget: if the tx is already mined (receipt available), apply
+   * the confirmation side-effects immediately rather than waiting for the
+   * 5-minute health-check cron. This closes the race where the Alchemy
+   * webhook arrives before the frontend calls /confirm.
+   */
+  private async applyReceiptIfAlreadyMined(txHash: string): Promise<void> {
+    let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>;
+    try {
+      receipt = await this.contractReader.getTransactionReceipt(txHash as `0x${string}`);
+    } catch {
+      // Receipt not found or RPC error — health-check cron will retry.
+      return;
+    }
+    if (!receipt) return;
+
+    const status = receipt.status === 'success' ? 1 : receipt.status === 'reverted' ? 0 : null;
+    if (status === null) return;
+
+    const logs: { topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
+      topics: (l.topics ?? []) as string[],
+      data: String(l.data ?? '0x'),
+    }));
+
+    this.logger.debug(`Post-confirm catch-up: applying receipt for ${txHash} (status=${receipt.status})`);
+    await this.blockchainWebhookService.applyEvmTransactionStatus(
+      txHash,
+      typeof receipt.transactionIndex === 'number' ? receipt.transactionIndex : 0,
+      status === 1 ? TransactionStatus.confirmed : TransactionStatus.failed,
+      logs
+    );
+
+    // Also reconcile vault events (ContributionMade, etc.) so the
+    // evm_contribution row is created immediately — no backfill or
+    // health-check cron needed for the happy path.
+    if (status === 1) {
+      const vaultLogs = (receipt.logs ?? []).map((l: any) => ({
+        address: String(l.address ?? ''),
+        data: String(l.data ?? '0x'),
+        topics: (l.topics ?? []) as string[],
+        txHash,
+        blockNumber: receipt.blockNumber != null ? String(receipt.blockNumber) : null,
+        logIndex: typeof l.logIndex === 'number' ? l.logIndex : null,
+      }));
+      try {
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        this.logger.debug(
+          `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
+        );
+      } catch (err) {
+        // Non-fatal — backfill cron is the safety net.
+        this.logger.warn(`Post-confirm reconciler failed for ${txHash}: ${(err as Error).message}`);
+      }
+    }
+  }
 
   private async signAuthorization(vaultAddress: Address, auth: EvmContributionAuthorization): Promise<Hex> {
     const account = privateKeyToAccount(this.mintingSignerPrivateKey);

@@ -23,7 +23,7 @@ import { EvmWebhookDto } from './dto/evm-webhook.dto';
 import { HandleWebhookRes } from './dto/handle-webhook.res';
 import { BuildTransactionDto, SubmitTransactionDto, TransactionSubmitResponseDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
-import { EvmVaultContributionService } from './evm-vault-contribution.service';
+import { EvmContributionPrepareResponse, EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
@@ -78,7 +78,10 @@ export class BlockchainController {
     description:
       'Returns per-asset EIP-712 authorizations signed by the vault mintingKey, plus the vault address, chainId, and the approve/contribute calls the wallet must submit.',
   })
-  async prepareEvmContribution(@Body() body: PrepareEvmContributionReq, @Request() req: AuthRequest) {
+  async prepareEvmContribution(
+    @Body() body: PrepareEvmContributionReq,
+    @Request() req: AuthRequest
+  ): Promise<EvmContributionPrepareResponse> {
     return this.evmVaultContributionService.prepareContribution(body.txId, req.user.sub);
   }
 
@@ -89,7 +92,13 @@ export class BlockchainController {
     description:
       'Called after the wallet has submitted all N on-chain contribute() calls. Stores the primary tx hash on the Transaction, records the child hashes in metadata, and materializes the Asset rows from the contribution metadata.',
   })
-  async confirmEvmContribution(@Body() body: ConfirmEvmContributionReq, @Request() req: AuthRequest) {
+  async confirmEvmContribution(
+    @Body() body: ConfirmEvmContributionReq,
+    @Request() req: AuthRequest
+  ): Promise<{
+    success: boolean;
+    txHash: string;
+  }> {
     return this.evmVaultContributionService.confirmContribution(
       body.txId,
       body.txHash,
