@@ -7,10 +7,13 @@ import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { VAULT_ABI } from './vault.abi';
 
+import { Claim } from '@/database/claim.entity';
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
 
@@ -377,6 +380,8 @@ export class EvmAirdropOrchestrator {
     }
 
     // Happy path — update every allocation row + the admin Tx atomically.
+    // Also create Claim rows (CONTRIBUTOR or ACQUIRER) so users see the
+    // distribution in the UI — mirrors the Cardano lifecycle flow.
     await this.dataSource.transaction(async manager => {
       for (const row of batch) {
         await manager
@@ -390,6 +395,57 @@ export class EvmAirdropOrchestrator {
           .where('id = :id AND claimed_at IS NULL', { id: row.id })
           .execute();
       }
+
+      // Resolve users by EVM address (EVM users store their 0x address in
+      // users.address — same field used by ContributionMade reconciler).
+      const distinctContributors = [...new Set(batch.map(r => r.contributor.toLowerCase()))];
+      const userRows = await manager
+        .createQueryBuilder(User, 'u')
+        .where('LOWER(u.address) IN (:...addresses)', { addresses: distinctContributors })
+        .select(['u.id', 'u.address'])
+        .getMany();
+      const userByAddress = new Map(userRows.map(u => [u.address.toLowerCase(), u.id]));
+
+      const claimsToInsert: Claim[] = [];
+      for (const row of batch) {
+        const userId = userByAddress.get(row.contributor.toLowerCase());
+        if (!userId) continue;
+
+        // Idempotency: skip if a claim for this (vault, user, cycle, claimIndex) already exists.
+        // Use a raw count query keyed on metadata.evmClaimIndex + evmCycleId.
+        const dupeCount = await manager
+          .createQueryBuilder(Claim, 'c')
+          .where('c.user_id = :userId', { userId })
+          .andWhere('c.vault_id = :vaultId', { vaultId: row.vault_id })
+          .andWhere(`c.metadata->>'evmClaimIndex' = :ci`, { ci: row.claim_index })
+          .andWhere(`c.metadata->>'evmCycleId' = :cycleId`, { cycleId: row.cycle_id })
+          .getCount();
+        if (dupeCount > 0) continue;
+
+        // native_amount > 0  → asset contributor (receives VT + native back)
+        // native_amount == 0 → native acquirer (receives VT only)
+        const isContributor = BigInt(row.native_amount) > 0n;
+        const claim = new Claim();
+        claim.user_id = userId;
+        claim.vault_id = row.vault_id;
+        claim.type = isContributor ? ClaimType.CONTRIBUTOR : ClaimType.ACQUIRER;
+        claim.status = ClaimStatus.CLAIMED;
+        // amount / lovelace_amount are numeric(78,0) — safe to store full EVM wei-scale values.
+        claim.amount = row.vt_amount as unknown as number;
+        claim.lovelace_amount = isContributor ? (row.native_amount as unknown as number) : null;
+        claim.distribution_tx_id = adminTxId;
+        claim.metadata = {
+          evmCycleId: row.cycle_id,
+          evmClaimIndex: row.claim_index,
+        };
+        claimsToInsert.push(claim);
+      }
+
+      if (claimsToInsert.length > 0) {
+        await manager.save(Claim, claimsToInsert);
+        this.logger.log(`Created ${claimsToInsert.length} CONTRIBUTOR/ACQUIRER claims for airdrop tx=${result.hash}`);
+      }
+
       await manager.update(
         Transaction,
         { id: adminTxId },

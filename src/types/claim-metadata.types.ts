@@ -16,6 +16,10 @@ export interface BaseClaimMetadata {
 export interface ContributorClaimMetadata extends BaseClaimMetadata {
   /** True if vault has no acquirers (100% contributors) */
   noAcquirers?: boolean;
+  /** EVM: on-chain cycle ID this claim belongs to */
+  evmCycleId?: string;
+  /** EVM: Merkle leaf claim_index for deduplication */
+  evmClaimIndex?: string;
 }
 
 /**
@@ -42,6 +46,8 @@ export interface CancellationClaimMetadata extends BaseClaimMetadata {
   expansionProposalId?: string;
   /** Required minimum that wasn't met (for expansion refunds) */
   requiredMin?: number;
+  /** Original transaction hash (contribution or acquisition tx that is being refunded) */
+  originalTxHash?: string;
 }
 
 /**
@@ -152,6 +158,10 @@ export interface AcquirerClaimMetadata extends BaseClaimMetadata {
   adaSent?: number;
   /** True if this claim is from an expansion phase */
   isExpansion?: boolean;
+  /** EVM: on-chain cycle ID this claim belongs to */
+  evmCycleId?: string;
+  /** EVM: Merkle leaf claim_index for deduplication */
+  evmClaimIndex?: string;
 }
 
 /**

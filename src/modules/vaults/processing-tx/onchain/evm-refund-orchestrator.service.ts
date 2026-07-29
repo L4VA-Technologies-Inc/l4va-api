@@ -10,11 +10,13 @@ import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetStatus } from '@/types/asset.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
@@ -28,6 +30,11 @@ interface PickedContribution {
   on_chain_contribution_id: string;
   contributor: string;
   asset_id?: string;
+  transaction_id: string;
+  /** Solidity AssetKind: 0=Native, 1=ERC20, 2=ERC721, 3=ERC1155 */
+  kind: number;
+  amount: string;
+  contribution_tx_hash: string;
 }
 
 export interface CancelSweepResult {
@@ -530,6 +537,62 @@ export class EvmRefundOrchestrator {
           }
         );
         this.logger.log(`Released ${assetIdsToRelease.length} assets for refund batch tx=${result.hash}`);
+      }
+
+      // Create CANCELLATION Claim rows so users can see refunds in the UI —
+      // mirrors the Cardano ClaimsService.createCancellationClaims() flow.
+      // Load user_ids from the original contribution transactions (one query
+      // for the whole batch to avoid N+1).
+      const txIds = [...new Set(batch.map(r => r.transaction_id))];
+      const txRows = await manager.find(Transaction, {
+        where: { id: In(txIds) },
+        select: ['id', 'user_id'],
+      });
+      const txUserMap = new Map(txRows.map(t => [t.id, t.user_id]));
+
+      const claimsToInsert: Claim[] = [];
+      for (const row of batch) {
+        const userId = txUserMap.get(row.transaction_id);
+        if (!userId) continue;
+
+        // Idempotency guard — skip if a CANCELLATION claim already exists for
+        // this contribution (e.g. webhook reconciler ran first).
+        const alreadyExists = await manager.exists(Claim, {
+          where: {
+            user_id: userId,
+            vault_id: row.vault_id,
+            transaction_id: row.transaction_id,
+            type: ClaimType.CANCELLATION,
+          },
+        });
+        if (alreadyExists) continue;
+
+        // kind=0 is Native (contributeNative) — the user gets their ETH back.
+        const isNative = row.kind === 0;
+        const claim = new Claim();
+        claim.user_id = userId;
+        claim.vault_id = row.vault_id;
+        claim.type = ClaimType.CANCELLATION;
+        claim.status = ClaimStatus.CLAIMED;
+        claim.amount = 0;
+        // amount / lovelace_amount are numeric(78,0) — safe to store full wei-scale values.
+        claim.lovelace_amount = isNative ? (row.amount as unknown as number) : null;
+        claim.description = isNative
+          ? `Return native from failed vault acquisition`
+          : `Return contributed assets from failed vault`;
+        claim.metadata = {
+          transactionType: isNative ? 'acquisition' : 'contribution',
+          failureReason: 'threshold_not_met',
+          originalTxHash: row.contribution_tx_hash,
+        };
+        claim.transaction_id = row.transaction_id;
+        claim.distribution_tx_id = adminTxId;
+        claimsToInsert.push(claim);
+      }
+
+      if (claimsToInsert.length > 0) {
+        await manager.save(Claim, claimsToInsert);
+        this.logger.log(`Created ${claimsToInsert.length} CANCELLATION claims for refund tx=${result.hash}`);
       }
 
       await manager.update(

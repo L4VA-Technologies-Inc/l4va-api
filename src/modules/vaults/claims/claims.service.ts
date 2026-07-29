@@ -236,7 +236,7 @@ export class ClaimsService {
           } else {
             this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
           }
-        } catch (error) {
+        } catch (error: any) {
           const noVtBalanceError =
             error.message?.includes('No VT balance found') ||
             error.message?.includes('no VT balance') ||
