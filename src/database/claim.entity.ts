@@ -64,12 +64,8 @@ export class Claim {
     precision: 78,
     scale: 0,
     default: 0,
-    transformer: {
-      to: (v: number | string | null) => v,
-      from: (v: string | null) => (v === null || v === undefined ? v : Number(v)),
-    },
   })
-  amount: number;
+  amount: string;
 
   @Expose({ name: 'lovelaceAmount' })
   @Column({
@@ -78,12 +74,8 @@ export class Claim {
     precision: 78,
     scale: 0,
     nullable: true,
-    transformer: {
-      to: (v: number | string | null) => v,
-      from: (v: string | null) => (v === null || v === undefined ? v : Number(v)),
-    },
   })
-  lovelace_amount?: number;
+  lovelace_amount?: string;
 
   @Expose({ name: 'multiplier' })
   @Column({ type: 'numeric', nullable: true })

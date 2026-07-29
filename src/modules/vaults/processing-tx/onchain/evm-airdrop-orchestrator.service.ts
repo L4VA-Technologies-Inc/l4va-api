@@ -430,9 +430,9 @@ export class EvmAirdropOrchestrator {
         claim.vault_id = row.vault_id;
         claim.type = isContributor ? ClaimType.CONTRIBUTOR : ClaimType.ACQUIRER;
         claim.status = ClaimStatus.CLAIMED;
-        // amount / lovelace_amount are numeric(78,0) — safe to store full EVM wei-scale values.
-        claim.amount = row.vt_amount as unknown as number;
-        claim.lovelace_amount = isContributor ? (row.native_amount as unknown as number) : null;
+        // amount / lovelace_amount are numeric(78,0) strings — store full EVM wei-scale values.
+        claim.amount = row.vt_amount;
+        claim.lovelace_amount = isContributor ? row.native_amount : null;
         claim.distribution_tx_id = adminTxId;
         claim.metadata = {
           evmCycleId: row.cycle_id,

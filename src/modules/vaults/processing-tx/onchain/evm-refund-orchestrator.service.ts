@@ -574,9 +574,9 @@ export class EvmRefundOrchestrator {
         claim.vault_id = row.vault_id;
         claim.type = ClaimType.CANCELLATION;
         claim.status = ClaimStatus.CLAIMED;
-        claim.amount = 0;
-        // amount / lovelace_amount are numeric(78,0) — safe to store full wei-scale values.
-        claim.lovelace_amount = isNative ? (row.amount as unknown as number) : null;
+        claim.amount = '0';
+        // amount / lovelace_amount are numeric(78,0) strings — store full wei-scale values.
+        claim.lovelace_amount = isNative ? row.amount : null;
         claim.description = isNative
           ? `Return native from failed vault acquisition`
           : `Return contributed assets from failed vault`;
