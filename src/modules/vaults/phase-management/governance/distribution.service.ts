@@ -499,8 +499,8 @@ export class DistributionService {
         vault,
         type: ClaimType.DISTRIBUTION,
         status: ClaimStatus.PENDING, // Will be updated to AVAILABLE after successful tx
-        amount: 0, // Not used for distribution claims
-        lovelace_amount: Number(recipient.lovelaceShare),
+        amount: '0', // Not used for distribution claims
+        lovelace_amount: String(recipient.lovelaceShare),
         description: `Distribution of ${Number(recipient.lovelaceShare) / 1_000_000} ADA from proposal "${proposal.title}"`,
         metadata,
       });

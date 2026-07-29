@@ -297,7 +297,7 @@ export class DiagnosticService {
 
       mockAcquirerClaims.push({
         id: tx.id,
-        amount: vtReceived,
+        amount: String(vtReceived),
         multiplier: multiplier,
         transaction: tx as any,
       });
@@ -358,8 +358,8 @@ export class DiagnosticService {
 
       mockContributorClaims.push({
         id: tx.id,
-        amount: contributorResult.vtAmount,
-        lovelace_amount: contributorResult.lovelaceAmount,
+        amount: String(contributorResult.vtAmount),
+        lovelace_amount: String(contributorResult.lovelaceAmount),
         transaction: tx as any,
       });
     }
@@ -965,9 +965,10 @@ export class DiagnosticService {
     for (const claim of contributorClaims) {
       if (!claim.transaction?.assets) continue;
 
-      const contributorLovelaceAmount = claim?.lovelace_amount || 0;
-      const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
-      const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
+      const contributorLovelaceAmount = Number(claim?.lovelace_amount || 0);
+      const claimAmountNum = Number(claim.amount);
+      const baseVtShare = Math.floor(claimAmountNum / claim.transaction.assets.length);
+      const vtRemainder = claimAmountNum - baseVtShare * claim.transaction.assets.length;
       const baseAdaShare = Math.floor(contributorLovelaceAmount / claim.transaction.assets.length);
       const adaRemainder = contributorLovelaceAmount - baseAdaShare * claim.transaction.assets.length;
 

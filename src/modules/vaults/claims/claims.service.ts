@@ -172,8 +172,8 @@ export class ClaimsService {
         id: claim.id,
         type: claim.type,
         status: claim.status,
-        amount: claim.amount / 10 ** (claim.vault?.ft_token_decimals || 0),
-        adaAmount: claim.lovelace_amount ? claim.lovelace_amount / 1_000_000 : null,
+        amount: Number(claim.amount) / 10 ** (claim.vault?.ft_token_decimals || 0),
+        adaAmount: claim.lovelace_amount ? Number(claim.lovelace_amount) / 1_000_000 : null,
         multiplier: claim.multiplier,
         description: claim.description,
         createdAt: claim.created_at,
@@ -357,10 +357,9 @@ export class ClaimsService {
         }
 
         const claim = this.claimRepository.create({
-          user: { id: tx.user.id },
           vault: { id: vault.id },
           type: ClaimType.CANCELLATION,
-          lovelace_amount: tx.amount, // ADA amount to return
+          lovelace_amount: String(tx.amount), // ADA amount to return
           status: ClaimStatus.AVAILABLE,
           description: `Return ADA from failed vault acquisition: ${vault.name}`,
           metadata: {

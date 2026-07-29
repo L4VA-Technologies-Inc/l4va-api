@@ -283,16 +283,16 @@ export class LifecycleService {
       for (const claim of contributorClaims) {
         const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
         const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-        const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+        const vtNeedsUpdate = recalculatedVt !== undefined && String(recalculatedVt) !== claim.amount;
         const lovelaceNeedsUpdate =
-          recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+          recalculatedLovelace !== undefined && String(recalculatedLovelace) !== claim.lovelace_amount;
 
         if (vtNeedsUpdate || lovelaceNeedsUpdate) {
           if (vtNeedsUpdate) {
-            claim.amount = recalculatedVt;
+            claim.amount = String(recalculatedVt);
           }
           if (lovelaceNeedsUpdate) {
-            claim.lovelace_amount = recalculatedLovelace;
+            claim.lovelace_amount = String(recalculatedLovelace);
           }
           claimsToUpdate.push(claim);
         }
@@ -1139,8 +1139,8 @@ export class LifecycleService {
             if (existingLpClaim) {
               // Update existing claim with recalculated amounts (handles decimal upgrades)
               await this.claimRepository.update(existingLpClaim.id, {
-                amount: finalAdjustedVtLpAmount,
-                lovelace_amount: lpAdaInLovelace,
+                amount: String(finalAdjustedVtLpAmount),
+                lovelace_amount: String(lpAdaInLovelace),
               });
               this.logger.log(
                 `Updated existing LP claim: ${finalAdjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA ` +
@@ -1150,9 +1150,9 @@ export class LifecycleService {
               await this.claimRepository.save({
                 vault: { id: vault.id },
                 type: ClaimType.LP,
-                amount: finalAdjustedVtLpAmount,
+                amount: String(finalAdjustedVtLpAmount),
                 status: ClaimStatus.AVAILABLE,
-                lovelace_amount: lpAdaInLovelace,
+                lovelace_amount: String(lpAdaInLovelace),
               });
 
               this.logger.log(`Created LP claim: ${finalAdjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
@@ -1205,7 +1205,7 @@ export class LifecycleService {
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
-              amount: vtReceived,
+              amount: String(vtReceived),
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
               multiplier: multiplier,
@@ -1223,7 +1223,7 @@ export class LifecycleService {
 
             for (const claim of acquirerClaims) {
               const transaction = acquisitionTransactions.find(tx => tx.id === claim.transaction.id);
-              claim.amount = minMultiplier * transaction.amount * 1_000_000;
+              claim.amount = String(minMultiplier * transaction.amount * 1_000_000);
               claim.multiplier = minMultiplier;
             }
 
@@ -1276,10 +1276,10 @@ export class LifecycleService {
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.CONTRIBUTOR,
-              amount: contributorResult.vtAmount,
+              amount: String(contributorResult.vtAmount),
               status: ClaimStatus.PENDING, // Move to active after successful Extraction
               transaction: { id: tx.id },
-              lovelace_amount: contributorResult.lovelaceAmount,
+              lovelace_amount: String(contributorResult.lovelaceAmount),
             });
 
             contributorClaims.push(claim);
@@ -1654,8 +1654,8 @@ export class LifecycleService {
             user: { id: tx.user.id },
             vault: { id: vault.id },
             type: ClaimType.CONTRIBUTOR,
-            amount: Math.floor(claimAmount),
-            lovelace_amount: 0, // No ADA for 0% acquirers case
+            amount: String(Math.floor(claimAmount)),
+            lovelace_amount: '0', // No ADA for 0% acquirers case
             status: ClaimStatus.PENDING,
             transaction: { id: tx.id },
             metadata: {
@@ -2362,17 +2362,17 @@ export class LifecycleService {
           });
           if (existingLpClaim) {
             await this.claimRepository.update(existingLpClaim.id, {
-              amount: adjustedVtLpAmount,
-              lovelace_amount: lpAdaInLovelace,
+              amount: String(adjustedVtLpAmount),
+              lovelace_amount: String(lpAdaInLovelace),
             });
             this.logger.log(`Updated existing LP claim: ${adjustedVtLpAmount} VT, ${lpAdaAmount} ADA`);
           } else {
             await this.claimRepository.save({
               vault: { id: vault.id },
               type: ClaimType.LP,
-              amount: adjustedVtLpAmount,
+              amount: String(adjustedVtLpAmount),
               status: ClaimStatus.AVAILABLE,
-              lovelace_amount: lpAdaInLovelace,
+              lovelace_amount: String(lpAdaInLovelace),
             });
             this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT, ${lpAdaAmount} ADA`);
           }
@@ -2432,7 +2432,7 @@ export class LifecycleService {
               user: { id: tx.user.id },
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
-              amount: claimAmount,
+              amount: String(claimAmount),
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
               multiplier: vaultMultiplier,
