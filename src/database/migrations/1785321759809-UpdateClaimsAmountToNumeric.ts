@@ -5,8 +5,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `numeric(78, 0)` so EVM VT / native amounts (18-decimal, up to ~10^24+)
  * can be stored directly without overflow.
  *
- * Cardano claims are unaffected: their values fit comfortably in numeric(78,0)
- * and all existing code that calls `Number(claim.amount)` continues to work.
+ * Cardano claims are unaffected: their values fit comfortably in `Number` for existing code paths.
+ * For EVM-scale amounts, preserve precision by treating the numeric values as `string`/`bigint` (avoid `Number(...)`).
  */
 export class UpdateClaimsAmountToNumeric1785321759809 implements MigrationInterface {
   name = 'UpdateClaimsAmountToNumeric1785321759809';
