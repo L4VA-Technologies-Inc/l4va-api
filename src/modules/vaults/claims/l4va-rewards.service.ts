@@ -275,7 +275,7 @@ export class L4vaRewardsService {
       user: { id: vault.owner.id } as any,
       vault: { id: vaultId } as any,
       type: ClaimType.L4VA,
-      amount: creatorAmount,
+      amount: String(creatorAmount),
       status: ClaimStatus.PENDING,
       metadata: {
         l4va_role: 'AU',
@@ -309,7 +309,7 @@ export class L4vaRewardsService {
         user: { id: user.id } as any,
         vault: { id: vaultId } as any,
         type: ClaimType.L4VA,
-        amount: holderAmount,
+        amount: String(holderAmount),
         status: ClaimStatus.PENDING,
         metadata: {
           l4va_role: 'AC/VI',

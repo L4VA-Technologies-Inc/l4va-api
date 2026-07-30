@@ -1082,8 +1082,8 @@ export class TerminationService {
         vault: vault,
         type: ClaimType.TERMINATION,
         status: ClaimStatus.AVAILABLE,
-        amount: Number(vtBalance), // VT amount user needs to send
-        lovelace_amount: Number(adaShare), // ADA amount user will receive (0 if no distribution)
+        amount: String(vtBalance), // VT amount user needs to send
+        lovelace_amount: String(adaShare), // ADA amount user will receive (0 if no distribution)
         description: claimDescription,
         metadata: {
           address,
@@ -1657,8 +1657,8 @@ export class TerminationService {
         await this.claimRepository.update(
           { id: existingClaim.id },
           {
-            amount: Number(dynamicShare.userVtBalance),
-            lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
+            amount: String(dynamicShare.userVtBalance),
+            lovelace_amount: noAdaDistribution ? '0' : String(dynamicShare.adaShare),
             metadata: {
               address: userAddress,
               vtAmount: dynamicShare.userVtBalance.toString(),
@@ -1725,12 +1725,12 @@ export class TerminationService {
 
     // Step 7: Create new claim
     const newClaim = this.claimRepository.create({
-      user: user || undefined,
+      ...(user ? { user } : {}),
       vault,
       type: ClaimType.TERMINATION,
       status: ClaimStatus.AVAILABLE,
-      amount: Number(dynamicShare.userVtBalance),
-      lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
+      amount: String(dynamicShare.userVtBalance),
+      lovelace_amount: noAdaDistribution ? '0' : String(dynamicShare.adaShare),
       description: user
         ? `Termination claim for ${dynamicShare.userVtBalance} VT`
         : `Termination claim for unregistered address ${userAddress}`,
@@ -1743,7 +1743,8 @@ export class TerminationService {
       },
     });
 
-    const savedClaim = await this.claimRepository.save(newClaim);
+    const savedClaimArray = await this.claimRepository.save(newClaim);
+    const savedClaim = Array.isArray(savedClaimArray) ? savedClaimArray[0] : savedClaimArray;
 
     // Cache the claim ID to prevent duplicates within 5 minutes
     this.claimCreationCache.set(cacheKey, savedClaim.id);
@@ -2275,8 +2276,8 @@ export class TerminationService {
         { id: claim.id },
         {
           status: ClaimStatus.CLAIMED,
-          amount: Number(txMetadata?.vtAmount || 0),
-          lovelace_amount: Number(adaReceived),
+          amount: String(txMetadata?.vtAmount || '0'),
+          lovelace_amount: String(adaReceived),
           metadata: {
             ...claim.metadata,
             completedAt: new Date().toISOString(),
