@@ -1,16 +1,17 @@
 /**
  * One-time script: mint 100,000,000 L4VA on Cardano mainnet.
  *
- * Policy: time-locked native script — after LOCK_SLOT no minting or burning
- * is possible, ever. Supply is permanently fixed at 100 M (3 decimals).
+ * Policy: sig-only native script — only the ADMIN key can mint or burn.
+ * Supply is fixed at 100 M by organizational commitment; the key goes into cold
+ * storage after minting. Burns remain possible forever via burn-cardano-l4va.ts.
  *
  * Usage:
  *   BLOCKFROST_PROJECT_ID=mainnetXXX \
  *   ADMIN_ADDRESS=addr1... \
- *   ADMIN_S_KEY=ed25519_sk1... \
+ *   ADMIN_S_KEY=ed25519e_sk1... \
  *   npx ts-node src/scripts/mint-cardano-l4va.ts
  *
- * ONLY RUN ONCE. After the lock slot passes the policy is frozen.
+ * ONLY MINT ONCE. Move key to cold storage immediately after.
  */
 
 import type { Assets, Native, PolicyId, Script } from '@lucid-evolution/core-types';
@@ -30,8 +31,6 @@ if (!ADMIN_S_KEY) throw new Error('ADMIN_S_KEY not set');
 const TOKEN_NAME = 'L4VA';
 // 100,000,000 tokens × 10^3 (3 decimals) = 100_000_000_000 base units
 const TOTAL_SUPPLY = 100_000_000_000n;
-// ~48 h; after this slot neither mint nor burn is possible
-const LOCK_SLOT_OFFSET = 172_800;
 
 async function main() {
   const lucid = await Lucid(new Blockfrost(BLOCKFROST_URL, BLOCKFROST_PROJECT_ID), 'Mainnet');
@@ -44,20 +43,13 @@ async function main() {
   console.log('UTXOs:', utxos.length);
   if (utxos.length === 0) throw new Error('Wallet has no UTXOs — fund it with ADA first');
 
-  const currentSlot = lucid.currentSlot();
-  const lockSlot = currentSlot + LOCK_SLOT_OFFSET;
-  console.log(`Current slot : ${currentSlot}`);
-  console.log(`Policy locks : slot ${lockSlot} (~${Math.round(LOCK_SLOT_OFFSET / 3600)}h from now)`);
-
   const { paymentCredential } = getAddressDetails(address);
   if (!paymentCredential) throw new Error('Cannot derive payment credential from address');
 
+  // Sig-only: only this key can mint or burn. Move key to cold storage after minting.
   const nativeScript: Native = {
-    type: 'all',
-    scripts: [
-      { type: 'sig', keyHash: paymentCredential.hash },
-      { type: 'before', slot: lockSlot },
-    ],
+    type: 'sig',
+    keyHash: paymentCredential.hash,
   };
 
   const policy: Script = scriptFromNative(nativeScript);
@@ -76,7 +68,6 @@ async function main() {
     .newTx()
     .mintAssets(assets)
     .attach.MintingPolicy(policy)
-    .validTo(Date.now() + 180_000) // 3 min window
     .addSigner(address)
     .complete();
 
@@ -90,9 +81,9 @@ async function main() {
   console.log('TX hash   :', txHash);
   console.log('Policy ID :', policyId);
   console.log('Asset ID  :', assetId);
-  console.log('Lock slot :', lockSlot);
+  console.log('Lock slot :', '(none — sig-only policy, burn always possible)');
   console.log('\nSave policyId + tokenNameHex — they identify L4VA on Cardano forever.');
-  console.log(`After slot ${lockSlot} the policy is permanently frozen (no mint, no burn).`);
+  console.log('Move ADMIN_S_KEY to cold storage now. Burns remain possible via burn-cardano-l4va.ts.');
 }
 
 main().catch(err => {

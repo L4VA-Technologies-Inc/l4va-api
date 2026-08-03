@@ -24,7 +24,6 @@ if (!ADMIN_S_KEY) throw new Error('ADMIN_S_KEY not set');
 
 const TOKEN_NAME = 'L4VA';
 const TOTAL_SUPPLY = 100_000_000_000n;
-const LOCK_SLOT_OFFSET = 172_800;
 
 async function main() {
   const lucid = await Lucid(new Blockfrost(BLOCKFROST_URL, BLOCKFROST_PROJECT_ID), 'Preprod');
@@ -38,20 +37,13 @@ async function main() {
   if (utxos.length === 0)
     throw new Error('Wallet has no UTXOs — fund via https://docs.cardano.org/cardano-testnets/tools/faucet');
 
-  const currentSlot = lucid.currentSlot();
-  const lockSlot = currentSlot + LOCK_SLOT_OFFSET;
-  console.log(`Current slot : ${currentSlot}`);
-  console.log(`Policy locks : slot ${lockSlot} (~${Math.round(LOCK_SLOT_OFFSET / 3600)}h from now)`);
-
   const { paymentCredential } = getAddressDetails(address);
   if (!paymentCredential) throw new Error('Cannot derive payment credential from address');
 
+  // Sig-only: same key can burn later via burn-cardano-l4va.ts
   const nativeScript: Native = {
-    type: 'all',
-    scripts: [
-      { type: 'sig', keyHash: paymentCredential.hash },
-      { type: 'before', slot: lockSlot },
-    ],
+    type: 'sig',
+    keyHash: paymentCredential.hash,
   };
 
   const policy: Script = scriptFromNative(nativeScript);
@@ -70,7 +62,6 @@ async function main() {
     .newTx()
     .mintAssets(assets)
     .attach.MintingPolicy(policy)
-    .validTo(Date.now() + 180_000)
     .addSigner(address)
     .complete();
 
@@ -84,9 +75,9 @@ async function main() {
   console.log('TX hash   :', txHash);
   console.log('Policy ID :', policyId);
   console.log('Asset ID  :', assetId);
-  console.log('Lock slot :', lockSlot);
+  console.log('Lock slot :', '(none — sig-only policy, burn is always possible)');
   console.log(`\nVerify: https://preprod.cardanoscan.io/transaction/${txHash}`);
-  console.log(`After slot ${lockSlot} the policy is permanently frozen (no mint, no burn).`);
+  console.log('Burn L4VA anytime via burn-cardano-l4va.ts with NETWORK=Preprod.');
 }
 
 main().catch(err => {
