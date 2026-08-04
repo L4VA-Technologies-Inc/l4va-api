@@ -1,5 +1,5 @@
 /**
- * Minimal viem ABI slice for the V3 L4VA Vault (see `vault-contract-solidity/src/Vault.sol`).
+ * Minimal viem ABI slice for the V4 L4VA Vault (see `vault-contract-solidity/src/Vault.sol`).
  * Only entries the backend actually needs:
  *   - read views for state verification pre-broadcast
  *   - write functions the admin key signs (close/cancel/claim batch/refund batch)
@@ -255,10 +255,99 @@ export const VAULT_ABI = [
     outputs: [{ type: 'uint256' }],
   },
 
+  // --- Authority (V4) -------------------------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'authority',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'pendingAuthority',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'proposeAuthorityTransfer',
+    inputs: [{ name: 'newAuthority', type: 'address' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'acceptAuthorityTransfer',
+    inputs: [],
+    outputs: [],
+  },
+
+  // --- Fees (V4) ------------------------------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'withdrawFees',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'accruedFeeNative',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+
   // --- Events (decoded from receipts + Alchemy webhooks) -------------------
   // NOTE: signatures MUST mirror IVault.sol exactly — any drift changes
   // topic0 and makes both `viem.getLogs({event})` and `decodeEventLog` fail
   // silently (returning zero results). See IVault.sol for the source of truth.
+  {
+    type: 'event',
+    name: 'VaultInitialized',
+    inputs: [
+      { name: 'vaultId', type: 'bytes32', indexed: true },
+      { name: 'authority', type: 'address', indexed: true },
+      { name: 'mintingKey', type: 'address', indexed: false },
+      { name: 'vaultToken', type: 'address', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'AuthorityTransferProposed',
+    inputs: [
+      { name: 'current', type: 'address', indexed: true },
+      { name: 'proposed', type: 'address', indexed: true },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'AuthorityTransferred',
+    inputs: [
+      { name: 'previous', type: 'address', indexed: true },
+      { name: 'next', type: 'address', indexed: true },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'FeeAccrued',
+    inputs: [
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'FeeWithdrawn',
+    inputs: [
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
   {
     type: 'event',
     name: 'ContributionMade',
@@ -313,8 +402,6 @@ export const VAULT_ABI = [
     ],
   },
 ] as const;
-
-/** Mirror of `VaultTypes.sol#CycleStatus`. */
 export enum EvmCycleStatus {
   Active = 0,
   Locked = 1,

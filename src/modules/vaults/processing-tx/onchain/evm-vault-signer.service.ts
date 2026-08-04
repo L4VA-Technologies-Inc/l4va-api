@@ -14,11 +14,12 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 // ---------------------------------------------------------------------------
-// ABI parameter definitions — mirrors V3 VaultTypes.sol exactly.
-// V3 removes all rate tables from CycleConfig: pricing and per-wallet
-// allocations are computed off-chain and committed at closeCycle as a
-// Merkle root. Keep in sync with the Solidity structs if the contract is
-// ever upgraded.
+// ABI parameter definitions — mirrors V4 VaultTypes.sol exactly.
+// V4 changes vs V3:
+//   - added `archetype` (bytes32) and `vaultDeployer` (address) for deployer-registry
+//   - `admin` split into `creationApprover` (signs config, no runtime power)
+//     and `authority` (runtime lifecycle power, two-step transferable)
+// Keep in sync with the Solidity structs if the contract is ever upgraded.
 // ---------------------------------------------------------------------------
 
 const TIME_WINDOW = {
@@ -48,8 +49,11 @@ const VAULT_CONFIG_ABI = [
     type: 'tuple' as const,
     components: [
       { name: 'vaultId', type: 'bytes32' as const },
+      { name: 'archetype', type: 'bytes32' as const },
+      { name: 'vaultDeployer', type: 'address' as const },
       { name: 'creator', type: 'address' as const },
-      { name: 'admin', type: 'address' as const },
+      { name: 'creationApprover', type: 'address' as const },
+      { name: 'authority', type: 'address' as const },
       { name: 'mintingKey', type: 'address' as const },
       { name: 'treasury', type: 'address' as const },
       { name: 'vtName', type: 'string' as const },
@@ -75,8 +79,11 @@ export interface EvmCycleConfig {
 
 export interface EvmVaultConfig {
   vaultId: Hex;
+  archetype: Hex;
+  vaultDeployer: Address;
   creator: Address;
-  admin: Address;
+  creationApprover: Address;
+  authority: Address;
   mintingKey: Address;
   treasury: Address;
   vtName: string;
@@ -300,8 +307,11 @@ export class EvmVaultSignerService {
 
     return {
       vaultId: evmVaultId,
+      archetype: '0x6261746368000000000000000000000000000000000000000000000000000000' as Hex, // keccak256("batch") prefix — matches batchDeployer.BATCH()
+      vaultDeployer: this.configService.get<string>('EVM_BATCH_DEPLOYER_ADDRESS') as Address,
       creator: creatorAddress,
-      admin: this.adminAddress,
+      creationApprover: this.adminAddress,
+      authority: this.adminAddress,
       mintingKey: this.mintingSignerAddress,
       treasury: this.treasuryAddress,
       vtName: data.name,
