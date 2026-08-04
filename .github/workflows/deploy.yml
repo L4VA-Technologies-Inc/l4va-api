@@ -39,15 +39,16 @@ jobs:
         run: |
           APPS_ROOT=~/apps-testnet
           CONTAINER_PREFIX=l4va-testnet
-          mkdir -p "$APPS_ROOT/logs/l4va-api"
+          LOG_DIR="$APPS_ROOT/logs/l4va-api"
+          sudo mkdir -p "$LOG_DIR"
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
           if [ "$ACTIVE_PORT" = "3100" ]; then
             ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-blue"
           else
             ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-green"
           fi
-          docker logs "$ACTIVE_CONTAINER" > "$APPS_ROOT/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log" 2>&1 || true
-          cd "$APPS_ROOT/logs/l4va-api" && ls -t | tail -n +11 | xargs -r rm -f
+          sudo bash -c "docker logs \"$ACTIVE_CONTAINER\" > \"$LOG_DIR/$(date +\"%Y%m%d_%H%M%S\").log\" 2>&1 || true"
+          sudo bash -c "cd \"$LOG_DIR\" && ls -t | tail -n +11 | xargs -r rm -f"
 
       - name: Copy code to apps/l4va-api
         run: |
@@ -191,15 +192,16 @@ jobs:
         run: |
           APPS_ROOT=~/apps
           CONTAINER_PREFIX=l4va
-          mkdir -p "$APPS_ROOT/logs/l4va-api"
+          LOG_DIR="$APPS_ROOT/logs/l4va-api"
+          sudo mkdir -p "$LOG_DIR"
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/app.l4va.org)
           if [ "$ACTIVE_PORT" = "3000" ]; then
             ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-blue"
           else
             ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-green"
           fi
-          docker logs "$ACTIVE_CONTAINER" > "$APPS_ROOT/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log" 2>&1 || true
-          cd "$APPS_ROOT/logs/l4va-api" && ls -t | tail -n +11 | xargs -r rm -f
+          sudo bash -c "docker logs \"$ACTIVE_CONTAINER\" > \"$LOG_DIR/$(date +\"%Y%m%d_%H%M%S\").log\" 2>&1 || true"
+          sudo bash -c "cd \"$LOG_DIR\" && ls -t | tail -n +11 | xargs -r rm -f"
 
       - name: Copy code to apps/l4va-api
         run: |
