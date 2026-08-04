@@ -37,44 +37,58 @@ jobs:
 
       - name: Save logs before deploy
         run: |
-          mkdir -p ~/apps/logs/l4va-api
+          APPS_ROOT=~/apps-testnet
+          CONTAINER_PREFIX=l4va-testnet
+          mkdir -p "$APPS_ROOT/logs/l4va-api"
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
-          if [ "$ACTIVE_PORT" = "3000" ]; then
-            ACTIVE_CONTAINER=l4va-api-blue
+          if [ "$ACTIVE_PORT" = "3100" ]; then
+            ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-blue"
           else
-            ACTIVE_CONTAINER=l4va-api-green
+            ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-green"
           fi
-          docker logs $ACTIVE_CONTAINER > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
-          cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
+          docker logs "$ACTIVE_CONTAINER" > "$APPS_ROOT/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log" 2>&1 || true
+          cd "$APPS_ROOT/logs/l4va-api" && ls -t | tail -n +11 | xargs -r rm -f
 
       - name: Copy code to apps/l4va-api
         run: |
-          mkdir -p ~/apps/l4va-api
+          APPS_ROOT=~/apps-testnet
+          APP_DIR="$APPS_ROOT/l4va-api"
+          mkdir -p "$APP_DIR"
           # Remove old src files to prevent stale files (e.g., renamed .js -> .ts)
-          rm -rf ~/apps/l4va-api/src
+          rm -rf "$APP_DIR/src"
           # Install rsync if not available
           if ! command -v rsync &> /dev/null; then
             sudo apt-get update && sudo apt-get install -y rsync
           fi
           # Copy all files from workspace
-          rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' $GITHUB_WORKSPACE/ ~/apps/l4va-api/
+          rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' "$GITHUB_WORKSPACE/" "$APP_DIR/"
           # Copy environment-specific files (credentials are in .env, no files needed)
-          cp $GITHUB_WORKSPACE/.env ~/apps/l4va-api/.env
+          cp "$GITHUB_WORKSPACE/.env" "$APP_DIR/.env"
 
       - name: Zero downtime deploy (blue-green)
         run: |
-          cd ~/apps/l4va-api
+          APPS_ROOT=~/apps-testnet
+          APP_DIR="$APPS_ROOT/l4va-api"
+          export CONTAINER_PREFIX=l4va-testnet
+          export L4VA_NETWORK_NAME=l4va-testnet-network
+          export REDIS_HOST=l4va-testnet-redis
+          export API_BLUE_HOST_PORT=3100
+          export API_GREEN_HOST_PORT=3101
+
+          cd "$APP_DIR"
 
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
 
-          if [ "$ACTIVE_PORT" = "3000" ]; then
-            NEW_PORT=3001
+          if [ "$ACTIVE_PORT" = "3100" ]; then
+            NEW_PORT=3101
             NEW_CONTAINER=l4va-api-green
-            OLD_CONTAINER=l4va-api-blue
+            NEW_CONTAINER_NAME=$CONTAINER_PREFIX-api-green
+            OLD_CONTAINER_NAME=$CONTAINER_PREFIX-api-blue
           else
-            NEW_PORT=3000
+            NEW_PORT=3100
             NEW_CONTAINER=l4va-api-blue
-            OLD_CONTAINER=l4va-api-green
+            NEW_CONTAINER_NAME=$CONTAINER_PREFIX-api-blue
+            OLD_CONTAINER_NAME=$CONTAINER_PREFIX-api-green
           fi
 
           echo "Active port: $ACTIVE_PORT"
@@ -89,7 +103,7 @@ jobs:
           SECRETS_LOADED=false
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
-            LOGS=$(docker logs $NEW_CONTAINER 2>&1)
+            LOGS=$(docker logs "$NEW_CONTAINER_NAME" 2>&1)
             if echo "$LOGS" | grep -q "Secrets loaded successfully"; then
               SECRETS_LOADED=true
               echo " Secrets loaded successfully (attempt $ATTEMPT/$MAX_ATTEMPTS)"
@@ -97,8 +111,8 @@ jobs:
             fi
             if echo "$LOGS" | grep -q "Failed to load secrets.*FATAL\|FATAL.*Cannot proceed"; then
               echo " Secrets loading failed with error:"
-              docker logs $NEW_CONTAINER --tail 50
-              docker stop $NEW_CONTAINER || true
+              docker logs "$NEW_CONTAINER_NAME" --tail 50
+              docker stop "$NEW_CONTAINER_NAME" || true
               exit 1
             fi
             echo "Waiting for secrets... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
@@ -108,16 +122,16 @@ jobs:
           if [ "$SECRETS_LOADED" = false ]; then
             echo " TIMEOUT: Secrets did not load within $(($MAX_ATTEMPTS * 2)) seconds"
             echo "Container logs (last 100 lines):"
-            docker logs $NEW_CONTAINER --tail 100
-            docker stop $NEW_CONTAINER || true
+            docker logs "$NEW_CONTAINER_NAME" --tail 100
+            docker stop "$NEW_CONTAINER_NAME" || true
             exit 1
           fi
 
           echo "Running migrations..."
-          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
+          docker exec "$NEW_CONTAINER_NAME" npm run migration:run:gcp || {
             echo "Migration failed"
-            docker logs $NEW_CONTAINER --tail 100
-            docker stop $NEW_CONTAINER || true
+            docker logs "$NEW_CONTAINER_NAME" --tail 100
+            docker stop "$NEW_CONTAINER_NAME" || true
             exit 1
           }
 
@@ -129,9 +143,9 @@ jobs:
             if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
               echo "Health check failed after $MAX_ATTEMPTS attempts"
               echo "Container logs:"
-              docker logs $NEW_CONTAINER --tail 100
+              docker logs "$NEW_CONTAINER_NAME" --tail 100
               echo "Stopping failed container..."
-              docker stop $NEW_CONTAINER || true
+              docker stop "$NEW_CONTAINER_NAME" || true
               exit 1
             fi
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
@@ -142,7 +156,7 @@ jobs:
           sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/testnet.l4va.org
           sudo nginx -s reload
 
-          docker stop $OLD_CONTAINER || true
+          docker stop "$OLD_CONTAINER_NAME" || true
 
       - name: Cleanup Docker resources
         run: |
@@ -175,44 +189,58 @@ jobs:
 
       - name: Save logs before deploy
         run: |
-          mkdir -p ~/apps/logs/l4va-api
+          APPS_ROOT=~/apps
+          CONTAINER_PREFIX=l4va
+          mkdir -p "$APPS_ROOT/logs/l4va-api"
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/app.l4va.org)
           if [ "$ACTIVE_PORT" = "3000" ]; then
-            ACTIVE_CONTAINER=l4va-api-blue
+            ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-blue"
           else
-            ACTIVE_CONTAINER=l4va-api-green
+            ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-green"
           fi
-          docker logs $ACTIVE_CONTAINER > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
-          cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
+          docker logs "$ACTIVE_CONTAINER" > "$APPS_ROOT/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log" 2>&1 || true
+          cd "$APPS_ROOT/logs/l4va-api" && ls -t | tail -n +11 | xargs -r rm -f
 
       - name: Copy code to apps/l4va-api
         run: |
-          mkdir -p ~/apps/l4va-api
+          APPS_ROOT=~/apps
+          APP_DIR="$APPS_ROOT/l4va-api"
+          mkdir -p "$APP_DIR"
           # Remove old src files to prevent stale files (e.g., renamed .js -> .ts)
-          rm -rf ~/apps/l4va-api/src
+          rm -rf "$APP_DIR/src"
           # Install rsync if not available
           if ! command -v rsync &> /dev/null; then
             sudo apt-get update && sudo apt-get install -y rsync
           fi
           # Copy all files from workspace
-          rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' $GITHUB_WORKSPACE/ ~/apps/l4va-api/
+          rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' "$GITHUB_WORKSPACE/" "$APP_DIR/"
           # Copy environment-specific files (credentials are in .env, no files needed)
-          cp $GITHUB_WORKSPACE/.env ~/apps/l4va-api/.env
+          cp "$GITHUB_WORKSPACE/.env" "$APP_DIR/.env"
 
       - name: Zero downtime deploy (blue-green)
         run: |
-          cd ~/apps/l4va-api
+          APPS_ROOT=~/apps
+          APP_DIR="$APPS_ROOT/l4va-api"
+          export CONTAINER_PREFIX=l4va
+          export L4VA_NETWORK_NAME=l4va-network
+          export REDIS_HOST=l4va-redis
+          export API_BLUE_HOST_PORT=3000
+          export API_GREEN_HOST_PORT=3001
+
+          cd "$APP_DIR"
 
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/app.l4va.org)
 
           if [ "$ACTIVE_PORT" = "3000" ]; then
             NEW_PORT=3001
             NEW_CONTAINER=l4va-api-green
-            OLD_CONTAINER=l4va-api-blue
+            NEW_CONTAINER_NAME=$CONTAINER_PREFIX-api-green
+            OLD_CONTAINER_NAME=$CONTAINER_PREFIX-api-blue
           else
             NEW_PORT=3000
             NEW_CONTAINER=l4va-api-blue
-            OLD_CONTAINER=l4va-api-green
+            NEW_CONTAINER_NAME=$CONTAINER_PREFIX-api-blue
+            OLD_CONTAINER_NAME=$CONTAINER_PREFIX-api-green
           fi
 
           echo "Active port: $ACTIVE_PORT"
@@ -227,7 +255,7 @@ jobs:
           SECRETS_LOADED=false
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
-            LOGS=$(docker logs $NEW_CONTAINER 2>&1)
+            LOGS=$(docker logs "$NEW_CONTAINER_NAME" 2>&1)
             if echo "$LOGS" | grep -q "Secrets loaded successfully"; then
               SECRETS_LOADED=true
               echo " Secrets loaded successfully (attempt $ATTEMPT/$MAX_ATTEMPTS)"
@@ -235,8 +263,8 @@ jobs:
             fi
             if echo "$LOGS" | grep -q "Failed to load secrets.*FATAL\|FATAL.*Cannot proceed"; then
               echo " Secrets loading failed with error:"
-              docker logs $NEW_CONTAINER --tail 50
-              docker stop $NEW_CONTAINER || true
+              docker logs "$NEW_CONTAINER_NAME" --tail 50
+              docker stop "$NEW_CONTAINER_NAME" || true
               exit 1
             fi
             echo "Waiting for secrets... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
@@ -246,16 +274,16 @@ jobs:
           if [ "$SECRETS_LOADED" = false ]; then
             echo " TIMEOUT: Secrets did not load within $(($MAX_ATTEMPTS * 2)) seconds"
             echo "Container logs (last 100 lines):"
-            docker logs $NEW_CONTAINER --tail 100
-            docker stop $NEW_CONTAINER || true
+            docker logs "$NEW_CONTAINER_NAME" --tail 100
+            docker stop "$NEW_CONTAINER_NAME" || true
             exit 1
           fi
 
           echo "Running migrations..."
-          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
+          docker exec "$NEW_CONTAINER_NAME" npm run migration:run:gcp || {
             echo "Migration failed"
-            docker logs $NEW_CONTAINER --tail 100
-            docker stop $NEW_CONTAINER || true
+            docker logs "$NEW_CONTAINER_NAME" --tail 100
+            docker stop "$NEW_CONTAINER_NAME" || true
             exit 1
           }
 
@@ -267,9 +295,9 @@ jobs:
             if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
               echo "Health check failed after $MAX_ATTEMPTS attempts"
               echo "Container logs:"
-              docker logs $NEW_CONTAINER --tail 100
+              docker logs "$NEW_CONTAINER_NAME" --tail 100
               echo "Stopping failed container..."
-              docker stop $NEW_CONTAINER || true
+              docker stop "$NEW_CONTAINER_NAME" || true
               exit 1
             fi
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
@@ -280,7 +308,7 @@ jobs:
           sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/app.l4va.org
           sudo nginx -s reload
 
-          docker stop $OLD_CONTAINER || true
+          docker stop "$OLD_CONTAINER_NAME" || true
 
       - name: Cleanup Docker resources
         run: |
