@@ -14,7 +14,7 @@
  * For preprod set NETWORK=Preprod and use preprod Blockfrost project ID.
  */
 
-import type { Assets, Native, Script, UTxO } from '@lucid-evolution/core-types';
+import type { Native, Script, UTxO } from '@lucid-evolution/core-types';
 import { Lucid, Blockfrost } from '@lucid-evolution/lucid';
 import { getAddressDetails, mintingPolicyToId, scriptFromNative } from '@lucid-evolution/utils';
 
