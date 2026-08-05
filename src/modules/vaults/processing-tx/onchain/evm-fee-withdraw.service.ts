@@ -72,7 +72,6 @@ export class EvmFeeWithdrawService {
           });
     } catch {
       // Contract predates V4 fee tracking — silently skip rather than spam logs.
-      this.logger.debug(`withdrawFees: vault ${vaultId} contract does not support fee views, skipping`);
       return null;
     }
 

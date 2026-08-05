@@ -1,15 +1,10 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { toHex, type Address, type Hex } from 'viem';
 
 import { ADAPTER_REGISTRY_ABI } from './adapter-registry.abi';
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
-
-import { Transaction } from '@/database/transaction.entity';
-import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 export interface AdapterApproveResult {
   txHash: Hex;
@@ -19,10 +14,10 @@ export interface AdapterApproveResult {
 
 /**
  * Admin service for AdapterRegistry.sol.
- * Separate from EvmAdminSigner because it operates on the shared registry
- * contract (one address per factory deployment) rather than individual vaults.
+ * Registry calls are infrastructure-level (no vault_id) so no Transaction rows
+ * are created — the tx hash is returned directly to the caller.
  */
-// Minimal ABI slice — VaultFactory.adapterRegistry() view.
+// Minimal VaultFactory ABI slice — adapterRegistry() view.
 const FACTORY_ABI = [
   { type: 'function', stateMutability: 'view', name: 'adapterRegistry', inputs: [], outputs: [{ type: 'address' }] },
 ] as const;
@@ -34,7 +29,6 @@ export class EvmAdapterRegistryService implements OnModuleInit {
   private readonly factoryAddress: Address | null;
 
   constructor(
-    @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
     configService: ConfigService
@@ -74,25 +68,11 @@ export class EvmAdapterRegistryService implements OnModuleInit {
 
   /** Approve an adapter. `tag` is a short label encoded as bytes32. */
   async approveAdapter(adapter: Address, tagLabel: string): Promise<AdapterApproveResult> {
-    // Encode label as right-padded bytes32 (max 31 chars to leave room for null terminator)
     const tag = toHex(tagLabel.slice(0, 31), { size: 32 }) as Hex;
 
-    const alreadyApproved = await this.isApproved(adapter);
-    if (alreadyApproved) {
+    if (await this.isApproved(adapter)) {
       this.logger.warn(`Adapter ${adapter} is already approved — idempotent no-op`);
     }
-
-    const adminTx = this.transactionsRepository.create({
-      type: TransactionType.evmOpenPosition, // reuse closest type; no vault_id for registry ops
-      status: TransactionStatus.pending,
-      from_address: this.adminSigner.address,
-      to_address: this.registryAddress,
-      reconciliation_status: EvmReconciliationStatus.pending,
-      reconciliation_attempts: 0,
-      expected_events: [{ name: 'AdapterApproved', count: 1 }],
-      metadata: { adapter, tag },
-    });
-    await this.transactionsRepository.save(adminTx);
 
     let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
     try {
@@ -103,43 +83,12 @@ export class EvmAdapterRegistryService implements OnModuleInit {
           functionName: 'approveAdapter',
           args: [adapter, tag],
         },
-        ['AdapterApproved'],
-        async hash => {
-          await this.transactionsRepository.update(
-            { id: adminTx.id },
-            { tx_hash: hash, status: TransactionStatus.submitted }
-          );
-        }
+        ['AdapterApproved']
       );
     } catch (err) {
-      if (err instanceof TxRevertedError) {
-        await this.transactionsRepository.update(
-          { id: adminTx.id },
-          {
-            status: TransactionStatus.failed,
-            tx_hash: err.hash,
-            reconciliation_status: EvmReconciliationStatus.failed,
-            reconciliation_last_error: `approveAdapter reverted: ${err.message.slice(0, 500)}`,
-          }
-        );
-        throw err;
-      }
-      await this.transactionsRepository.update(
-        { id: adminTx.id },
-        { reconciliation_last_error: `broadcast/receipt: ${(err as Error).message?.slice(0, 500)}` }
-      );
+      if (err instanceof TxRevertedError) this.logger.error(`approveAdapter reverted: ${err.message}`);
       throw err;
     }
-
-    await this.transactionsRepository.update(
-      { id: adminTx.id },
-      {
-        status: TransactionStatus.confirmed,
-        reconciliation_status: EvmReconciliationStatus.success,
-        reconciled_at: new Date(),
-        reconciliation_last_error: null,
-      }
-    );
 
     this.logger.log(`approveAdapter confirmed adapter=${adapter} tag=${tagLabel} tx=${result.hash}`);
     return { txHash: result.hash, adapter, tag };
@@ -150,59 +99,16 @@ export class EvmAdapterRegistryService implements OnModuleInit {
       throw new BadRequestException(`Adapter ${adapter} is not currently approved`);
     }
 
-    const adminTx = this.transactionsRepository.create({
-      type: TransactionType.evmOpenPosition,
-      status: TransactionStatus.pending,
-      from_address: this.adminSigner.address,
-      to_address: this.registryAddress,
-      reconciliation_status: EvmReconciliationStatus.pending,
-      reconciliation_attempts: 0,
-      expected_events: [{ name: 'AdapterRevoked', count: 1 }],
-      metadata: { adapter },
-    });
-    await this.transactionsRepository.save(adminTx);
-
     let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
     try {
       result = await this.adminSigner.sendAndConfirm(
         { address: this.registryAddress, abi: ADAPTER_REGISTRY_ABI, functionName: 'revokeAdapter', args: [adapter] },
-        ['AdapterRevoked'],
-        async hash => {
-          await this.transactionsRepository.update(
-            { id: adminTx.id },
-            { tx_hash: hash, status: TransactionStatus.submitted }
-          );
-        }
+        ['AdapterRevoked']
       );
     } catch (err) {
-      if (err instanceof TxRevertedError) {
-        await this.transactionsRepository.update(
-          { id: adminTx.id },
-          {
-            status: TransactionStatus.failed,
-            tx_hash: err.hash,
-            reconciliation_status: EvmReconciliationStatus.failed,
-            reconciliation_last_error: `revokeAdapter reverted: ${err.message.slice(0, 500)}`,
-          }
-        );
-        throw err;
-      }
-      await this.transactionsRepository.update(
-        { id: adminTx.id },
-        { reconciliation_last_error: `broadcast/receipt: ${(err as Error).message?.slice(0, 500)}` }
-      );
+      if (err instanceof TxRevertedError) this.logger.error(`revokeAdapter reverted: ${err.message}`);
       throw err;
     }
-
-    await this.transactionsRepository.update(
-      { id: adminTx.id },
-      {
-        status: TransactionStatus.confirmed,
-        reconciliation_status: EvmReconciliationStatus.success,
-        reconciled_at: new Date(),
-        reconciliation_last_error: null,
-      }
-    );
 
     this.logger.log(`revokeAdapter confirmed adapter=${adapter} tx=${result.hash}`);
     return { txHash: result.hash };
