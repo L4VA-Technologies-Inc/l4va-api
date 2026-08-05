@@ -54,7 +54,8 @@ jobs:
         run: |
           APPS_ROOT=~/apps-testnet
           APP_DIR="$APPS_ROOT/l4va-api"
-          mkdir -p "$APP_DIR"
+          sudo mkdir -p "$APP_DIR"
+          sudo chown -R "$(id -u):$(id -g)" "$APP_DIR"
           # Remove old src files to prevent stale files (e.g., renamed .js -> .ts)
           rm -rf "$APP_DIR/src"
           # Install rsync if not available
@@ -70,6 +71,7 @@ jobs:
         run: |
           APPS_ROOT=~/apps-testnet
           APP_DIR="$APPS_ROOT/l4va-api"
+          COMPOSE_PROJECT_NAME=l4va-api-testnet
           export CONTAINER_PREFIX=l4va-testnet
           export L4VA_NETWORK_NAME=l4va-testnet-network
           export REDIS_HOST=l4va-testnet-redis
@@ -95,8 +97,8 @@ jobs:
           echo "Active port: $ACTIVE_PORT"
           echo "Deploying to port: $NEW_PORT"
 
-          docker compose build $NEW_CONTAINER
-          docker compose up -d $NEW_CONTAINER
+          docker compose -p "$COMPOSE_PROJECT_NAME" build $NEW_CONTAINER
+          docker compose -p "$COMPOSE_PROJECT_NAME" up -d $NEW_CONTAINER
 
           echo "Waiting for secrets to load..."
           MAX_ATTEMPTS=30
@@ -207,7 +209,8 @@ jobs:
         run: |
           APPS_ROOT=~/apps
           APP_DIR="$APPS_ROOT/l4va-api"
-          mkdir -p "$APP_DIR"
+          sudo mkdir -p "$APP_DIR"
+          sudo chown -R "$(id -u):$(id -g)" "$APP_DIR"
           # Remove old src files to prevent stale files (e.g., renamed .js -> .ts)
           rm -rf "$APP_DIR/src"
           # Install rsync if not available
@@ -223,6 +226,7 @@ jobs:
         run: |
           APPS_ROOT=~/apps
           APP_DIR="$APPS_ROOT/l4va-api"
+          COMPOSE_PROJECT_NAME=l4va-api-prod
           export CONTAINER_PREFIX=l4va
           export L4VA_NETWORK_NAME=l4va-network
           export REDIS_HOST=l4va-redis
@@ -248,8 +252,8 @@ jobs:
           echo "Active port: $ACTIVE_PORT"
           echo "Deploying to port: $NEW_PORT"
 
-          docker compose build $NEW_CONTAINER
-          docker compose up -d $NEW_CONTAINER
+          docker compose -p "$COMPOSE_PROJECT_NAME" build $NEW_CONTAINER
+          docker compose -p "$COMPOSE_PROJECT_NAME" up -d $NEW_CONTAINER
 
           echo "Waiting for secrets to load..."
           MAX_ATTEMPTS=30
