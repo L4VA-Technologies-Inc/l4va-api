@@ -27,6 +27,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmSnapshotService } from './evm-snapshot.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { SnapshotService } from './snapshot.service';
@@ -56,7 +57,7 @@ import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
 /*
@@ -142,7 +143,8 @@ export class GovernanceService {
     private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly snapshotService: SnapshotService
+    private readonly snapshotService: SnapshotService,
+    private readonly evmSnapshotService: EvmSnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -214,8 +216,26 @@ export class GovernanceService {
       const failed = results.filter(r => r.status === 'rejected').length;
 
       this.logger.log(`Daily snapshot creation completed: ${successful} successful, ${failed} failed`);
+
+      // EVM vaults: scan VaultToken Transfer events to build holder snapshots.
+      await this.createDailyEvmSnapshots();
     } catch (error) {
       this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
+    }
+  }
+
+  private async createDailyEvmSnapshots(): Promise<void> {
+    try {
+      const evmVaults = await this.evmSnapshotService.findEligibleVaults();
+      if (evmVaults.length === 0) return;
+
+      this.logger.log(`Creating EVM snapshots for ${evmVaults.length} vault(s)`);
+      const results = await Promise.allSettled(evmVaults.map(v => this.evmSnapshotService.createSnapshot(v.id)));
+      const ok = results.filter(r => r.status === 'fulfilled').length;
+      const fail = results.filter(r => r.status === 'rejected').length;
+      this.logger.log(`EVM snapshot creation: ${ok} successful, ${fail} failed`);
+    } catch (err) {
+      this.logger.error(`EVM daily snapshot sweep failed: ${(err as Error).message}`);
     }
   }
 
@@ -440,6 +460,7 @@ export class GovernanceService {
       | 'name'
       | 'assets_whitelist'
       | 'is_expandable_asset_whitelist'
+      | 'chain_type'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -450,6 +471,7 @@ export class GovernanceService {
         'name',
         'assets_whitelist',
         'is_expandable_asset_whitelist',
+        'chain_type',
       ],
       relations: ['assets_whitelist'],
     });
@@ -479,10 +501,19 @@ export class GovernanceService {
       }
     }
 
-    const latestSnapshot = await this.snapshotRepository.findOne({
+    let latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
+
+    // EVM vault: create a fresh snapshot on-demand if none exists yet.
+    if (!latestSnapshot && vault.chain_type === ChainType.robinhood) {
+      try {
+        latestSnapshot = await this.evmSnapshotService.createSnapshot(vaultId);
+      } catch (err) {
+        throw new BadRequestException(`Could not create voting snapshot for EVM vault: ${(err as Error).message}`);
+      }
+    }
 
     // Get user early as we'll need their address for potential fee transaction
     const user = await this.userRepository.findOneBy({ id: userId });
