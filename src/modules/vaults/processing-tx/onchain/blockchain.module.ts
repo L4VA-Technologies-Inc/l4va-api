@@ -10,14 +10,19 @@ import { TransactionsModule } from '../offchain-tx/transactions.module';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
+import { EvmAdapterRegistryService } from './evm-adapter-registry.service';
 import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmAirdropOrchestrator } from './evm-airdrop-orchestrator.service';
 import { EvmAllocationService } from './evm-allocation.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
+import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
+import { EvmOpenCycleService } from './evm-open-cycle.service';
+import { EvmPositionService } from './evm-position.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
+import { EvmTerminationService } from './evm-termination.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { EvmVaultSignerService } from './evm-vault-signer.service';
@@ -84,6 +89,11 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmVaultEventReconciler,
     EvmContributionBackfillService,
     EvmWebhookService,
+    EvmOpenCycleService,
+    EvmFeeWithdrawService,
+    EvmPositionService,
+    EvmTerminationService,
+    EvmAdapterRegistryService,
     VaultManagingService,
     TransactionHealthService,
   ],
@@ -102,6 +112,11 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmContributionBackfillService,
+    EvmOpenCycleService,
+    EvmFeeWithdrawService,
+    EvmPositionService,
+    EvmTerminationService,
+    EvmAdapterRegistryService,
   ],
 })
 export class BlockchainModule {}

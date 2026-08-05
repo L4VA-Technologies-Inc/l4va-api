@@ -8,6 +8,7 @@ import { In, Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
+import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
@@ -19,6 +20,7 @@ import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
+import { ChainType } from '@/types/vault.types';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
@@ -74,7 +76,8 @@ export class GovernanceExecutionService {
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -594,6 +597,11 @@ export class GovernanceExecutionService {
     if (!vault) {
       this.logger.error(`Vault ${proposal.vaultId} not found`);
       return false;
+    }
+
+    // EVM vaults: delegate entirely to the EVM execution service.
+    if (vault.chain_type === ChainType.robinhood) {
+      return this.evmGovernanceExecutionService.executeProposal(proposal, vault);
     }
 
     // Proposals that require vault to be LOCKED can only execute in that status
