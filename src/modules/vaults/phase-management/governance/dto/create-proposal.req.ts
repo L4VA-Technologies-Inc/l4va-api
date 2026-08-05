@@ -108,6 +108,8 @@ export enum ExecType {
   SELL = 'SELL',
   UNLIST = 'UNLIST',
   UPDATE_LISTING = 'UPDATE_LISTING',
+  /** EVM only — close an open adapter position by positionId. */
+  CLOSE_POSITION = 'CLOSE_POSITION',
 }
 
 export enum SellType {

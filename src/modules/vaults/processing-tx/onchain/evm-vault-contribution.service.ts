@@ -9,6 +9,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { VAULT_ABI } from './vault.abi';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 
 import { Transaction } from '@/database/transaction.entity';
@@ -172,6 +173,13 @@ export class EvmVaultContributionService {
     if (!vault.contract_address) {
       throw new BadRequestException('Vault contract address is not set — the vault may not yet be created on-chain');
     }
+
+    const isPaused = (await this.contractReader.publicClient.readContract({
+      address: vault.contract_address as Address,
+      abi: VAULT_ABI,
+      functionName: 'paused',
+    })) as boolean;
+    if (isPaused) throw new BadRequestException('Vault is paused — contributions are temporarily suspended');
 
     const contributor = transaction.user?.address as Address | undefined;
     if (!contributor) throw new BadRequestException('User has no EVM address on record');

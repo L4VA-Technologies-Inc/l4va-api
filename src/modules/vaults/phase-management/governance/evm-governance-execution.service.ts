@@ -9,6 +9,7 @@ import {
   buildOperationId,
   encodeMockAdapterParams,
   EvmPositionService,
+  type ClosePositionParams,
 } from '../../processing-tx/onchain/evm-position.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
@@ -139,6 +140,15 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
     for (let i = 0; i < actions.length; i++) {
       const action = actions[i];
+
+      // CLOSE_POSITION: unwind an existing adapter position.
+      if (action.exec === 'CLOSE_POSITION') {
+        const ok = await this.executeClosePosition(proposal, vault, action, i);
+        if (!ok) return false;
+        continue;
+      }
+
+      // Default: open a new Uniswap swap position.
       const tokenIn: Address = action.inputAsset ?? action.policyId ?? '0x0000000000000000000000000000000000000000';
       const tokenOut: Address =
         action.expectedOutputAsset ?? action.outputAsset ?? '0x0000000000000000000000000000000000000000';
@@ -179,6 +189,60 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     }
 
     return true;
+  }
+
+  private async executeClosePosition(
+    proposal: Proposal,
+    vault: Vault,
+    action: any,
+    actionIndex: number
+  ): Promise<boolean> {
+    const positionId = BigInt(action.positionId ?? 0);
+    if (positionId === 0n) {
+      this.logger.error(`Proposal ${proposal.id} action[${actionIndex}]: CLOSE_POSITION missing positionId`);
+      return false;
+    }
+
+    // positionAsset = token we hold in the position; underlyingAsset = what we swap back to.
+    const positionAsset: Address = action.positionAsset ?? '0x0000000000000000000000000000000000000000';
+    const underlyingAsset: Address = action.underlyingAsset ?? '0x0000000000000000000000000000000000000000';
+    const positionAmount = BigInt(action.positionAmount ?? 0);
+
+    if (positionAmount === 0n || positionAsset === underlyingAsset) {
+      this.logger.error(`Proposal ${proposal.id} action[${actionIndex}]: CLOSE_POSITION invalid amounts`);
+      return false;
+    }
+
+    try {
+      // Quote the reverse swap to compute minUnderlyingReturned.
+      const quote = await this.uniswapQuoteService.quoteExactInput(
+        positionAsset,
+        underlyingAsset,
+        positionAmount,
+        this.swapSlippageBps,
+        action.feeTier
+      );
+
+      const closeParams: ClosePositionParams = {
+        positionId,
+        minUnderlyingReturned: quote.minAmountOut,
+        deadline: 0n,
+        protocolParams: quote.protocolParams,
+      };
+
+      await this.positionService.closePosition(vault.id, closeParams);
+
+      this.logger.log(
+        `Proposal ${proposal.id} action[${actionIndex}]: closePosition id=${positionId} ` +
+          `${positionAsset}→${underlyingAsset} minReturn=${quote.minAmountOut} — ok`
+      );
+      return true;
+    } catch (err) {
+      this.logger.error(
+        `Proposal ${proposal.id} action[${actionIndex}]: closePosition failed — ${(err as Error).message}`
+      );
+      return false;
+    }
   }
 
   private async executeMarketActionMock(proposal: Proposal, vault: Vault, actions: any[]): Promise<boolean> {

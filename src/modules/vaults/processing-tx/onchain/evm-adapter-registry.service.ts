@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -22,10 +22,16 @@ export interface AdapterApproveResult {
  * Separate from EvmAdminSigner because it operates on the shared registry
  * contract (one address per factory deployment) rather than individual vaults.
  */
+// Minimal ABI slice — VaultFactory.adapterRegistry() view.
+const FACTORY_ABI = [
+  { type: 'function', stateMutability: 'view', name: 'adapterRegistry', inputs: [], outputs: [{ type: 'address' }] },
+] as const;
+
 @Injectable()
-export class EvmAdapterRegistryService {
+export class EvmAdapterRegistryService implements OnModuleInit {
   private readonly logger = new Logger(EvmAdapterRegistryService.name);
-  private readonly registryAddress: Address;
+  private registryAddress: Address;
+  private readonly factoryAddress: Address | null;
 
   constructor(
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
@@ -34,8 +40,27 @@ export class EvmAdapterRegistryService {
     configService: ConfigService
   ) {
     const raw = configService.get<string>('EVM_ADAPTER_REGISTRY_ADDRESS');
-    if (!raw) throw new Error('EVM_ADAPTER_REGISTRY_ADDRESS is not configured');
-    this.registryAddress = raw as Address;
+    this.registryAddress = (raw ?? '') as Address;
+    const factory = configService.get<string>('EVM_FACTORY_ADDRESS');
+    this.factoryAddress = factory ? (factory as Address) : null;
+  }
+
+  /** Resolve registry address from chain if the env var was not set. */
+  async onModuleInit(): Promise<void> {
+    if (this.registryAddress) return;
+    if (!this.factoryAddress) {
+      throw new Error('EVM_ADAPTER_REGISTRY_ADDRESS and EVM_FACTORY_ADDRESS are both unset');
+    }
+    try {
+      this.registryAddress = (await this.contractReader.publicClient.readContract({
+        address: this.factoryAddress,
+        abi: FACTORY_ABI,
+        functionName: 'adapterRegistry',
+      })) as Address;
+      this.logger.log(`AdapterRegistry resolved from factory: ${this.registryAddress}`);
+    } catch (err) {
+      throw new Error(`Failed to read adapterRegistry from factory ${this.factoryAddress}: ${(err as Error).message}`);
+    }
   }
 
   async isApproved(adapter: Address): Promise<boolean> {
