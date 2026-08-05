@@ -68,10 +68,7 @@ export function buildOperationId(vaultId: string, proposalId: string, index: num
  * multiplierBps=10000 means 1:1. Used when `ENV == testnet`.
  */
 export function encodeMockAdapterParams(inputAmount: bigint, multiplierBps: bigint = 10000n): Hex {
-  return encodeAbiParameters(
-    [{ type: 'uint256' }, { type: 'uint256' }],
-    [inputAmount, multiplierBps]
-  ) as Hex;
+  return encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [inputAmount, multiplierBps]) as Hex;
 }
 
 @Injectable()
@@ -124,12 +121,14 @@ export class EvmPositionService {
     const evt = result.decodedEvents.find(
       e => e.eventName === 'PositionOpened' && e.address.toLowerCase() === vaultAddress.toLowerCase()
     );
-    const args = evt?.args as {
-      positionId: bigint;
-      positionAmount: bigint;
-      positionAsset: Address;
-      amountConsumed: bigint;
-    } | undefined;
+    const args = evt?.args as
+      | {
+          positionId: bigint;
+          positionAmount: bigint;
+          positionAsset: Address;
+          amountConsumed: bigint;
+        }
+      | undefined;
 
     await this.transactionsRepository.update(
       { id: adminTx.id },
@@ -141,9 +140,7 @@ export class EvmPositionService {
       }
     );
 
-    this.logger.log(
-      `openPosition confirmed vault=${vaultId} positionId=${args?.positionId} tx=${result.hash}`
-    );
+    this.logger.log(`openPosition confirmed vault=${vaultId} positionId=${args?.positionId} tx=${result.hash}`);
     return {
       txHash: result.hash,
       positionId: args?.positionId ?? 0n,
@@ -191,8 +188,7 @@ export class EvmPositionService {
     const evt = result.decodedEvents.find(
       e => e.eventName === 'PositionClosed' && e.address.toLowerCase() === vaultAddress.toLowerCase()
     );
-    const underlyingReturned =
-      (evt?.args as { underlyingReturned?: bigint } | undefined)?.underlyingReturned ?? 0n;
+    const underlyingReturned = (evt?.args as { underlyingReturned?: bigint } | undefined)?.underlyingReturned ?? 0n;
 
     await this.transactionsRepository.update(
       { id: adminTx.id },

@@ -29,6 +29,7 @@ import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
+import { UniswapQuoteService } from './uniswap-quote.service';
 import { VaultContributionService } from './vault-contribution.service';
 import { VaultManagingService } from './vault-managing.service';
 
@@ -96,6 +97,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,
+    UniswapQuoteService,
     VaultManagingService,
     TransactionHealthService,
   ],
@@ -120,6 +122,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,
+    UniswapQuoteService,
   ],
 })
 export class BlockchainModule {}

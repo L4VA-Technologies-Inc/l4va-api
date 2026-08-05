@@ -44,10 +44,7 @@ export class EvmTerminationService {
       functionName: 'status',
     })) as number;
 
-    if (
-      onchainStatus !== EvmVaultOnchainStatus.Locked &&
-      onchainStatus !== EvmVaultOnchainStatus.Cancelled
-    ) {
+    if (onchainStatus !== EvmVaultOnchainStatus.Locked && onchainStatus !== EvmVaultOnchainStatus.Cancelled) {
       throw new BadRequestException(
         `Vault ${vaultAddress} is ${EvmVaultOnchainStatus[onchainStatus]}; must be Locked or Cancelled`
       );

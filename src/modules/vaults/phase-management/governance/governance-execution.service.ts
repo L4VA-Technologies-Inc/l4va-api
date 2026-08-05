@@ -20,7 +20,6 @@ import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
-import { ChainType } from '@/types/vault.types';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
@@ -34,7 +33,7 @@ import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {

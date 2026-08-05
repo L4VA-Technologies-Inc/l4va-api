@@ -72,7 +72,12 @@ export class EvmAdapterRegistryService {
     let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
     try {
       result = await this.adminSigner.sendAndConfirm(
-        { address: this.registryAddress, abi: ADAPTER_REGISTRY_ABI, functionName: 'approveAdapter', args: [adapter, tag] },
+        {
+          address: this.registryAddress,
+          abi: ADAPTER_REGISTRY_ABI,
+          functionName: 'approveAdapter',
+          args: [adapter, tag],
+        },
         ['AdapterApproved'],
         async hash => {
           await this.transactionsRepository.update(

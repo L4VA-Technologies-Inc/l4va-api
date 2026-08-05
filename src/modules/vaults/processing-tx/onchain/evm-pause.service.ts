@@ -57,7 +57,15 @@ export class EvmPauseService {
     })) as boolean;
     if (!paused) throw new BadRequestException(`Vault ${vaultId} is not paused`);
 
-    return this._sendWithArgs(vaultId, vault, vaultAddress, 'emergencyRecoverERC20', [token], TransactionType.evmPause, 'EmergencyRecovered');
+    return this._sendWithArgs(
+      vaultId,
+      vault,
+      vaultAddress,
+      'emergencyRecoverERC20',
+      [token],
+      TransactionType.evmPause,
+      'EmergencyRecovered'
+    );
   }
 
   isPaused(vaultAddress: Address): Promise<boolean> {
@@ -68,7 +76,12 @@ export class EvmPauseService {
     }) as Promise<boolean>;
   }
 
-  private async _send(vaultId: string, fnName: string, txType: TransactionType, expectedEvent: string): Promise<{ txHash: Hex }> {
+  private async _send(
+    vaultId: string,
+    fnName: string,
+    txType: TransactionType,
+    expectedEvent: string
+  ): Promise<{ txHash: Hex }> {
     const vault = await this._requireEvmVault(vaultId);
     return this._sendWithArgs(vaultId, vault, vault.contract_address as Address, fnName, [], txType, expectedEvent);
   }

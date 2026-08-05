@@ -59,6 +59,5 @@ export const ADAPTER_REGISTRY_ABI = [
 ] as const;
 
 /** keccak256("ADAPTER_MANAGER_ROLE") — mirrors AdapterRegistry.ADAPTER_MANAGER_ROLE */
-export const ADAPTER_MANAGER_ROLE = '0x' + Buffer.from('ADAPTER_MANAGER_ROLE').reduce(
-  (acc, b) => acc + b.toString(16).padStart(2, '0'), ''
-) as `0x${string}`;
+export const ADAPTER_MANAGER_ROLE = ('0x' +
+  Buffer.from('ADAPTER_MANAGER_ROLE').reduce((acc, b) => acc + b.toString(16).padStart(2, '0'), '')) as `0x${string}`;

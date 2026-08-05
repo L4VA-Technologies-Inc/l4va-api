@@ -4,9 +4,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { type Address } from 'viem';
 
-import { buildOperationId, encodeMockAdapterParams, EvmPositionService } from '../../processing-tx/onchain/evm-position.service';
 import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
+import {
+  buildOperationId,
+  encodeMockAdapterParams,
+  EvmPositionService,
+} from '../../processing-tx/onchain/evm-position.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
+import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
@@ -26,6 +31,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   private readonly logger = new Logger(EvmGovernanceExecutionService.name);
   private readonly isTestnet: boolean;
   private readonly mockAdapterAddress: Address | null;
+  private readonly uniswapAdapterAddress: Address | null;
+  /** Default swap slippage in basis points (0.5%). Configurable via EVM_SWAP_SLIPPAGE_BPS. */
+  private readonly swapSlippageBps: number;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
@@ -33,11 +41,15 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
+    private readonly uniswapQuoteService: UniswapQuoteService,
     configService: ConfigService
   ) {
     this.isTestnet = configService.get<string>('CARDANO_NETWORK') !== 'mainnet';
     const raw = configService.get<string>('EVM_MOCK_ADAPTER_ADDRESS');
     this.mockAdapterAddress = raw ? (raw as Address) : null;
+    const uniswapRaw = configService.get<string>('EVM_UNISWAP_ADAPTER_ADDRESS');
+    this.uniswapAdapterAddress = uniswapRaw ? (uniswapRaw as Address) : null;
+    this.swapSlippageBps = Number(configService.get<string>('EVM_SWAP_SLIPPAGE_BPS') ?? '50');
   }
 
   /**
@@ -114,9 +126,59 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       return this.executeMarketActionMock(proposal, vault, actions);
     }
 
-    // Mainnet: real adapter routing per action (Sprint 4)
-    this.logger.warn(`Proposal ${proposal.id}: mainnet market action not yet implemented`);
-    return false;
+    return this.executeMarketActionUniswap(proposal, vault, actions);
+  }
+
+  private async executeMarketActionUniswap(proposal: Proposal, vault: Vault, actions: any[]): Promise<boolean> {
+    if (!this.uniswapAdapterAddress) {
+      this.logger.error(
+        `EVM_UNISWAP_ADAPTER_ADDRESS is not configured — cannot execute mainnet market proposal ${proposal.id}`
+      );
+      return false;
+    }
+
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      const tokenIn: Address = action.inputAsset ?? action.policyId ?? '0x0000000000000000000000000000000000000000';
+      const tokenOut: Address =
+        action.expectedOutputAsset ?? action.outputAsset ?? '0x0000000000000000000000000000000000000000';
+      const inputAmountRaw = BigInt(action.amount ?? action.quantity ?? 0);
+
+      if (inputAmountRaw === 0n || tokenIn === tokenOut) continue;
+
+      try {
+        const quote = await this.uniswapQuoteService.quoteExactInput(
+          tokenIn,
+          tokenOut,
+          inputAmountRaw,
+          this.swapSlippageBps
+        );
+
+        const operationId = buildOperationId(vault.id, proposal.id, i);
+
+        await this.positionService.openPosition(vault.id, {
+          operationId,
+          adapter: this.uniswapAdapterAddress,
+          protocol: '0xcaf681a66d020601342297493863e78c959e5cb2', // SwapRouter02 as protocol tag
+          inputAsset: tokenIn,
+          maxInputAmount: inputAmountRaw,
+          expectedPositionAsset: tokenOut,
+          minExpectedOutput: quote.minAmountOut,
+          deadline: 0n,
+          protocolParams: quote.protocolParams,
+        });
+
+        this.logger.log(
+          `Proposal ${proposal.id} action[${i}]: Uniswap V3 swap ${tokenIn}→${tokenOut} ` +
+            `fee=${quote.fee} minOut=${quote.minAmountOut} — ok`
+        );
+      } catch (err) {
+        this.logger.error(`Proposal ${proposal.id} action[${i}]: Uniswap swap failed — ${(err as Error).message}`);
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private async executeMarketActionMock(proposal: Proposal, vault: Vault, actions: any[]): Promise<boolean> {
@@ -151,9 +213,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
         this.logger.log(`Proposal ${proposal.id} action[${i}]: openPosition via MockAdapter — ok`);
       } catch (err) {
-        this.logger.error(
-          `Proposal ${proposal.id} action[${i}]: openPosition failed — ${(err as Error).message}`
-        );
+        this.logger.error(`Proposal ${proposal.id} action[${i}]: openPosition failed — ${(err as Error).message}`);
         return false;
       }
     }
@@ -206,9 +266,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
       return true;
     } catch (err) {
-      this.logger.error(
-        `Proposal ${proposal.id}: EVM termination failed — ${(err as Error).message}`
-      );
+      this.logger.error(`Proposal ${proposal.id}: EVM termination failed — ${(err as Error).message}`);
       return false;
     }
   }
