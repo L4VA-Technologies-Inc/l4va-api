@@ -24,14 +24,16 @@ import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/e
 import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
+import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/onchain/evm-fee-withdraw.service';
 import {
   EvmLockTimePricingService,
   MissingPriceError,
 } from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
 import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
+import { EvmTerminationService } from '@/modules/vaults/processing-tx/onchain/evm-termination.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
-import { EvmCycleStatus } from '@/modules/vaults/processing-tx/onchain/vault.abi';
+import { EvmCycleStatus, VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -86,7 +88,9 @@ export class LifecycleService {
     private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
     private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
     private readonly evmAllocationService: EvmAllocationService,
-    private readonly evmLockTimePricingService: EvmLockTimePricingService
+    private readonly evmLockTimePricingService: EvmLockTimePricingService,
+    private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
+    private readonly evmTerminationService: EvmTerminationService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -112,6 +116,8 @@ export class LifecycleService {
       await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
       await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
       await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
+      await this.handleEvmFeeWithdraw(); // EVM: sweep accrued protocol fees to treasury
+      await this.handleEvmFinalizeTerminating(); // EVM: call finalizeTermination when all VT has been redeemed
     } finally {
       this.isRunning = false;
     }
@@ -3034,6 +3040,77 @@ export class LifecycleService {
       }
     } catch (err) {
       this.logger.error(`EVM finalize failed sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Sweep accrued native fees for all EVM vaults that have a non-zero balance.
+   * Runs every minute but `EvmFeeWithdrawService.withdrawNativeFees` no-ops when balance is 0.
+   */
+  private async handleEvmFeeWithdraw(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const vaults = await this.vaultRepository.find({
+        where: { chain_type: ChainType.robinhood },
+        select: ['id', 'contract_address', 'vault_status'],
+      });
+      for (const vault of vaults) {
+        if (!vault.contract_address) continue;
+        try {
+          await this.evmFeeWithdrawService.withdrawNativeFees(vault.id);
+        } catch (err) {
+          this.logger.error(`EVM fee withdraw failed for vault ${vault.id}: ${(err as Error).message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`EVM fee withdraw sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * For vaults in `terminating` status: check if all VT has been redeemed on-chain
+   * (outstandingVt == 0 or totalSupply == 0) and call `finalizeTermination()`.
+   */
+  private async handleEvmFinalizeTerminating(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const terminatingVaults = await this.vaultRepository.find({
+        where: { chain_type: ChainType.robinhood, vault_status: VaultStatus.terminating },
+        select: ['id', 'contract_address'],
+      });
+
+      for (const vault of terminatingVaults) {
+        if (!vault.contract_address) continue;
+        try {
+          const vtToken = (await this.evmContractReader.publicClient.readContract({
+            address: vault.contract_address as `0x${string}`,
+            abi: VAULT_ABI,
+            functionName: 'vaultToken',
+          })) as `0x${string}`;
+          const totalSupply = (await this.evmContractReader.publicClient.readContract({
+            address: vtToken,
+            abi: [
+              {
+                type: 'function',
+                stateMutability: 'view',
+                name: 'totalSupply',
+                inputs: [],
+                outputs: [{ type: 'uint256' }],
+              },
+            ],
+            functionName: 'totalSupply',
+          })) as bigint;
+
+          if (totalSupply === 0n) {
+            await this.evmTerminationService.finalizeTermination(vault.id);
+            this.logger.log(`EVM finalizeTermination submitted for vault ${vault.id}`);
+          }
+        } catch (err) {
+          this.logger.error(`EVM finalizeTermination check failed for vault ${vault.id}: ${(err as Error).message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`EVM finalize terminating sweep failed: ${(err as Error).message}`);
     }
   }
 }

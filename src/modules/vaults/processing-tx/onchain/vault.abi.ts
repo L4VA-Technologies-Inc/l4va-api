@@ -477,6 +477,20 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [{ type: 'bool' }],
   },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'vaultToken',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'totalSupply',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
 
   // --- Events (decoded from receipts + Alchemy webhooks) -------------------
   // NOTE: signatures MUST mirror IVault.sol exactly — any drift changes

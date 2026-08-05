@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { type Address } from 'viem';
 
 import { buildOperationId, encodeMockAdapterParams, EvmPositionService } from '../../processing-tx/onchain/evm-position.service';
+import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 
 import { Proposal } from '@/database/proposal.entity';
@@ -21,7 +22,7 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
  * the same interface.
  */
 @Injectable()
-export class EvmGovernanceExecutionService {
+export class EvmGovernanceExecutionService implements OnModuleInit {
   private readonly logger = new Logger(EvmGovernanceExecutionService.name);
   private readonly isTestnet: boolean;
   private readonly mockAdapterAddress: Address | null;
@@ -31,11 +32,32 @@ export class EvmGovernanceExecutionService {
     @InjectRepository(Proposal) private readonly proposalRepository: Repository<Proposal>,
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
+    private readonly adapterRegistryService: EvmAdapterRegistryService,
     configService: ConfigService
   ) {
     this.isTestnet = configService.get<string>('CARDANO_NETWORK') !== 'mainnet';
     const raw = configService.get<string>('EVM_MOCK_ADAPTER_ADDRESS');
     this.mockAdapterAddress = raw ? (raw as Address) : null;
+  }
+
+  /**
+   * Ensure the MockAdapter is approved in the registry at startup so governance
+   * executions don't fail on testnet with "NotApprovedAdapter".
+   */
+  async onModuleInit(): Promise<void> {
+    if (!this.isTestnet || !this.mockAdapterAddress) return;
+    try {
+      const already = await this.adapterRegistryService.isApproved(this.mockAdapterAddress);
+      if (!already) {
+        await this.adapterRegistryService.approveAdapter(this.mockAdapterAddress, 'mock');
+        this.logger.log(`MockAdapter ${this.mockAdapterAddress} approved in AdapterRegistry on startup`);
+      } else {
+        this.logger.debug(`MockAdapter ${this.mockAdapterAddress} already approved — no-op`);
+      }
+    } catch (err) {
+      // Non-fatal: governance proposals will fail at execution time with a clear error
+      this.logger.warn(`Failed to approve MockAdapter on startup: ${(err as Error).message}`);
+    }
   }
 
   /**

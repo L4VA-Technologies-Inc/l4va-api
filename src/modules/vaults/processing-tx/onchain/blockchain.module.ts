@@ -20,6 +20,7 @@ import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
 import { EvmOpenCycleService } from './evm-open-cycle.service';
+import { EvmPauseService } from './evm-pause.service';
 import { EvmPositionService } from './evm-position.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
 import { EvmTerminationService } from './evm-termination.service';
@@ -94,6 +95,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmPositionService,
     EvmTerminationService,
     EvmAdapterRegistryService,
+    EvmPauseService,
     VaultManagingService,
     TransactionHealthService,
   ],
@@ -117,6 +119,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmPositionService,
     EvmTerminationService,
     EvmAdapterRegistryService,
+    EvmPauseService,
   ],
 })
 export class BlockchainModule {}
