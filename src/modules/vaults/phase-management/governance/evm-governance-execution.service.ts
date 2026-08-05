@@ -15,7 +15,7 @@ import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.s
 
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
-import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { ProposalType } from '@/types/proposal.types';
 
 /**
  * EVM-side execution for passed governance proposals.

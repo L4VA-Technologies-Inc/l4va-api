@@ -5,7 +5,7 @@ import { type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
-import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
+import { EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
