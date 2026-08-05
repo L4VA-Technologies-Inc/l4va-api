@@ -56,18 +56,25 @@ export class EvmFeeWithdrawService {
     const isNative = asset === '0x0000000000000000000000000000000000000000';
 
     // Read accrued amount to gate on > 0 before broadcasting.
-    const accrued: bigint = isNative
-      ? await this.contractReader.publicClient.readContract({
-          address: vaultAddress,
-          abi: VAULT_ABI,
-          functionName: 'accruedFeeNative',
-        })
-      : await this.contractReader.publicClient.readContract({
-          address: vaultAddress,
-          abi: VAULT_ABI,
-          functionName: 'accruedFeeErc20',
-          args: [asset],
-        });
+    let accrued: bigint;
+    try {
+      accrued = isNative
+        ? await this.contractReader.publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'accruedFeeNative',
+          })
+        : await this.contractReader.publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'accruedFeeErc20',
+            args: [asset],
+          });
+    } catch {
+      // Contract predates V4 fee tracking — silently skip rather than spam logs.
+      this.logger.debug(`withdrawFees: vault ${vaultId} contract does not support fee views, skipping`);
+      return null;
+    }
 
     if (accrued === 0n) {
       this.logger.debug(`withdrawFees no-op for vault ${vaultId}: accrued ${isNative ? 'native' : asset} = 0`);

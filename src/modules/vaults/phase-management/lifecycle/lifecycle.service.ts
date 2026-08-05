@@ -3050,12 +3050,14 @@ export class LifecycleService {
   private async handleEvmFeeWithdraw(): Promise<void> {
     if (!this.isEvmCycleAutomationEnabled()) return;
     try {
+      // Only V4 vaults have accruedFeeNative(). evm_vault_id is set exclusively
+      // during the V4 createVault flow so it reliably gates pre-V4 contracts.
       const vaults = await this.vaultRepository.find({
         where: { chain_type: ChainType.robinhood },
-        select: ['id', 'contract_address', 'vault_status'],
+        select: ['id', 'contract_address', 'vault_status', 'evm_vault_id'],
       });
       for (const vault of vaults) {
-        if (!vault.contract_address) continue;
+        if (!vault.contract_address || !vault.evm_vault_id) continue;
         try {
           await this.evmFeeWithdrawService.withdrawNativeFees(vault.id);
         } catch (err) {
