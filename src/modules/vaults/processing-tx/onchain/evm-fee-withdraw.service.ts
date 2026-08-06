@@ -75,10 +75,9 @@ export class EvmFeeWithdrawService {
       return null;
     }
 
-    // if (accrued === 0n) {
-    //   this.logger.debug(`withdrawFees no-op for vault ${vaultId}: accrued ${isNative ? 'native' : asset} = 0`);
-    //   return null;
-    // }
+    if (accrued === 0n) {
+      return null;
+    }
 
     const adminTx = this.transactionsRepository.create({
       type: TransactionType.evmWithdrawFees,

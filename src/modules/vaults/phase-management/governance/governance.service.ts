@@ -615,7 +615,9 @@ export class GovernanceService {
     }
 
     // Check for only 1 active market action proposal for the same asset at a time
-    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
+    // EVM vaults skip all Cardano-specific marketplace action validation —
+    // asset IDs are ERC-20 addresses, not DB UUIDs.
+    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION && vault.chain_type !== ChainType.robinhood) {
       const requestedActions = createProposalReq.marketplaceActions || [];
 
       if (requestedActions.length > 0) {
@@ -958,6 +960,12 @@ export class GovernanceService {
       case ProposalType.MARKETPLACE_ACTION: {
         // Use direct marketplaceActions from request body
         const actions = createProposalReq.marketplaceActions || [];
+
+        // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
+        if (vault.chain_type === ChainType.robinhood) {
+          proposal.metadata.marketplaceActions = actions;
+          break;
+        }
 
         // Validate that all actions use the same market (no mixing DexHunter and WayUp)
         const markets = new Set(actions.map(a => a.market?.toLowerCase()));
@@ -1946,7 +1954,9 @@ export class GovernanceService {
 
     // Check if governance fee is required for this proposal type
     const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
-    const requiresPayment = feeAmount > 0;
+    // EVM vaults use on-chain ETH payments — the Cardano fee builder (Blockfrost/CSL) cannot
+    // handle 0x addresses. Fees for EVM proposals will be collected on-chain in a future release.
+    const requiresPayment = feeAmount > 0 && vault.chain_type !== ChainType.robinhood;
 
     // If payment is required, set status to UNPAID and clear dates
     // Store original duration and start date in metadata so we can set correct dates after payment
