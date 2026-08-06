@@ -9,8 +9,8 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmContractReader } from './evm-contract-reader.service';
-import { VAULT_ABI } from './vault.abi';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
+import { VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';

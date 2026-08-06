@@ -90,6 +90,7 @@ export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
   private blockfrost: BlockFrostAPI;
   private readonly isMainnet: boolean;
+  private isDailySnapshotJobRunning = false;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly assetMetadataCache: NodeCache;
@@ -172,8 +173,14 @@ export class GovernanceService {
     });
   }
 
-  @Cron(CronExpression.EVERY_12_HOURS)
+  @Cron(CronExpression.EVERY_3_HOURS)
   async createDailySnapshots(): Promise<void> {
+    if (this.isDailySnapshotJobRunning) {
+      return;
+    }
+
+    this.isDailySnapshotJobRunning = true;
+    const startedAt = Date.now();
     this.logger.log('Starting daily snapshot creation');
 
     try {
@@ -220,22 +227,53 @@ export class GovernanceService {
       // EVM vaults: scan VaultToken Transfer events to build holder snapshots.
       await this.createDailyEvmSnapshots();
     } catch (error) {
-      this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Failed to create daily snapshots: ${message}`, stack);
+    } finally {
+      this.isDailySnapshotJobRunning = false;
+      const durationMs = Date.now() - startedAt;
+      this.logger.log(`[Snapshot Job] Run finished in ${durationMs}ms`);
     }
   }
 
   private async createDailyEvmSnapshots(): Promise<void> {
+    const sweepStartedAt = Date.now();
+    this.logger.log('[EVM Snapshot] Daily EVM snapshot sweep started');
+
     try {
       const evmVaults = await this.evmSnapshotService.findEligibleVaults();
-      if (evmVaults.length === 0) return;
+      if (evmVaults.length === 0) {
+        this.logger.log('[EVM Snapshot] No eligible EVM vaults found for snapshot sweep');
+        return;
+      }
 
-      this.logger.log(`Creating EVM snapshots for ${evmVaults.length} vault(s)`);
-      const results = await Promise.allSettled(evmVaults.map(v => this.evmSnapshotService.createSnapshot(v.id)));
-      const ok = results.filter(r => r.status === 'fulfilled').length;
-      const fail = results.filter(r => r.status === 'rejected').length;
-      this.logger.log(`EVM snapshot creation: ${ok} successful, ${fail} failed`);
+      let successful = 0;
+      let failed = 0;
+
+      for (let index = 0; index < evmVaults.length; index++) {
+        const vault = evmVaults[index];
+
+        try {
+          await this.evmSnapshotService.createSnapshot(vault.id);
+          successful++;
+        } catch (error) {
+          failed++;
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `[EVM Snapshot] [${index + 1}/${evmVaults.length}] Snapshot failed for vault ${vault.id}: ${message}`
+          );
+        }
+      }
+
+      const durationMs = Date.now() - sweepStartedAt;
+      this.logger.log(
+        `[EVM Snapshot] Sweep finished: ${successful} successful, ${failed} failed, totalVaults=${evmVaults.length}, durationMs=${durationMs}`
+      );
     } catch (err) {
-      this.logger.error(`EVM daily snapshot sweep failed: ${(err as Error).message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      this.logger.error(`[EVM Snapshot] Daily EVM snapshot sweep failed: ${message}`, stack);
     }
   }
 
@@ -410,10 +448,10 @@ export class GovernanceService {
         ft_token_supply: adjustedSupply,
       });
 
-      this.logger.log(
-        `Updated vault ${vaultId} total supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}). ` +
-          `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
-      );
+      // this.logger.log(
+      //   `Updated vault ${vaultId} total supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}). ` +
+      //     `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
+      // );
 
       const addressBalancesForSnapshot: Record<string, string> = {};
       for (const [address, balance] of Object.entries(addressBalances)) {
@@ -428,9 +466,9 @@ export class GovernanceService {
 
       await this.snapshotRepository.save(snapshot);
 
-      this.logger.log(
-        `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} voting addresses`
-      );
+      // this.logger.log(
+      //   `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} voting addresses`
+      // );
 
       return snapshot;
     } catch (error) {
