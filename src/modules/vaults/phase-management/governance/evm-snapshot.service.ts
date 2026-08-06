@@ -359,7 +359,6 @@ export class EvmSnapshotService {
     const balances = new Map<string, bigint>();
 
     let pageCount = 0;
-    let totalRows = 0;
     let nextPageParams: Record<string, unknown> | null = null;
     let firstPageVariant: 'none' | 'items_count' | 'page_size' | 'limit' | null = null;
 
@@ -423,7 +422,6 @@ export class EvmSnapshotService {
       }
 
       const items = this.extractHoldersItems(data);
-      totalRows += items.length;
 
       for (const item of items) {
         const address = this.extractHolderAddress(item);
@@ -447,12 +445,6 @@ export class EvmSnapshotService {
         balances.set(address.toLowerCase(), balance);
       }
 
-      if (pageCount === 1 || pageCount % 10 === 0) {
-        this.logger.debug(
-          `[EVM Snapshot] Vault ${vaultId}: holders API progress base=${baseUrl} pages=${pageCount} rows=${totalRows} uniqueHolders=${balances.size}`
-        );
-      }
-
       const candidate = this.extractNextPageParams(data);
       const hasMore = !!candidate && Object.keys(candidate).length > 0;
       if (!hasMore) {
@@ -462,9 +454,9 @@ export class EvmSnapshotService {
       nextPageParams = candidate;
     }
 
-    this.logger.debug(
-      `[EVM Snapshot] Vault ${vaultId}: holders API completed base=${baseUrl} pages=${pageCount} rows=${totalRows} uniqueHolders=${balances.size}`
-    );
+    // this.logger.debug(
+    //   `[EVM Snapshot] Vault ${vaultId}: holders API completed base=${baseUrl} pages=${pageCount} rows=${totalRows} uniqueHolders=${balances.size}`
+    // );
 
     return balances;
   }

@@ -3821,10 +3821,26 @@ export class GovernanceService {
     action?: 'vote' | 'create_proposal'
   ): Promise<string> {
     try {
-      const snapshot = await this.snapshotRepository.findOne({
+      let snapshot = await this.snapshotRepository.findOne({
         where: { vaultId },
         order: { createdAt: 'DESC' },
       });
+
+      // EVM vault with no snapshot yet: create one on-demand so voting power
+      // is available immediately after the airdrop without waiting for the cron.
+      if (!snapshot) {
+        const vaultForChainCheck = await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'chain_type', 'vault_status'],
+        });
+        if (vaultForChainCheck?.chain_type === ChainType.robinhood) {
+          try {
+            snapshot = await this.evmSnapshotService.createSnapshot(vaultId);
+          } catch {
+            // Fall through to the NotFoundException below.
+          }
+        }
+      }
 
       if (!snapshot) {
         throw new NotFoundException('No voting snapshot found for this vault');
