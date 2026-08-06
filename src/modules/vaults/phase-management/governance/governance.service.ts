@@ -88,6 +88,10 @@ import { VoteType } from '@/types/vote.types';
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
+
+  private normalizeAddress(address?: string | null): string {
+    return (address || '').toLowerCase();
+  }
   private blockfrost: BlockFrostAPI;
   private readonly isMainnet: boolean;
   private isDailySnapshotJobRunning = false;
@@ -2171,16 +2175,16 @@ export class GovernanceService {
       const isActive = proposal.status === ProposalStatus.ACTIVE && proposal.endDate && new Date() <= proposal.endDate;
 
       if (user?.address && proposal.snapshot) {
-        const voteWeight = proposal.snapshot.addressBalances[user.address];
+        const normalizedUserAddress = this.normalizeAddress(user.address);
+        const voteWeight = proposal.snapshot.addressBalances[normalizedUserAddress];
         const hasVotingPower = voteWeight && voteWeight !== '0';
 
-        const existingVote = await this.voteRepository.findOne({
-          where: {
-            proposalId,
-            voterAddress: user.address,
-          },
-          select: ['vote'],
-        });
+        const existingVote = await this.voteRepository
+          .createQueryBuilder('vote')
+          .select('vote.vote', 'vote')
+          .where('vote.proposalId = :proposalId', { proposalId })
+          .andWhere('LOWER(vote.voterAddress) = :voterAddress', { voterAddress: normalizedUserAddress })
+          .getRawOne<{ vote: VoteType }>();
 
         if (existingVote) {
           selectedVote = existingVote.vote;
@@ -2204,9 +2208,12 @@ export class GovernanceService {
         ?.filter(ma => ma.exec !== ExecType.BUY && ma.exec !== ExecType.OFFER)
         .map(ma => ma.assetId) || [];
 
-    [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
-      allAssetIds.add(id)
-    );
+    [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id => {
+      // Skip empty strings and EVM addresses — only DB UUIDs are valid here.
+      if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        allAssetIds.add(id);
+      }
+    });
 
     // Fetch all assets in a single query
     const allAssets =
@@ -2488,6 +2495,8 @@ export class GovernanceService {
   }
 
   async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {
+    const normalizedVoterAddress = this.normalizeAddress(voteReq.voterAddress);
+
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
@@ -2509,12 +2518,11 @@ export class GovernanceService {
     }
 
     // Check if user has already voted
-    const existingVote = await this.voteRepository.exists({
-      where: {
-        proposalId,
-        voterAddress: voteReq.voterAddress,
-      },
-    });
+    const existingVote = await this.voteRepository
+      .createQueryBuilder('vote')
+      .where('vote.proposalId = :proposalId', { proposalId })
+      .andWhere('LOWER(vote.voterAddress) = :voterAddress', { voterAddress: normalizedVoterAddress })
+      .getExists();
 
     if (existingVote) {
       throw new BadRequestException('Address has already voted on this proposal');
@@ -2526,7 +2534,7 @@ export class GovernanceService {
       proposalId,
       snapshotId: proposal.snapshotId,
       voterId: userId,
-      voterAddress: voteReq.voterAddress,
+      voterAddress: normalizedVoterAddress,
       voteWeight,
       vote: voteReq.vote,
     });
@@ -2537,7 +2545,7 @@ export class GovernanceService {
     // Await for durability, but don't fail the main operation
     try {
       await this.rewardEventProducer.indexEvent({
-        walletAddress: voteReq.voterAddress,
+        walletAddress: normalizedVoterAddress,
         vaultId: proposal.vaultId,
         eventType: RewardActivityType.GOVERNANCE_VOTE,
         units: 1,
@@ -2561,7 +2569,7 @@ export class GovernanceService {
         id: vote.id,
         proposalId,
         voterId: userId,
-        voterAddress: voteReq.voterAddress,
+        voterAddress: normalizedVoterAddress,
         voteWeight,
         vote: voteReq.vote,
         timestamp: vote.timestamp,
