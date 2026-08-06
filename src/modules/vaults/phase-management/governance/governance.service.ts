@@ -3856,7 +3856,7 @@ export class GovernanceService {
         );
       }
 
-      const voteWeight = snapshot.addressBalances[user.address];
+      const voteWeight = snapshot.addressBalances[user.address.toLocaleLowerCase()];
 
       if (!voteWeight || voteWeight === '0') {
         throw new BadRequestException(

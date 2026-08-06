@@ -39,6 +39,7 @@ import { Claim } from '@/database/claim.entity';
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContributionValuation } from '@/database/evm-contribution-valuation.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
+import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -71,6 +72,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
       EvmContributionValuation,
       EvmAllocation,
       EvmAssetPriceFeedEntity,
+      EvmExternalPosition,
     ]),
   ],
   controllers: [BlockchainController],

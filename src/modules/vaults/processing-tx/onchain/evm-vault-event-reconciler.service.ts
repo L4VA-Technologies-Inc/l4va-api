@@ -10,6 +10,7 @@ import { EvmAssetKindOnchain, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 import { Asset } from '@/database/asset.entity';
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
+import { EvmExternalPosition, EvmPositionStatus } from '@/database/evm-external-position.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -67,6 +68,7 @@ export class EvmVaultEventReconciler {
     @InjectRepository(EvmValuationSnapshot) private readonly snapshotsRepository: Repository<EvmValuationSnapshot>,
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     @InjectRepository(Asset) private readonly assetsRepository: Repository<Asset>,
+    @InjectRepository(EvmExternalPosition) private readonly positionsRepository: Repository<EvmExternalPosition>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly cycleCloseService: EvmCycleCloseService
@@ -142,6 +144,16 @@ export class EvmVaultEventReconciler {
             break;
           case 'AllocationClaimed':
             await this.handleAllocationClaimed(vault, log, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
+          case 'PositionOpened':
+            await this.handlePositionOpened(vault, log, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
+          case 'PositionClosed':
+            await this.handlePositionClosed(vault, log, decoded.args);
             recordApplied(log.txHash, decoded.eventName);
             processed++;
             break;
@@ -561,6 +573,93 @@ export class EvmVaultEventReconciler {
         hashArray: JSON.stringify([txHash]),
       })
       .getOne();
+  }
+
+  // ---------------------------------------------------------------------------
+  // PositionOpened / PositionClosed
+  // ---------------------------------------------------------------------------
+
+  private async handlePositionOpened(vault: Vault, log: VaultLogInput, args: Record<string, unknown>): Promise<void> {
+    const positionId = String(args.positionId as bigint);
+    const adapter = (args.adapter as string).toLowerCase();
+    const underlyingAsset = ((args.underlyingAsset as string) || '').toLowerCase();
+    const amountConsumed = String(args.amountConsumed as bigint);
+    const positionAsset = (args.positionAsset as string).toLowerCase();
+    const positionAmount = String(args.positionAmount as bigint);
+    const operationId = args.operationId as string | undefined;
+
+    // Look up the admin Transaction that broadcast openPosition for this vault.
+    const tx = await this.transactionsRepository.findOne({
+      where: { vault_id: vault.id, tx_hash: log.txHash },
+    });
+
+    const existing = await this.positionsRepository.findOne({
+      where: { vault_id: vault.id, on_chain_position_id: positionId },
+    });
+
+    if (existing) {
+      // Idempotent — webhook replayed or duplicate log.
+      return;
+    }
+
+    const position = this.positionsRepository.create({
+      vault_id: vault.id,
+      open_tx_id: tx?.id ?? undefined,
+      on_chain_position_id: positionId,
+      adapter,
+      protocol: tx?.metadata ? (tx.metadata as any)?.adapter : undefined,
+      underlying_asset: underlyingAsset || '0x0000000000000000000000000000000000000000',
+      amount_deposited: amountConsumed,
+      position_asset: positionAsset,
+      position_amount: positionAmount,
+      status: EvmPositionStatus.active,
+      operation_id: operationId ?? undefined,
+      open_tx_hash: log.txHash,
+      open_block_number: log.blockNumber != null ? String(log.blockNumber) : undefined,
+    });
+
+    await this.positionsRepository.save(position);
+    this.logger.log(`PositionOpened: vault=${vault.id} positionId=${positionId} adapter=${adapter} tx=${log.txHash}`);
+  }
+
+  private async handlePositionClosed(vault: Vault, log: VaultLogInput, args: Record<string, unknown>): Promise<void> {
+    const positionId = String(args.positionId as bigint);
+    const underlyingReturned = String(args.underlyingReturned as bigint);
+
+    const existing = await this.positionsRepository.findOne({
+      where: { vault_id: vault.id, on_chain_position_id: positionId },
+    });
+
+    if (!existing) {
+      // Position row may not exist yet if webhook fires before reconciler created it.
+      this.logger.warn(
+        `PositionClosed: no DB row for vault=${vault.id} positionId=${positionId} tx=${log.txHash}. Will retry via backfill.`
+      );
+      return;
+    }
+
+    if (existing.status === EvmPositionStatus.closed) {
+      return; // Already reconciled.
+    }
+
+    const tx = await this.transactionsRepository.findOne({
+      where: { vault_id: vault.id, tx_hash: log.txHash },
+    });
+
+    await this.positionsRepository.update(
+      { id: existing.id },
+      {
+        status: EvmPositionStatus.closed,
+        underlying_returned: underlyingReturned,
+        close_tx_id: tx?.id ?? undefined,
+        close_tx_hash: log.txHash,
+        close_block_number: log.blockNumber != null ? String(log.blockNumber) : undefined,
+      }
+    );
+
+    this.logger.log(
+      `PositionClosed: vault=${vault.id} positionId=${positionId} returned=${underlyingReturned} tx=${log.txHash}`
+    );
   }
 
   private tryDecode(log: VaultLogInput): { eventName: string; args: Record<string, unknown> } | null {
