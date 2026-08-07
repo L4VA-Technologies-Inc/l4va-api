@@ -322,16 +322,22 @@ export class ContributionService {
 
     const expansionConfig = expansionProposal.metadata.expansion;
 
-    // Validate contributed assets are from whitelisted policies
+    // Validate contributed assets are from whitelisted policies/contracts
     const contributedPolicyIds = [...new Set(contributeReq.assets.map(a => a.policyId))];
+
+    // EVM expansions store allowed contracts in evmAssets; Cardano uses policyIds
+    const allowedIds: string[] = expansionConfig.evmAssets?.length
+      ? expansionConfig.evmAssets.map((a: { contractAddress: string }) => a.contractAddress.toLowerCase())
+      : (expansionConfig.policyIds ?? []);
+
     const invalidPolicies = contributedPolicyIds.filter(
-      policyId => !expansionConfig.policyIds.includes(policyId as any)
+      policyId => !allowedIds.some(id => id.toLowerCase() === (policyId as string).toLowerCase())
     );
 
     if (invalidPolicies.length > 0) {
       throw new BadRequestException(
         `Assets from policies [${invalidPolicies.join(', ')}] are not whitelisted for this expansion. ` +
-          `Allowed policies: [${expansionConfig.policyIds.join(', ')}]`
+          `Allowed: [${allowedIds.join(', ')}]`
       );
     }
 
