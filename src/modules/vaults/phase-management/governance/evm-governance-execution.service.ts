@@ -11,12 +11,17 @@ import {
   EvmPositionService,
   type ClosePositionParams,
 } from '../../processing-tx/onchain/evm-position.service';
+import {
+  EvmOpenCycleService,
+  type EvmOpenCycleConfig,
+} from '../../processing-tx/onchain/evm-open-cycle.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { ProposalType } from '@/types/proposal.types';
+import { VaultStatus } from '@/types/vault.types';
 
 /**
  * EVM-side execution for passed governance proposals.
@@ -43,6 +48,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly terminationService: EvmTerminationService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
     private readonly uniswapQuoteService: UniswapQuoteService,
+    private readonly evmOpenCycleService: EvmOpenCycleService,
     configService: ConfigService
   ) {
     this.isTestnet = configService.get<string>('CARDANO_NETWORK') !== 'mainnet';
@@ -101,14 +107,105 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
         return false;
 
       case ProposalType.EXPANSION:
+        return this.executeEvmExpansion(proposal, vault);
+
       case ProposalType.ACQUIRE_EXPANSION:
-        // Expansion on EVM is handled via openCycle flow, not proposals.
-        this.logger.warn(`Proposal ${proposal.id}: ${proposal.proposalType} not executed via governance on EVM`);
-        return false;
+        return this.executeEvmAcquireExpansion(proposal, vault);
 
       default:
         this.logger.warn(`Proposal ${proposal.id}: unknown type ${proposal.proposalType} for EVM execution`);
         return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Expansion: open a new cycle with an asset-contribution window
+  // ---------------------------------------------------------------------------
+
+  private async executeEvmExpansion(proposal: Proposal, vault: Vault): Promise<boolean> {
+    const cfg = proposal.metadata?.expansion;
+    if (!cfg) {
+      this.logger.warn(`Proposal ${proposal.id}: missing expansion metadata`);
+      return false;
+    }
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const ONE_YEAR_S = BigInt(365 * 24 * 3600);
+    const durationS = cfg.noLimit ? ONE_YEAR_S : BigInt(Math.floor((cfg.duration ?? 0) / 1000));
+    const assetWhitelist: Address[] = (cfg.evmAssets ?? []).map((a: { contractAddress: string }) => a.contractAddress as Address);
+
+    const cycleCfg: EvmOpenCycleConfig = {
+      assetWindow: { start: nowSec, end: nowSec + durationS },
+      acquireWindow: { start: 0n, end: 0n },
+      minAcquireThreshold: 0n,
+      adaPairVtPerNativeUnit: 0n,
+      assetWhitelist,
+      contributorWhitelist: [],
+    };
+
+    try {
+      const { txHash } = await this.evmOpenCycleService.openCycleForVault(vault.id, cycleCfg);
+
+      // openCycleForVault sets vault_status = acquire; override to expansion so
+      // governance restrictions and lifecycle queries recognise the window type.
+      await this.vaultRepository.update(
+        { id: vault.id },
+        {
+          vault_status: VaultStatus.expansion,
+          expansion_phase_start: new Date(),
+          expansion_duration: cfg.noLimit ? 365 * 24 * 3600 * 1000 : cfg.duration,
+        }
+      );
+
+      this.logger.log(`EVM expansion cycle opened for vault ${vault.id} tx=${txHash}`);
+      return true;
+    } catch (err) {
+      this.logger.error(`EVM expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Acquire expansion: open a new cycle with a native-currency (ETH) acquire window
+  // ---------------------------------------------------------------------------
+
+  private async executeEvmAcquireExpansion(proposal: Proposal, vault: Vault): Promise<boolean> {
+    const cfg = proposal.metadata?.acquireExpansion;
+    if (!cfg) {
+      this.logger.warn(`Proposal ${proposal.id}: missing acquireExpansion metadata`);
+      return false;
+    }
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const ONE_YEAR_S = BigInt(365 * 24 * 3600);
+    const durationS = cfg.noLimit ? ONE_YEAR_S : BigInt(Math.floor((cfg.duration ?? 0) / 1000));
+
+    const cycleCfg: EvmOpenCycleConfig = {
+      assetWindow: { start: 0n, end: 0n },
+      acquireWindow: { start: nowSec, end: nowSec + durationS },
+      minAcquireThreshold: 0n,
+      adaPairVtPerNativeUnit: 0n,
+      assetWhitelist: [],
+      contributorWhitelist: [],
+    };
+
+    try {
+      const { txHash } = await this.evmOpenCycleService.openCycleForVault(vault.id, cycleCfg);
+
+      await this.vaultRepository.update(
+        { id: vault.id },
+        {
+          vault_status: VaultStatus.acquire_expansion,
+          expansion_phase_start: new Date(),
+          expansion_duration: cfg.noLimit ? 365 * 24 * 3600 * 1000 : cfg.duration,
+        }
+      );
+
+      this.logger.log(`EVM acquire expansion cycle opened for vault ${vault.id} tx=${txHash}`);
+      return true;
+    } catch (err) {
+      this.logger.error(`EVM acquire expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`);
+      return false;
     }
   }
 

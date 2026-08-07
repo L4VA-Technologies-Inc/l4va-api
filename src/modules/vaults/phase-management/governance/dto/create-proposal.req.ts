@@ -337,6 +337,23 @@ export class ExpansionPolicyIdDto {
 
 export class AssetWhitelistProposalDto extends OmitType(AssetWhitelistDto, ['countCapMin', 'countCapMax'] as const) {}
 
+// EVM expansion: ERC-20 / ERC-721 contract address selected for the new cycle
+export class ExpansionEvmAssetDto {
+  @ApiProperty({
+    description: 'ERC-20 or ERC-721 contract address (0x-prefixed)',
+    example: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'Must be a valid EVM address (0x followed by 40 hex chars)' })
+  contractAddress: string;
+
+  @ApiProperty({ description: 'Human-readable label for display', required: false })
+  @IsOptional()
+  @IsString()
+  label?: string;
+}
+
 export class CreateProposalReq {
   @ApiProperty({
     description: 'Title of the proposal',
@@ -455,6 +472,19 @@ export class CreateProposalReq {
   @Type(() => ExpansionPolicyIdDto)
   @Expose()
   expansionPolicyIds?: ExpansionPolicyIdDto[];
+
+  @ApiProperty({
+    description:
+      'EVM: ERC-20/ERC-721 contract addresses accepted during expansion (replaces expansionPolicyIds for Robinhood vaults)',
+    type: [ExpansionEvmAssetDto],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ExpansionEvmAssetDto)
+  @Expose()
+  expansionEvmAssets?: ExpansionEvmAssetDto[];
 
   @ApiProperty({
     description: 'Duration in milliseconds for vault expansion period',

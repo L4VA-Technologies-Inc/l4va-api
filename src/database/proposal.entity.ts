@@ -96,8 +96,10 @@ export class Proposal {
 
     // Expansion data
     expansion?: {
-      policyIds: string[];
+      policyIds?: string[];
       labels?: string[];
+      /** EVM: ERC-20/ERC-721 contract addresses selected for this expansion cycle */
+      evmAssets?: Array<{ contractAddress: string; label?: string }>;
       duration?: number;
       /** No time limit (always open) */
       noLimit?: boolean;

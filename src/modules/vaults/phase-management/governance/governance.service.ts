@@ -50,6 +50,7 @@ import { RewardEventProducer } from '@/modules/rewards/services/reward-event-pro
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
+import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
@@ -149,7 +150,8 @@ export class GovernanceService {
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
-    private readonly evmSnapshotService: EvmSnapshotService
+    private readonly evmSnapshotService: EvmSnapshotService,
+    private readonly uniswapQuoteService: UniswapQuoteService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -1513,6 +1515,7 @@ export class GovernanceService {
         // Validate expansion fields
         const {
           expansionPolicyIds,
+          expansionEvmAssets,
           expansionDuration,
           expansionNoLimit,
           expansionAssetMax,
@@ -1521,6 +1524,85 @@ export class GovernanceService {
           expansionLimitPrice,
         } = createProposalReq;
 
+        // ── EVM expansion ────────────────────────────────────────────────────
+        if (vault.chain_type === ChainType.robinhood) {
+          if (!expansionEvmAssets || expansionEvmAssets.length === 0) {
+            throw new BadRequestException(
+              'At least one ERC-20/ERC-721 contract address must be selected for expansion'
+            );
+          }
+
+          if (expansionNoLimit && expansionNoMax) {
+            throw new BadRequestException(
+              'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Asset Max" enabled simultaneously.'
+            );
+          }
+          if (!expansionNoLimit && (!expansionDuration || expansionDuration <= 0)) {
+            throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+          }
+          const minExpansionDurationEvm = this.systemSettingsService.minExpansionDuration;
+          if (!expansionNoLimit && expansionDuration < minExpansionDurationEvm) {
+            throw new BadRequestException(
+              `Expansion duration must be at least ${minExpansionDurationEvm / 86400000} day(s). Provided: ${expansionDuration}ms`
+            );
+          }
+          if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
+            throw new BadRequestException('Asset max is required when "No Max" is not selected');
+          }
+          if (!expansionPriceType || !['limit', 'market'].includes(expansionPriceType)) {
+            throw new BadRequestException('Price type must be either "limit" or "market"');
+          }
+          if (expansionPriceType === 'limit') {
+            if (!expansionLimitPrice || expansionLimitPrice <= 0) {
+              throw new BadRequestException('Limit price is required when using limit pricing');
+            }
+            const MAX_LIMIT_PRICE = 1_000_000;
+            if (expansionLimitPrice > MAX_LIMIT_PRICE) {
+              throw new BadRequestException(
+                `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per asset.`
+              );
+            }
+          }
+          if (expansionPriceType === 'market') {
+            const vaultForEvmCheck = await this.vaultRepository.findOne({
+              where: { id: vaultId },
+              select: ['contract_address', 'name'],
+            });
+            if (!vaultForEvmCheck?.contract_address) {
+              throw new BadRequestException('Market pricing requires vault contract address to be set');
+            }
+            try {
+              // Verify a Uniswap pool exists for this vault's VT
+              await this.uniswapQuoteService.quoteExactInput(
+                vaultForEvmCheck.contract_address as `0x${string}`,
+                '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // native placeholder
+                BigInt(1e12), // small test amount
+                50
+              );
+              this.logger.log(`EVM expansion market pricing validated: pool exists for vault ${vaultForEvmCheck.name}`);
+            } catch (error) {
+              if (error instanceof BadRequestException) throw error;
+              throw new BadRequestException(
+                'Market pricing requires an active Uniswap pool for this vault token. ' +
+                  'No liquidity pool found on the Robinhood Chain. Please use limit pricing or create a pool first.'
+              );
+            }
+          }
+
+          proposal.metadata.expansion = {
+            evmAssets: expansionEvmAssets.map(a => ({ contractAddress: a.contractAddress, label: a.label })),
+            duration: expansionNoLimit ? undefined : expansionDuration,
+            noLimit: expansionNoLimit || false,
+            assetMax: expansionNoMax ? undefined : expansionAssetMax,
+            noMax: expansionNoMax || false,
+            priceType: expansionPriceType,
+            limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
+            currentAssetCount: 0,
+          };
+          break;
+        }
+
+        // ── Cardano expansion ─────────────────────────────────────────────────
         if (!expansionPolicyIds || expansionPolicyIds.length === 0) {
           throw new BadRequestException('At least one policy ID must be selected for expansion');
         }
@@ -1772,10 +1854,22 @@ export class GovernanceService {
         // Validate vault allows acquire expansion
         const vaultForAcquireExpansionCheck: Pick<
           Vault,
-          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name' | 'ft_token_decimals'
+          | 'allow_acquire_expansion'
+          | 'script_hash'
+          | 'asset_vault_name'
+          | 'name'
+          | 'ft_token_decimals'
+          | 'contract_address'
         > = await this.vaultRepository.findOne({
           where: { id: vaultId },
-          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name', 'ft_token_decimals'],
+          select: [
+            'allow_acquire_expansion',
+            'script_hash',
+            'asset_vault_name',
+            'name',
+            'ft_token_decimals',
+            'contract_address',
+          ],
         });
 
         if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
@@ -1814,6 +1908,55 @@ export class GovernanceService {
           throw new BadRequestException('Price type must be either "limit" or "market"');
         }
 
+        // ── EVM acquire expansion ─────────────────────────────────────────────
+        if (vault.chain_type === ChainType.robinhood) {
+          if (acquireExpansionPriceType === 'limit') {
+            if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
+              throw new BadRequestException('Limit price is required when using limit pricing');
+            }
+            const MAX_LIMIT_PRICE_EVM = 1_000_000;
+            if (acquireExpansionLimitPrice > MAX_LIMIT_PRICE_EVM) {
+              throw new BadRequestException(
+                `Limit price cannot exceed ${MAX_LIMIT_PRICE_EVM.toLocaleString()} VT per 1 native unit.`
+              );
+            }
+          }
+          if (acquireExpansionPriceType === 'market') {
+            if (!vaultForAcquireExpansionCheck.contract_address) {
+              throw new BadRequestException('Market pricing requires vault contract address to be set');
+            }
+            try {
+              await this.uniswapQuoteService.quoteExactInput(
+                vaultForAcquireExpansionCheck.contract_address as `0x${string}`,
+                '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
+                BigInt(1e12),
+                50
+              );
+              this.logger.log(
+                `EVM acquire expansion market pricing validated for vault ${vaultForAcquireExpansionCheck.name}`
+              );
+            } catch (error) {
+              if (error instanceof BadRequestException) throw error;
+              throw new BadRequestException(
+                'Market pricing requires an active Uniswap pool for this vault token on the Robinhood Chain. ' +
+                  'Please use limit pricing or create a pool first.'
+              );
+            }
+          }
+
+          proposal.metadata.acquireExpansion = {
+            duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+            noLimit: acquireExpansionNoLimit || false,
+            maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+            noMax: acquireExpansionNoMax || false,
+            priceType: acquireExpansionPriceType,
+            limitPrice: acquireExpansionPriceType === 'limit' ? acquireExpansionLimitPrice : undefined,
+            currentAdaRaised: 0,
+          };
+          break;
+        }
+
+        // ── Cardano acquire expansion ─────────────────────────────────────────
         // Validate limit price if using limit pricing
         if (acquireExpansionPriceType === 'limit') {
           if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {

@@ -2627,7 +2627,13 @@ export class LifecycleService {
       .andWhere('vault.evm_root_committed_at IS NULL')
       .andWhere('vault.evm_cancel_cycle_tx_hash IS NULL')
       .andWhere('vault.vault_status IN (:...statuses)', {
-        statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
+        statuses: [
+          VaultStatus.contribution,
+          VaultStatus.acquire,
+          VaultStatus.published,
+          VaultStatus.expansion,
+          VaultStatus.acquire_expansion,
+        ],
       })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
