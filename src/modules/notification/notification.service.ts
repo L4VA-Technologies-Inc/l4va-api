@@ -65,13 +65,19 @@ export class NotificationService {
   }
 
   async sendBulkNotification(body: INotificationBody, bulkOptions: string[]): Promise<void> {
-    if (!bulkOptions || !Array.isArray(bulkOptions) || bulkOptions.length === 0) {
-      this.logger.warn('Bulk options are empty or invalid. No notifications will be sent.');
+    if (!bulkOptions || !Array.isArray(bulkOptions)) {
+      this.logger.warn('Bulk options are invalid. No notifications will be sent.');
+      return;
+    }
+
+    const recipientIds = [...new Set(bulkOptions.filter(id => typeof id === 'string' && id.trim().length > 0))];
+    if (recipientIds.length === 0) {
+      this.logger.debug('Bulk notification skipped: recipient list is empty.');
       return;
     }
 
     const users = await this.userRepository.findBy({
-      id: In(bulkOptions),
+      id: In(recipientIds),
     });
 
     if (users.length === 0) {
