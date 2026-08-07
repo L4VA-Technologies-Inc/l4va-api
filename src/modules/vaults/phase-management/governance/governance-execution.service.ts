@@ -588,9 +588,9 @@ export class GovernanceExecutionService {
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
     // Get vault to check status for extraction-based proposals
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'chain_type'> = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
-      select: ['id', 'vault_status'],
+      select: ['id', 'vault_status', 'chain_type'],
     });
 
     if (!vault) {

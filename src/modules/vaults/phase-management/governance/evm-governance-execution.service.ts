@@ -5,16 +5,13 @@ import { Repository } from 'typeorm';
 import { type Address } from 'viem';
 
 import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
+import { EvmOpenCycleService, type EvmOpenCycleConfig } from '../../processing-tx/onchain/evm-open-cycle.service';
 import {
   buildOperationId,
   encodeMockAdapterParams,
   EvmPositionService,
   type ClosePositionParams,
 } from '../../processing-tx/onchain/evm-position.service';
-import {
-  EvmOpenCycleService,
-  type EvmOpenCycleConfig,
-} from '../../processing-tx/onchain/evm-open-cycle.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
@@ -22,6 +19,8 @@ import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
+
+type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
 
 /**
  * EVM-side execution for passed governance proposals.
@@ -83,7 +82,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * Entry point called by GovernanceExecutionService when `vault.chain_type === 'robinhood'`.
    * Returns `true` on success so the caller can mark the proposal EXECUTED.
    */
-  async executeProposal(proposal: Proposal, vault: Vault): Promise<boolean> {
+  async executeProposal(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     switch (proposal.proposalType) {
       case ProposalType.MARKETPLACE_ACTION:
       case ProposalType.BUY_SELL:
@@ -122,7 +121,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // Expansion: open a new cycle with an asset-contribution window
   // ---------------------------------------------------------------------------
 
-  private async executeEvmExpansion(proposal: Proposal, vault: Vault): Promise<boolean> {
+  private async executeEvmExpansion(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     const cfg = proposal.metadata?.expansion;
     if (!cfg) {
       this.logger.warn(`Proposal ${proposal.id}: missing expansion metadata`);
@@ -132,7 +131,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     const ONE_YEAR_S = BigInt(365 * 24 * 3600);
     const durationS = cfg.noLimit ? ONE_YEAR_S : BigInt(Math.floor((cfg.duration ?? 0) / 1000));
-    const assetWhitelist: Address[] = (cfg.evmAssets ?? []).map((a: { contractAddress: string }) => a.contractAddress as Address);
+    const assetWhitelist: Address[] = (cfg.evmAssets ?? []).map(
+      (a: { contractAddress: string }) => a.contractAddress as Address
+    );
 
     const cycleCfg: EvmOpenCycleConfig = {
       assetWindow: { start: nowSec, end: nowSec + durationS },
@@ -169,7 +170,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // Acquire expansion: open a new cycle with a native-currency (ETH) acquire window
   // ---------------------------------------------------------------------------
 
-  private async executeEvmAcquireExpansion(proposal: Proposal, vault: Vault): Promise<boolean> {
+  private async executeEvmAcquireExpansion(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     const cfg = proposal.metadata?.acquireExpansion;
     if (!cfg) {
       this.logger.warn(`Proposal ${proposal.id}: missing acquireExpansion metadata`);
@@ -204,7 +205,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       this.logger.log(`EVM acquire expansion cycle opened for vault ${vault.id} tx=${txHash}`);
       return true;
     } catch (err) {
-      this.logger.error(`EVM acquire expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`);
+      this.logger.error(
+        `EVM acquire expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`
+      );
       return false;
     }
   }
@@ -213,7 +216,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // Market actions → openPosition via adapter
   // ---------------------------------------------------------------------------
 
-  private async executeMarketAction(proposal: Proposal, vault: Vault): Promise<boolean> {
+  private async executeMarketAction(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     const actions = proposal.metadata?.marketplaceActions ?? [];
     if (actions.length === 0) {
       this.logger.warn(`Proposal ${proposal.id}: no marketplaceActions in metadata`);
@@ -227,7 +230,11 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     return this.executeMarketActionUniswap(proposal, vault, actions);
   }
 
-  private async executeMarketActionUniswap(proposal: Proposal, vault: Vault, actions: any[]): Promise<boolean> {
+  private async executeMarketActionUniswap(
+    proposal: Proposal,
+    vault: EvmGovernanceVaultRef,
+    actions: any[]
+  ): Promise<boolean> {
     if (!this.uniswapAdapterAddress) {
       this.logger.error(
         `EVM_UNISWAP_ADAPTER_ADDRESS is not configured — cannot execute mainnet market proposal ${proposal.id}`
@@ -290,7 +297,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
   private async executeClosePosition(
     proposal: Proposal,
-    vault: Vault,
+    vault: EvmGovernanceVaultRef,
     action: any,
     actionIndex: number
   ): Promise<boolean> {
@@ -342,7 +349,11 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     }
   }
 
-  private async executeMarketActionMock(proposal: Proposal, vault: Vault, actions: any[]): Promise<boolean> {
+  private async executeMarketActionMock(
+    proposal: Proposal,
+    vault: EvmGovernanceVaultRef,
+    actions: any[]
+  ): Promise<boolean> {
     if (!this.mockAdapterAddress) {
       this.logger.error(
         `EVM_MOCK_ADAPTER_ADDRESS is not configured — cannot execute testnet market proposal ${proposal.id}`
@@ -386,7 +397,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // Staking → openPosition via staking adapter
   // ---------------------------------------------------------------------------
 
-  private async executeStakingAction(proposal: Proposal, vault: Vault): Promise<boolean> {
+  private async executeStakingAction(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     const fts = proposal.metadata?.fungibleTokens ?? [];
     const nfts = proposal.metadata?.nonFungibleTokens ?? [];
     const all = [...fts, ...nfts];
@@ -413,7 +424,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // Termination → beginTerminationPreparing → beginTermination
   // ---------------------------------------------------------------------------
 
-  private async executeTermination(proposal: Proposal, vault: Vault): Promise<boolean> {
+  private async executeTermination(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     try {
       // Step 1: prepare
       await this.terminationService.beginTerminationPreparing(vault.id);
