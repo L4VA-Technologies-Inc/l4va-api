@@ -270,6 +270,47 @@ export class MarketplaceActionDto {
     assetName: string;
     collectionName: string | null;
   };
+
+  // ===== EVM-only fields (Uniswap swaps / close-position) =====
+  @ApiProperty({ description: 'EVM: ERC-20 input token address (0x…)', required: false })
+  @IsOptional()
+  @IsString()
+  inputAsset?: string;
+
+  @ApiProperty({ description: 'EVM: ERC-20 expected output token address (0x…)', required: false })
+  @IsOptional()
+  @IsString()
+  expectedOutputAsset?: string;
+
+  @ApiProperty({ description: 'EVM: raw token amount in smallest unit (wei-scale string)', required: false })
+  @IsOptional()
+  @IsString()
+  amount?: string;
+
+  @ApiProperty({ description: 'EVM: human-readable token amount for display', required: false })
+  @IsOptional()
+  @IsString()
+  humanAmount?: string;
+
+  @ApiProperty({ description: 'EVM: on-chain positionId for CLOSE_POSITION actions', required: false })
+  @IsOptional()
+  @IsString()
+  positionId?: string;
+
+  @ApiProperty({ description: 'EVM: position asset address for CLOSE_POSITION', required: false })
+  @IsOptional()
+  @IsString()
+  positionAsset?: string;
+
+  @ApiProperty({ description: 'EVM: underlying asset address to receive on CLOSE_POSITION', required: false })
+  @IsOptional()
+  @IsString()
+  underlyingAsset?: string;
+
+  @ApiProperty({ description: 'EVM: raw position amount for CLOSE_POSITION', required: false })
+  @IsOptional()
+  @IsString()
+  positionAmount?: string;
 }
 
 export class ExpansionPolicyIdDto {
