@@ -121,8 +121,6 @@ export class EvmVaultContributionService {
   private readonly mintingSignerAddress: Address;
   /** Validity window for issued authorization signatures. */
   private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour
-  /** V3 vault opens cycleId=1 immediately after createVault. */
-  private readonly DEFAULT_CYCLE_ID = 1n;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -196,6 +194,9 @@ export class EvmVaultContributionService {
     const vaultAddress = vault.contract_address as Address;
     const deadline = Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS;
 
+    // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
+    const currentCycleId = await this.contractReader.currentCycleId(vaultAddress);
+
     const calls: EvmContributionCall[] = [];
     for (let i = 0; i < rawAssets.length; i++) {
       const asset = rawAssets[i];
@@ -209,7 +210,7 @@ export class EvmVaultContributionService {
       const nonce = this.deriveNonce(txId, i);
 
       const authorization: EvmContributionAuthorization = {
-        cycleId: this.DEFAULT_CYCLE_ID.toString(),
+        cycleId: currentCycleId.toString(),
         contributor,
         kind,
         asset: assetAddress,

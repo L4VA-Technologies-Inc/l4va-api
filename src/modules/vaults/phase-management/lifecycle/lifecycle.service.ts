@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
@@ -1876,13 +1876,14 @@ export class LifecycleService {
   private async findExpansionVaultsAtAssetMax(): Promise<
     Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>[]
   > {
-    // Find all expansion vaults not already being processed
+    // Find all expansion vaults not already being processed (Cardano only)
     const expansionVaults: Pick<
       Vault,
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'
     >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.expansion,
+        chain_type: Not(ChainType.robinhood),
       },
       select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals'],
     });
@@ -2059,13 +2060,14 @@ export class LifecycleService {
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[]
   > {
-    // Find all acquire_expansion vaults not already being processed
+    // Find all acquire_expansion vaults not already being processed (Cardano only)
     const expansionVaults: Pick<
       Vault,
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.acquire_expansion,
+        chain_type: Not(ChainType.robinhood),
       },
       select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals', 'ft_token_supply'],
     });
