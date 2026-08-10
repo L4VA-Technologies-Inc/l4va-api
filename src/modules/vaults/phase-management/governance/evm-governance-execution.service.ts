@@ -145,20 +145,24 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     };
 
     try {
-      const { txHash } = await this.evmOpenCycleService.openCycleForVault(vault.id, cycleCfg);
+      const { txHash, cycleId } = await this.evmOpenCycleService.openCycleForVault(vault.id, cycleCfg);
 
       // openCycleForVault sets vault_status = acquire; override to expansion so
       // governance restrictions and lifecycle queries recognise the window type.
+      // Also reset committed-root fields so the lifecycle cron picks up the new cycle.
       await this.vaultRepository.update(
         { id: vault.id },
         {
           vault_status: VaultStatus.expansion,
           expansion_phase_start: new Date(),
           expansion_duration: cfg.noLimit ? 365 * 24 * 3600 * 1000 : cfg.duration,
+          evm_current_cycle_id: cycleId.toString(),
+          evm_root_committed_at: null,
+          evm_close_cycle_tx_hash: null,
         }
       );
 
-      this.logger.log(`EVM expansion cycle opened for vault ${vault.id} tx=${txHash}`);
+      this.logger.log(`EVM expansion cycle opened for vault ${vault.id} cycleId=${cycleId} tx=${txHash}`);
       return true;
     } catch (err) {
       this.logger.error(`EVM expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`);
@@ -191,7 +195,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     };
 
     try {
-      const { txHash } = await this.evmOpenCycleService.openCycleForVault(vault.id, cycleCfg);
+      const { txHash, cycleId } = await this.evmOpenCycleService.openCycleForVault(vault.id, cycleCfg);
 
       await this.vaultRepository.update(
         { id: vault.id },
@@ -199,10 +203,13 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           vault_status: VaultStatus.acquire_expansion,
           expansion_phase_start: new Date(),
           expansion_duration: cfg.noLimit ? 365 * 24 * 3600 * 1000 : cfg.duration,
+          evm_current_cycle_id: cycleId.toString(),
+          evm_root_committed_at: null,
+          evm_close_cycle_tx_hash: null,
         }
       );
 
-      this.logger.log(`EVM acquire expansion cycle opened for vault ${vault.id} tx=${txHash}`);
+      this.logger.log(`EVM acquire expansion cycle opened for vault ${vault.id} cycleId=${cycleId} tx=${txHash}`);
       return true;
     } catch (err) {
       this.logger.error(

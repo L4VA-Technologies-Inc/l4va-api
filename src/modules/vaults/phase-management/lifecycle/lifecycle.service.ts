@@ -2641,7 +2641,7 @@ export class LifecycleService {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
       })
-      .select(['vault.id', 'vault.contract_address'])
+      .select(['vault.id', 'vault.contract_address', 'vault.vault_status', 'vault.ft_token_decimals'])
       .getMany();
 
     if (candidates.length === 0) return;
@@ -2720,7 +2720,37 @@ export class LifecycleService {
         // 1. Price every active contribution at lock-time.
         const pricing = await this.evmLockTimePricingService.resolvePricesForCycle(vault.id, cycleId);
 
-        // 2. Compute + persist the snapshot (status='calculated').
+        // 2. For expansion cycles with limit pricing, compute VT entitlements directly
+        //    from limitPrice × normalizedQuantity instead of using full vault supply.
+        let expansionVtOverride: Map<string, bigint> | undefined;
+        if (vault.vault_status === VaultStatus.expansion) {
+          const expansionProposal = await this.proposalRepository.findOne({
+            where: { vaultId: vault.id, proposalType: ProposalType.EXPANSION, status: ProposalStatus.EXECUTED },
+            order: { executionDate: 'DESC' },
+            select: ['id', 'metadata'],
+          });
+          const expCfg = expansionProposal?.metadata?.expansion;
+          if (expCfg?.priceType === 'limit' && expCfg.limitPrice > 0) {
+            const vtDecimals = vault.ft_token_decimals ?? 18;
+            const vtDecimalMul = 10n ** BigInt(vtDecimals);
+            const SCALE = 1_000_000n;
+            const limitPriceScaled = BigInt(Math.round(expCfg.limitPrice * 1_000_000));
+            expansionVtOverride = new Map<string, bigint>();
+            for (const [contribId, v] of pricing.contributionValues) {
+              const unitPrice = BigInt(v.unitPriceNative);
+              if (unitPrice === 0n) continue;
+              const valueNative = BigInt(v.valueNative);
+              // VT = (valueNative / unitPrice) * limitPrice * 10^vtDecimals
+              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (unitPrice * SCALE));
+            }
+            this.logger.log(
+              `EVM expansion limit-price override: vault=${vault.id} limitPrice=${expCfg.limitPrice} contributions=${expansionVtOverride.size} ` +
+                `totalVt=${[...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)} base units`
+            );
+          }
+        }
+
+        // 3. Compute + persist the snapshot (status='calculated').
         const { snapshotId, leafCount } = await this.evmAllocationService.computeSnapshot({
           vaultId: vault.id,
           cycleId,
@@ -2728,6 +2758,7 @@ export class LifecycleService {
           priceSource: pricing.priceSource,
           rawPrices: pricing.rawPrices,
           normalizedPrices: pricing.normalizedPrices,
+          expansionVtOverride,
         });
 
         // 3. Advance to 'ready' so handleEvmAcquireToLocked will broadcast
