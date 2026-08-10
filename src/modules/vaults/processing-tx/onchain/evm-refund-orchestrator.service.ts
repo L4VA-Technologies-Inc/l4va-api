@@ -18,7 +18,7 @@ import { Vault } from '@/database/vault.entity';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultFailureReason, VaultStatus } from '@/types/vault.types';
 
 /** Solidity `MAX_BATCH_SIZE = 20` (Vault.sol#L71). */
 const MAX_BATCH_SIZE = 20;
@@ -156,8 +156,9 @@ export class EvmRefundOrchestrator {
       const thresholdMissed =
         cycleView.minAcquireThreshold > 0n && cycleView.nativeCollected < cycleView.minAcquireThreshold;
       const emptyVault = totalContribs === 0n;
+      const noAcquisitionsWithContributions = cycleView.nativeCollected === 0n && totalContribs > 0n;
 
-      if (!thresholdMissed && !emptyVault) continue;
+      if (!thresholdMissed && !emptyVault && !noAcquisitionsWithContributions) continue;
 
       // Guard: don't cancel while a `ready` snapshot is being broadcast — the
       // closeCycle path owns the transition.
@@ -172,9 +173,45 @@ export class EvmRefundOrchestrator {
 
       this.processingVaults.add(vault.id);
       try {
-        const reason = emptyVault
-          ? `Empty vault: totalContributions=0 at end of acquire window`
-          : `Acquire threshold not met: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`;
+        let failureReason: VaultFailureReason;
+        let failureDetails: any;
+        let reason: string;
+
+        if (emptyVault) {
+          reason = `Empty vault: totalContributions=0 at end of acquire window`;
+          failureReason = VaultFailureReason.NO_CONTRIBUTIONS;
+          failureDetails = {
+            message: 'No contributions received before acquire window closed',
+            totalContributions: totalContribs.toString(),
+          };
+        } else if (noAcquisitionsWithContributions) {
+          reason = `No acquisitions despite contributions: acquired=${cycleView.nativeCollected} contributions=${totalContribs}`;
+          failureReason = VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET;
+          failureDetails = {
+            message: 'No acquisitions received despite asset contributions',
+            acquired: cycleView.nativeCollected.toString(),
+            contributions: totalContribs.toString(),
+          };
+        } else {
+          reason = `Acquire threshold not met: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`;
+          failureReason = VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET;
+          failureDetails = {
+            message: 'Acquire threshold not met',
+            required: cycleView.minAcquireThreshold.toString(),
+            actual: cycleView.nativeCollected.toString(),
+          };
+        }
+
+        // Store failure reason and details for later use during finalization
+        await this.vaultsRepository.update(
+          { id: vault.id },
+          {
+            failure_reason: failureReason,
+            failure_details: failureDetails,
+            deactivated_at: new Date(),
+          }
+        );
+
         this.logger.warn(`Vault ${vault.id} cycle ${onChainCycleId}: ${reason}, cancelling`);
         await this.cycleCloseService.cancelCurrentCycle(vault.id, reason);
         result.cancellationsInitiated++;
@@ -627,7 +664,7 @@ export class EvmRefundOrchestrator {
       .andWhere('vault.vault_status IN (:...statuses)', {
         statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
       })
-      .select(['vault.id'])
+      .select(['vault.id', 'vault.failure_reason', 'vault.failure_details'])
       .getMany();
 
     let finalized = 0;
@@ -648,7 +685,10 @@ export class EvmRefundOrchestrator {
         .execute();
       if (res.affected && res.affected > 0) {
         finalized++;
-        this.logger.log(`EVM vault ${vault.id} finalized as failed (cycle cancelled, no active contributions).`);
+        this.logger.log(
+          `EVM vault ${vault.id} finalized as failed (cycle cancelled, no active contributions). ` +
+            `Failure reason: ${vault.failure_reason || 'unknown'}`
+        );
       }
     }
     return { finalized };

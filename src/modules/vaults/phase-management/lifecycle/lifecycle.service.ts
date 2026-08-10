@@ -2619,9 +2619,9 @@ export class LifecycleService {
     if (!this.isEvmCycleAutomationEnabled()) return;
 
     // Candidate vaults: EVM, deployed, no root yet committed, not cancelled,
-    // in a pre-lock DB status. We intentionally include `published` in case
-    // the DB row lags behind on-chain state (createVault confirmed, cycle
-    // opened, contributions already routed).
+    // in acquire or higher status. Vaults must transition contribution → acquire
+    // via handleEvmContributionToAcquireLabel FIRST before we build snapshots here.
+    // We include `published` for edge cases where DB row lags behind on-chain state.
     const candidates: Array<
       Pick<
         Vault,
@@ -2631,6 +2631,7 @@ export class LifecycleService {
         | 'ft_token_decimals'
         | 'acquire_phase_start'
         | 'acquire_window_duration'
+        | 'tokens_for_acquires'
       >
     > = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -2658,6 +2659,7 @@ export class LifecycleService {
         'vault.ft_token_decimals',
         'vault.acquire_phase_start',
         'vault.acquire_window_duration',
+        'vault.tokens_for_acquires',
       ])
       .getMany();
 
@@ -2668,6 +2670,10 @@ export class LifecycleService {
 
     for (const vault of candidates) {
       if (this.processingVaults.has(vault.id)) continue;
+
+      // Vaults with acquirers must pass through the acquire label flip first;
+      // only 0% acquirer vaults can snapshot directly from contribution.
+      if (vault.vault_status === VaultStatus.contribution && Number(vault.tokens_for_acquires) > 0) continue;
 
       let cycleId: bigint;
       let nativeCollected: bigint;

@@ -628,10 +628,21 @@ export class TransactionsService {
       return 0;
     }
 
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<
+      Vault,
+      | 'id'
+      | 'chain_type'
+      | 'acquire_reserve'
+      | 'require_reserved_cost_ada'
+      | 'require_reserved_cost_usd'
+      | 'total_assets_cost_ada'
+      | 'total_assets_cost_usd'
+      | 'total_acquired_value_ada'
+    > = await this.vaultRepository.findOne({
       where: { id: transaction.vault_id },
       select: [
         'id',
+        'chain_type',
         'acquire_reserve',
         'require_reserved_cost_ada',
         'require_reserved_cost_usd',
@@ -663,17 +674,21 @@ export class TransactionsService {
       }
     );
 
-    // Calculate and update vault values
-    const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(transaction.vault_id);
+    // EVM vaults use ETH-based pricing; getVaultAssetsSummary is ADA-centric and produces
+    // wrong totals (e.g. 0.03 ETH stored as raw amount gets treated as 0.03 ADA).
+    // EVM vault TVL and acquired totals are computed accurately during cycle close.
+    if (vault.chain_type !== ChainType.robinhood) {
+      const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(transaction.vault_id);
 
-    await this.vaultRepository.update(vault.id, {
-      require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
-      require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
-      total_assets_cost_ada: assetsPrices.totalValueAda,
-      total_assets_cost_usd: assetsPrices.totalValueUsd,
-      total_assets_cost_eth: assetsPrices.totalValueEth,
-      total_acquired_value_ada: assetsPrices.totalAcquiredAda,
-    });
+      await this.vaultRepository.update(vault.id, {
+        require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+        require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
+        total_assets_cost_ada: assetsPrices.totalValueAda,
+        total_assets_cost_usd: assetsPrices.totalValueUsd,
+        total_assets_cost_eth: assetsPrices.totalValueEth,
+        total_acquired_value_ada: assetsPrices.totalAcquiredAda,
+      });
+    }
 
     // Update expansion proposal asset count if vault is in expansion
     await this.updateExpansionProposalAssetCount(transaction.vault_id);
