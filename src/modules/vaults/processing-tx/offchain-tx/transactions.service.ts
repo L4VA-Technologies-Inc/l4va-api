@@ -1,6 +1,7 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
@@ -21,7 +22,7 @@ import {
   GetTransactionType,
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 @Injectable()
@@ -42,7 +43,8 @@ export class TransactionsService {
     private readonly proposalRepository: Repository<Proposal>,
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService,
-    private readonly gcsService: GoogleCloudStorageService
+    private readonly gcsService: GoogleCloudStorageService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -894,10 +896,11 @@ export class TransactionsService {
   private async updateExpansionProposalAssetCount(vaultId: string): Promise<void> {
     try {
       // Check if vault is in expansion status
-      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'expansion_phase_start'],
-      });
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'chain_type'> =
+        await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'vault_status', 'expansion_phase_start', 'chain_type'],
+        });
 
       if (!vault || vault.vault_status !== VaultStatus.expansion) {
         // Not in expansion mode, nothing to update
@@ -955,6 +958,21 @@ export class TransactionsService {
       await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
 
       this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
+
+      // For EVM vaults: signal closeAssetWindow when asset max is hit so the on-chain
+      // asset window closes immediately rather than waiting for the configured duration.
+      const assetMax = expansionProposal.metadata.expansion.assetMax;
+      if (
+        vault.chain_type === ChainType.robinhood &&
+        assetMax &&
+        !expansionProposal.metadata.expansion.noMax &&
+        currentAssetCount >= assetMax
+      ) {
+        this.logger.log(
+          `EVM vault ${vaultId} hit expansion asset max (${currentAssetCount}/${assetMax}) — emitting closeAssetWindow`
+        );
+        this.eventEmitter.emit('vault.expansion.asset_max_reached', { vaultId });
+      }
     } catch (error) {
       this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
       // Don't throw - this is a secondary operation that shouldn't fail the main transaction

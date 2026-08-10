@@ -149,6 +149,13 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [],
   },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'closeAssetWindow',
+    inputs: [],
+    outputs: [],
+  },
 
   // --- Cycle lifecycle -----------------------------------------------------
   {

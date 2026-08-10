@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { type Address, type Hex } from 'viem';
@@ -152,5 +153,27 @@ export class EvmOpenCycleService {
 
     this.logger.log(`openCycle confirmed for vault ${vaultId} — cycleId=${cycleId} tx=${result.hash}`);
     return { txHash: result.hash, cycleId };
+  }
+
+  @OnEvent('vault.expansion.asset_max_reached')
+  async handleAssetMaxReached({ vaultId }: { vaultId: string }): Promise<void> {
+    await this.closeAssetWindowForVault(vaultId);
+  }
+
+  async closeAssetWindowForVault(vaultId: string): Promise<void> {
+    const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
+    if (!vault?.contract_address || vault.chain_type !== ChainType.robinhood) return;
+
+    const vaultAddress = vault.contract_address as Address;
+    try {
+      await this.adminSigner.sendAndConfirm(
+        { address: vaultAddress, abi: VAULT_ABI, functionName: 'closeAssetWindow', args: [] },
+        ['AssetWindowClosed'],
+        async () => {}
+      );
+      this.logger.log(`closeAssetWindow confirmed for vault ${vaultId}`);
+    } catch (err) {
+      this.logger.error(`closeAssetWindow failed for vault ${vaultId}: ${(err as Error).message}`);
+    }
   }
 }
