@@ -85,11 +85,22 @@ export class NotificationService {
       return;
     }
 
+    const usersWithAddress = users.filter(user => !!user.address);
+    if (usersWithAddress.length === 0) {
+      this.logger.warn(
+        `Bulk notification skipped: resolved ${users.length} user(s), but none have a wallet address on profile.`
+      );
+      return;
+    }
+
+    if (usersWithAddress.length < users.length) {
+      this.logger.debug(
+        `Bulk notification: ${users.length - usersWithAddress.length} user(s) skipped due to missing wallet address.`
+      );
+    }
+
     await Promise.all(
-      users.map(async user => {
-        if (!user.address) {
-          return;
-        }
+      usersWithAddress.map(async user => {
         await this.sendNotification({ ...body, address: user.address });
       })
     );

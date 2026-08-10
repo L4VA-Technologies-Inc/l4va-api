@@ -2173,17 +2173,6 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
     });
 
-    // 3. proposal.started - notifies token holders
-    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(latestSnapshot?.addressBalances);
-    this.eventEmitter.emit('proposal.started', {
-      address: user.address,
-      vaultId: vault.id,
-      vaultName: vault.name,
-      proposalName: proposal.title,
-      creatorId: proposal.creatorId,
-      tokenHolderIds,
-    });
-
     // Note: Reward event for governance proposals is emitted in activateProposal()
     // (only ACTIVE proposals count toward governance participation)
 
@@ -2888,20 +2877,6 @@ export class GovernanceService {
       vaultName: proposal.vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-    });
-
-    // 3. proposal.started - notifies token holders
-    const snapshotForNotif = proposal.snapshotId
-      ? await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId }, select: ['addressBalances'] })
-      : null;
-    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(snapshotForNotif?.addressBalances);
-    this.eventEmitter.emit('proposal.started', {
-      address: proposal.creator.address,
-      vaultId: proposal.vault.id,
-      vaultName: proposal.vault.name,
-      proposalName: proposal.title,
-      creatorId: proposal.creatorId,
-      tokenHolderIds,
     });
 
     this.logger.log(

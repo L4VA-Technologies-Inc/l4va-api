@@ -124,6 +124,18 @@ export class GovernanceExecutionService {
       this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
         this.processProposal(payload.proposalId)
       );
+
+      const activeProposal = await this.proposalRepository.findOne({
+        where: { id: payload.proposalId },
+        relations: ['vault', 'creator', 'snapshot'],
+      });
+
+      if (!activeProposal) {
+        this.logger.warn(`Active proposal ${payload.proposalId} not found for start notification`);
+        return;
+      }
+
+      await this.notifyProposalStarted(activeProposal);
     }
   }
 
@@ -278,7 +290,7 @@ export class GovernanceExecutionService {
     try {
       const proposal = await this.proposalRepository.findOne({
         where: { id: proposalId, status: ProposalStatus.UPCOMING },
-        relations: ['vault', 'creator'],
+        relations: ['vault', 'creator', 'snapshot'],
       });
 
       if (!proposal) {
@@ -297,6 +309,8 @@ export class GovernanceExecutionService {
           previousStatus: ProposalStatus.UPCOMING,
           timestamp: new Date(),
         });
+
+        await this.notifyProposalStarted(proposal);
 
         // Index reward event for proposal activation
         // Only ACTIVE proposals count toward governance participation rewards
@@ -331,6 +345,23 @@ export class GovernanceExecutionService {
       this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  private async notifyProposalStarted(proposal: Proposal): Promise<void> {
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+    if (tokenHolderIds.length === 0) {
+      this.logger.debug(`Proposal ${proposal.id} activated but no token holders were found to notify`);
+      return;
+    }
+
+    this.eventEmitter.emit('proposal.started', {
+      address: proposal.creator?.address,
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds,
+    });
   }
 
   async processProposal(proposalId: string): Promise<void> {
