@@ -2622,7 +2622,17 @@ export class LifecycleService {
     // in a pre-lock DB status. We intentionally include `published` in case
     // the DB row lags behind on-chain state (createVault confirmed, cycle
     // opened, contributions already routed).
-    const candidates = await this.vaultRepository
+    const candidates: Array<
+      Pick<
+        Vault,
+        | 'id'
+        | 'contract_address'
+        | 'vault_status'
+        | 'ft_token_decimals'
+        | 'acquire_phase_start'
+        | 'acquire_window_duration'
+      >
+    > = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
       .andWhere('vault.contract_address IS NOT NULL')
@@ -2641,7 +2651,14 @@ export class LifecycleService {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
       })
-      .select(['vault.id', 'vault.contract_address', 'vault.vault_status', 'vault.ft_token_decimals'])
+      .select([
+        'vault.id',
+        'vault.contract_address',
+        'vault.vault_status',
+        'vault.ft_token_decimals',
+        'vault.acquire_phase_start',
+        'vault.acquire_window_duration',
+      ])
       .getMany();
 
     if (candidates.length === 0) return;
@@ -2669,6 +2686,15 @@ export class LifecycleService {
         const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
         const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
         if (!assetEnded || !acquireEnded) continue;
+
+        // DB-side guard: on-chain both windows share the same end time when
+        // acquire_open_window_type=upon-asset-window-closing, so the on-chain
+        // check above passes the moment the asset window closes. We must also
+        // wait for the DB-recorded sequential acquire window to elapse.
+        if (vault.acquire_phase_start && vault.acquire_window_duration) {
+          const dbAcquireEnd = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
+          if (dbAcquireEnd > Date.now()) continue;
+        }
 
         nativeCollected = cycleView.nativeCollected;
         minThreshold = cycleView.minAcquireThreshold;
