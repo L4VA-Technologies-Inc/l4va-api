@@ -2726,8 +2726,7 @@ export class LifecycleService {
         if (vault.vault_status === VaultStatus.expansion) {
           const expansionProposal = await this.proposalRepository.findOne({
             where: { vaultId: vault.id, proposalType: ProposalType.EXPANSION, status: ProposalStatus.EXECUTED },
-            order: { executionDate: 'DESC' },
-            select: ['id', 'metadata'],
+            order: { createdAt: 'DESC' },
           });
           const expCfg = expansionProposal?.metadata?.expansion;
           if (expCfg?.priceType === 'limit' && expCfg.limitPrice > 0) {

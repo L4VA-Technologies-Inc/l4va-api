@@ -69,8 +69,6 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       if (!already) {
         await this.adapterRegistryService.approveAdapter(this.mockAdapterAddress, 'mock');
         this.logger.log(`MockAdapter ${this.mockAdapterAddress} approved in AdapterRegistry on startup`);
-      } else {
-        this.logger.debug(`MockAdapter ${this.mockAdapterAddress} already approved — no-op`);
       }
     } catch (err) {
       // Non-fatal: governance proposals will fail at execution time with a clear error
