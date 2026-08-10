@@ -288,6 +288,8 @@ export class AssetsService {
       .select(
         `SUM(
           CASE 
+            WHEN asset.type = :ftType AND asset.policy_id LIKE '0x%' THEN 
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0) * :ethPriceInAda
             WHEN asset.type = :ftType THEN 
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
             WHEN asset.type = :ethType THEN
@@ -335,8 +337,12 @@ export class AssetsService {
 
     const itemsSource = assets.map(asset => {
       const isNft = asset.type === AssetType.NFT;
-      const effectivePriceAda =
-        asset.dex_price ?? asset.floor_price ?? (asset.type === AssetType.ETH ? ethPriceInAda : 0);
+const effectivePriceAda = (() => {
+        if (asset.type === AssetType.ETH) return ethPriceInAda;
+        const isEvmErc20 = asset.policy_id?.startsWith('0x') && asset.type !== AssetType.ETH;
+        const rawPrice = asset.dex_price ?? asset.floor_price ?? 0;
+        return isEvmErc20 ? rawPrice * ethPriceInAda : rawPrice;
+      })();
       const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
       const plain = instanceToPlain(asset) as Record<string, unknown>;
 
@@ -459,6 +465,8 @@ export class AssetsService {
         `SUM(
           CASE
             WHEN asset.type = :nftType THEN asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+            WHEN asset.type = :ftType AND asset.policy_id LIKE '0x%' THEN
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0) * :ethPriceInAda
             WHEN asset.type = :ftType THEN
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
             WHEN asset.type = :ethType THEN
@@ -509,7 +517,12 @@ export class AssetsService {
       items: assets.map(asset => {
         const plain = instanceToPlain(asset) as Record<string, unknown>;
         const effectivePriceAda =
-          asset.dex_price ?? asset.floor_price ?? (asset.type === AssetType.ETH ? ethPriceInAda : 0);
+        const effectivePriceAda = (() => {
+          if (asset.type === AssetType.ETH) return ethPriceInAda;
+          const isEvmErc20 = asset.policy_id?.startsWith('0x') && asset.type !== AssetType.ETH;
+          const rawPrice = asset.dex_price ?? asset.floor_price ?? 0;
+          return isEvmErc20 ? rawPrice * ethPriceInAda : rawPrice;
+        })();
         const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
         plain.quantity = asset.normalizedQuantity;
         plain.valueAda = effectiveValueAda;
