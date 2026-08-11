@@ -285,6 +285,8 @@ export class Asset {
    * Get the effective price for this asset
    * Prioritizes floor_price for NFTs, dex_price for FTs
    * ADA always has a price of 1 (1 ADA = 1 ADA)
+   * NOTE: For ETH assets, this returns 0 if dex_price/floor_price are not set.
+   * ETH assets require special handling with ethPriceInAda from the price service.
    *
    * @returns Price in ADA per normalized token
    */
@@ -297,17 +299,23 @@ export class Asset {
     if (this.type === AssetType.NFT) {
       return this.floor_price || this.dex_price || 0;
     }
+    // ETH is a special case: cannot use this getter for USD conversion.
+    // Use ethPriceInAda from price service for proper valuation.
     return this.dex_price || this.floor_price || 0;
   }
 
   /**
    * Get the total value of this asset in ADA
    * Uses normalized quantity and effective price
+   * NOTE: For ETH assets, this will return 0 if effectivePrice is not set.
+   * Use service layer calculations with ethPriceInAda for proper USD conversion.
    *
    * @returns Total value in ADA
    */
   get valueAda(): number {
     // ETH quantity is persisted in wei and must be converted to ETH for value.
+    // WARNING: This getter returns 0 for ETH if dex_price/floor_price not set.
+    // Use service layer for proper ETH valuation with current ethPrice.
     if (this.type === AssetType.ETH) {
       return (this.quantity / 1_000_000_000_000_000_000) * this.effectivePrice;
     }

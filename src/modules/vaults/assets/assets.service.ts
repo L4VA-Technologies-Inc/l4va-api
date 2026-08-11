@@ -336,8 +336,11 @@ export class AssetsService {
     const itemsSource = assets.map(asset => {
       const isNft = asset.type === AssetType.NFT;
       // dex_price is in ADA per whole token for all FT assets (Cardano and EVM).
-      const rawPrice = asset.dex_price ?? asset.floor_price ?? 0;
-      const effectivePriceAda = rawPrice;
+      // For ETH assets, use ethPriceInAda if no dex_price/floor_price is set.
+      const effectivePriceAda =
+        asset.type === AssetType.ETH
+          ? (asset.dex_price ?? asset.floor_price ?? ethPriceInAda)
+          : (asset.dex_price ?? asset.floor_price ?? 0);
       const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
       const plain = instanceToPlain(asset) as Record<string, unknown>;
 

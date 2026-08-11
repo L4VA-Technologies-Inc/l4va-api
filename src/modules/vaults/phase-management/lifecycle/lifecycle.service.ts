@@ -1079,7 +1079,7 @@ export class LifecycleService {
         // This avoids needing to recalculate everything later
         const minAcquirerMultiplier =
           vtSupply > 0 && totalAcquiredAda > 0
-            ? Math.floor(((vtSupply - lpVtAmount) * ASSETS_OFFERED_PERCENT) / totalAcquiredAda / 1_000_000)
+            ? Math.floor(((vtSupply - lpVtAmount) * ASSETS_OFFERED_PERCENT) / totalAcquiredAda)
             : Infinity;
 
         this.logger.log(
@@ -1233,7 +1233,7 @@ export class LifecycleService {
 
             for (const claim of acquirerClaims) {
               const transaction = acquisitionTransactions.find(tx => tx.id === claim.transaction.id);
-              claim.amount = String(minMultiplier * transaction.amount * 1_000_000);
+              claim.amount = String(minMultiplier * transaction.amount);
               claim.multiplier = minMultiplier;
             }
 
