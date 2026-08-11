@@ -506,19 +506,13 @@ export class VaultsService {
       const contributorsFromCsv = contributorWhitelistFile
         ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
         : [];
-
-      const contributorList = data.contributorWhitelist
-        ? [...(data.contributorWhitelist.map(item => item.walletAddress) || [])]
-        : [];
-
-      const allContributors = new Set([...contributorList, ...contributorsFromCsv]);
-      const contributorsArray = [...allContributors];
-
+      const allContributors = new Set([
+        ...(owner.address ? [owner.address] : []),
+        ...(data.contributorWhitelist?.map(i => i.walletAddress) ?? []),
+        ...contributorsFromCsv,
+      ]);
       await this.contributorWhitelistRepository.save(
-        contributorsArray.map(item => ({
-          vault: newVault,
-          wallet_address: item,
-        }))
+        [...allContributors].map(wa => ({ vault: newVault, wallet_address: wa }))
       );
 
       // this.eventEmitter.emit('vault.whitelist_added', {
@@ -575,7 +569,13 @@ export class VaultsService {
       // Combine both whitelists into a unique array for smart contract
       const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
       const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
-      const allowedContributors = [...new Set([...contributorAddresses, ...acquirerAddresses])];
+      const allowedContributors = [
+        ...new Set([
+          ...(finalVault.owner?.address ? [finalVault.owner.address] : []),
+          ...contributorAddresses,
+          ...acquirerAddresses,
+        ]),
+      ];
 
       // Validate combined whitelist size (Cardano transaction size limit)
       const MAX_COMBINED_WHITELIST_SIZE = 100;
