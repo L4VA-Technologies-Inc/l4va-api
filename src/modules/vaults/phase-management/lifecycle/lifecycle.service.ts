@@ -230,7 +230,8 @@ export class LifecycleService {
         vault.acquire_multiplier = data.acquire_multiplier;
         vault.ada_distribution = data.ada_distribution;
         vault.fdv = data.fdv;
-        vault.fdv_tvl = data.fdvTvl;
+        // fdv_tvl column is numeric(12,6)
+        vault.fdv_tvl = data.fdvTvl != null ? Math.min(Math.round(data.fdvTvl * 100) / 100, 999999.99) : data.fdvTvl;
 
         // Set initial value for gains calculation (baseline for future price changes)
         // This is the total value of all contributed assets at the moment of locking
@@ -1378,7 +1379,7 @@ export class LifecycleService {
           ada_pair_multiplier: finalAdaPairMultiplier,
           vtPrice,
           fdv,
-          fdvTvl: +(fdv / totalContributedValueAda).toFixed(2) || 0,
+          fdvTvl: totalContributedValueAda > 0 ? +(fdv / totalContributedValueAda).toFixed(2) : 0,
         });
 
         try {
