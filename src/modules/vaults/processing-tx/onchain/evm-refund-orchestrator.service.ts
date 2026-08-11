@@ -143,6 +143,9 @@ export class EvmRefundOrchestrator {
       //   (b) Nobody contributed at all  → totalContributions == 0
       // Case (b) covers vaults that opened but no one showed up — on Cardano
       // these transition straight to `failed`.
+      // NOTE: vaults with contributions but 0 acquisitions and minThreshold=0 are
+      // NOT cancelled here — handleEvmContributionToSnapshotReady owns that path
+      // (mirrors Cardano: threshold=0 is always met, vault proceeds to locked).
       let totalContribs: bigint;
       try {
         totalContribs = await this.contractReader.totalContributions(vault.contract_address as Address);
@@ -156,9 +159,8 @@ export class EvmRefundOrchestrator {
       const thresholdMissed =
         cycleView.minAcquireThreshold > 0n && cycleView.nativeCollected < cycleView.minAcquireThreshold;
       const emptyVault = totalContribs === 0n;
-      const noAcquisitionsWithContributions = cycleView.nativeCollected === 0n && totalContribs > 0n;
 
-      if (!thresholdMissed && !emptyVault && !noAcquisitionsWithContributions) continue;
+      if (!thresholdMissed && !emptyVault) continue;
 
       // Guard: don't cancel while a `ready` snapshot is being broadcast — the
       // closeCycle path owns the transition.
@@ -183,14 +185,6 @@ export class EvmRefundOrchestrator {
           failureDetails = {
             message: 'No contributions received before acquire window closed',
             totalContributions: totalContribs.toString(),
-          };
-        } else if (noAcquisitionsWithContributions) {
-          reason = `No acquisitions despite contributions: acquired=${cycleView.nativeCollected} contributions=${totalContribs}`;
-          failureReason = VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET;
-          failureDetails = {
-            message: 'No acquisitions received despite asset contributions',
-            acquired: cycleView.nativeCollected.toString(),
-            contributions: totalContribs.toString(),
           };
         } else {
           reason = `Acquire threshold not met: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`;

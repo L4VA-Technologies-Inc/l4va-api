@@ -1357,16 +1357,9 @@ export class TaptoolsService {
         let valueUsd = 0;
 
         if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
-          // Use cached price from database
-          if (isEvmVault) {
-            // dex_price for EVM assets is in ETH per whole token — convert to ADA/USD
-            const valueUsd_ = asset.cachedPrice * ethPrice * asset.quantity;
-            valueAda = adaPrice > 0 ? valueUsd_ / adaPrice : 0;
-            valueUsd = valueUsd_;
-          } else {
-            valueAda = asset.cachedPrice;
-            valueUsd = valueAda * adaPrice;
-          }
+          // dex_price is in ADA per whole token for all FT assets (Cardano and EVM alike)
+          valueAda = asset.cachedPrice;
+          valueUsd = valueAda * adaPrice;
 
           // Special handling: For Relics Vita NFTs, ensure character trait is cached even when using cached price
           if (asset.policyId === this.RELICS_OF_MAGMA_VITA_POLICY && asset.id && asset.name) {
@@ -1375,10 +1368,9 @@ export class TaptoolsService {
           }
         } else {
           if (isEvmVault && !this.isMainnet) {
-            // Testnet fallback for EVM assets with no price feed: 1 ETH per whole token
-            const valueUsd_ = 1 * ethPrice * asset.quantity;
-            valueAda = adaPrice > 0 ? valueUsd_ / adaPrice : 0;
-            valueUsd = valueUsd_;
+            // Testnet fallback: no market price available, show 0 rather than a misleading ETH-based estimate.
+            valueAda = 0;
+            valueUsd = 0;
           } else {
             const assetValue = await this.getAssetValue({
               policyId: asset.policyId,
@@ -1393,8 +1385,8 @@ export class TaptoolsService {
           }
         }
 
-        const totalAssetValueAda = isEvmVault ? valueAda : valueAda * asset.quantity;
-        const totalAssetValueUsd = isEvmVault ? valueUsd : valueUsd * asset.quantity;
+        const totalAssetValueAda = valueAda * asset.quantity;
+        const totalAssetValueUsd = valueUsd * asset.quantity;
 
         assetsWithValues.push({
           ...asset,
@@ -1405,11 +1397,7 @@ export class TaptoolsService {
 
         totalValueAda += totalAssetValueAda;
         totalValueUsd += totalAssetValueUsd;
-        totalAcquiredAda += isEvmVault
-          ? adaPrice > 0
-            ? ((valueUsd / asset.quantity || 0) * asset.acquiredQuantity * ethPrice) / adaPrice
-            : 0
-          : valueAda * asset.acquiredQuantity;
+        totalAcquiredAda += valueAda * asset.acquiredQuantity;
       } catch (error: any) {
         console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
       }
