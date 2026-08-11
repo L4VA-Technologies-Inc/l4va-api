@@ -21,7 +21,10 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
-import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
+import {
+  EmptyAllocationError,
+  EvmAllocationService,
+} from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
 import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/onchain/evm-fee-withdraw.service';
@@ -2680,39 +2683,64 @@ export class LifecycleService {
       let minThreshold: bigint;
       try {
         cycleId = await this.evmContractReader.currentCycleId(vault.contract_address as `0x${string}`);
-        if (cycleId === 0n) continue; // no cycle opened yet
+        if (cycleId === 0n) {
+          this.logger.debug(`EVM snapshot skip: vault=${vault.id} reason=no-cycle-opened`);
+          continue;
+        }
 
         const cycleView = await this.evmContractReader.getCycle(vault.contract_address as `0x${string}`, cycleId);
 
         // Only act on Active cycles — Locked/Cancelled are handled elsewhere.
-        if (cycleView.status !== EvmCycleStatus.Active) continue;
+        if (cycleView.status !== EvmCycleStatus.Active) {
+          this.logger.debug(
+            `EVM snapshot skip: vault=${vault.id} cycle=${cycleId} reason=cycle-not-active status=${cycleView.status}`
+          );
+          continue;
+        }
 
         // Both configured windows must have ended. Zero-length windows are
         // treated as already closed.
         const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
         const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
-        if (!assetEnded || !acquireEnded) continue;
+        if (!assetEnded || !acquireEnded) {
+          continue;
+        }
 
         // DB-side guard: on-chain both windows share the same end time when
         // acquire_open_window_type=upon-asset-window-closing, so the on-chain
         // check above passes the moment the asset window closes. We must also
         // wait for the DB-recorded sequential acquire window to elapse.
+        // acquire_window_duration is a bigint column — TypeORM hands it back as a
+        // string, so it must be coerced or `+` concatenates instead of adding.
         if (vault.acquire_phase_start && vault.acquire_window_duration) {
-          const dbAcquireEnd = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
-          if (dbAcquireEnd > Date.now()) continue;
+          const dbAcquireEnd = new Date(vault.acquire_phase_start).getTime() + Number(vault.acquire_window_duration);
+          if (dbAcquireEnd > Date.now()) {
+            this.logger.debug(
+              `EVM snapshot skip: vault=${vault.id} cycle=${cycleId} reason=db-acquire-window-open ` +
+                `endsAt=${new Date(dbAcquireEnd).toISOString()}`
+            );
+            continue;
+          }
         }
 
         nativeCollected = cycleView.nativeCollected;
         minThreshold = cycleView.minAcquireThreshold;
       } catch (err) {
-        this.logger.debug(
-          `EVM handleEvmContributionToSnapshotReady: read failed for vault ${vault.id}: ${(err as Error).message}`
+        this.logger.warn(
+          `EVM handleEvmContributionToSnapshotReady: on-chain read failed for vault ${vault.id} ` +
+            `(${vault.contract_address}): ${(err as Error).message}`
         );
         continue;
       }
 
       // Threshold not met → refund path picks it up. Nothing to snapshot here.
-      if (nativeCollected < minThreshold) continue;
+      if (nativeCollected < minThreshold) {
+        this.logger.debug(
+          `EVM snapshot skip: vault=${vault.id} cycle=${cycleId} reason=below-min-threshold ` +
+            `collected=${nativeCollected} min=${minThreshold}`
+        );
+        continue;
+      }
 
       // Parity with Cardano flow: enforce asset whitelist min/max caps before
       // preparing lock snapshot. If violated, cancel on-chain cycle and mark
@@ -2808,6 +2836,19 @@ export class LifecycleService {
               error: err.message,
             },
             cancelReason: `Missing lock-time pricing at cycle close: ${err.message}`,
+          });
+          continue;
+        }
+        if (err instanceof EmptyAllocationError) {
+          await this.cancelAndFailEvmVault(vault.id, cycleId, {
+            failureReason: VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET,
+            failureDetails: {
+              message: 'No distributable allocation at cycle close — nothing was acquired',
+              nativeCollected: nativeCollected.toString(),
+              tokensForAcquires: vault.tokens_for_acquires,
+              error: err.message,
+            },
+            cancelReason: `Zero allocation at cycle close: ${err.message}`,
           });
           continue;
         }

@@ -18,6 +18,14 @@ import { ChainType } from '@/types/vault.types';
 
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
 
+/** Nothing is distributable for this cycle — caller should cancel + refund. */
+export class EmptyAllocationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmptyAllocationError';
+  }
+}
+
 export interface ComputeSnapshotParams {
   vaultId: string;
   cycleId: bigint;
@@ -200,7 +208,10 @@ export class EvmAllocationService {
     });
 
     if (formulaResult.perWallet.length === 0) {
-      throw new BadRequestException('Allocation formula produced zero-length wallet result');
+      throw new EmptyAllocationError(
+        `Vault ${vaultId} cycle ${cycleId} allocates nothing: ` +
+          `nativeRaised=${formulaResult.totalNativeRaised}, vtToContributors=${formulaResult.vtToContributors}`
+      );
     }
 
     // Build Merkle leaves.
