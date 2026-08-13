@@ -97,9 +97,9 @@ export class ContributorPaymentBuilder {
         vault.script_hash
       );
 
-      // CRITICAL VALIDATION: Never burn receipt if VT would be 0!
-      // This prevents catastrophic loss where receipt is burned but no VT minted
-      if (vaultTokenQuantity === 0n) {
+      // CRITICAL VALIDATION: Never burn receipt if VT would be 0 when VT is expected.
+      // Allow 0 when claim.amount is also 0 (e.g. 100% acquirer vault — ADA-only distribution).
+      if (vaultTokenQuantity === 0n && BigInt(claim.amount) > 0n) {
         this.logger.error(
           `CRITICAL: Claim ${claim.id} would mint 0 VT! ` +
             `This indicates multipliers for this claim's assets are NOT on-chain. ` +
