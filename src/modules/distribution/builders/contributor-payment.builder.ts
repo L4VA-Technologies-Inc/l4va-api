@@ -97,9 +97,9 @@ export class ContributorPaymentBuilder {
         vault.script_hash
       );
 
-      // CRITICAL VALIDATION: Never burn receipt if VT would be 0!
-      // This prevents catastrophic loss where receipt is burned but no VT minted
-      if (vaultTokenQuantity === 0n) {
+      // CRITICAL VALIDATION: Never burn receipt if VT would be 0 when VT is expected.
+      // Allow 0 when claim.amount is also 0 (e.g. 100% acquirer vault — ADA-only distribution).
+      if (vaultTokenQuantity === 0n && BigInt(claim.amount) > 0n) {
         this.logger.error(
           `CRITICAL: Claim ${claim.id} would mint 0 VT! ` +
             `This indicates multipliers for this claim's assets are NOT on-chain. ` +
@@ -278,11 +278,19 @@ export class ContributorPaymentBuilder {
         },
       });
 
-      // Output: Return remaining ADA to dispatch address
-      outputs.push({
-        address: DISPATCH_ADDRESS,
-        lovelace: actualRemainingDispatchLovelace,
-      });
+      // Output: Return remaining ADA to dispatch address only if above minimum UTXO
+      // If dust remains (<1 ADA), skip the change output — the SC balance equation still holds
+      const MIN_DISPATCH_CHANGE_LOVELACE = 1_000_000;
+      if (actualRemainingDispatchLovelace >= MIN_DISPATCH_CHANGE_LOVELACE) {
+        outputs.push({
+          address: DISPATCH_ADDRESS,
+          lovelace: actualRemainingDispatchLovelace,
+        });
+      } else if (actualRemainingDispatchLovelace > 0) {
+        this.logger.log(
+          `Dispatch change ${actualRemainingDispatchLovelace} lovelace is below minimum UTXO — omitting change output`
+        );
+      }
     }
 
     // Add mint script interaction

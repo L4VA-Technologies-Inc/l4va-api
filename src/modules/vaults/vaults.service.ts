@@ -1260,8 +1260,23 @@ export class VaultsService {
     }
     const isChatVisible = await this.verifyChatAccess(userId, vaultId);
 
-    let isWhitelistedContributor = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
-    let isWhitelistedAcquirer = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
+    const isSemiPrivate = vault.privacy === VaultPrivacy.semiPrivate;
+
+    // For semi-private: empty whitelist means that phase is open to everyone
+    const [contributorCount, acquirerCount] = isSemiPrivate
+      ? await Promise.all([
+          this.contributorWhitelistRepository.count({ where: { vault: { id: vaultId } } }),
+          this.acquirerWhitelistRepository.count({ where: { vault: { id: vaultId } } }),
+        ])
+      : [1, 1]; // non-semi-private: treat as populated so whitelist check runs normally
+
+    const semiPrivateContribOpen = isSemiPrivate && contributorCount === 0;
+    const semiPrivateAcquireOpen = isSemiPrivate && acquirerCount === 0;
+
+    let isWhitelistedContributor =
+      vault.privacy === VaultPrivacy.public || vault.owner.id === userId || semiPrivateContribOpen;
+    let isWhitelistedAcquirer =
+      vault.privacy === VaultPrivacy.public || vault.owner.id === userId || semiPrivateAcquireOpen;
 
     if (userId && vault.privacy !== VaultPrivacy.public && vault.owner.id !== userId) {
       const user = await this.usersRepository.findOne({
@@ -1270,13 +1285,17 @@ export class VaultsService {
       });
 
       if (user) {
-        isWhitelistedContributor = await this.contributorWhitelistRepository.exists({
-          where: { vault: { id: vaultId }, wallet_address: user.address },
-        });
+        if (!semiPrivateContribOpen) {
+          isWhitelistedContributor = await this.contributorWhitelistRepository.exists({
+            where: { vault: { id: vaultId }, wallet_address: user.address },
+          });
+        }
 
-        isWhitelistedAcquirer = await this.acquirerWhitelistRepository.exists({
-          where: { vault: { id: vaultId }, wallet_address: user.address },
-        });
+        if (!semiPrivateAcquireOpen) {
+          isWhitelistedAcquirer = await this.acquirerWhitelistRepository.exists({
+            where: { vault: { id: vaultId }, wallet_address: user.address },
+          });
+        }
       }
     }
 
@@ -1534,16 +1553,51 @@ export class VaultsService {
         userWalletAddress = user.address;
         queryBuilder.andWhere(
           new Brackets(qb => {
-            // Include public vaults OR vaults where user is whitelisted or the owner
             qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
               .orWhere('vault.owner_id = :userId', { userId })
+              // semi-private contribution phases: visible if no contributor whitelist, or user is in it
               .orWhere(
-                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
-                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+                `(vault.privacy = :semiPrivate
+                  AND vault.vault_status IN (:...contribStatuses)
+                  AND (
+                    NOT EXISTS (SELECT 1 FROM contributor_whitelist cw2 WHERE cw2.vault_id = vault.id)
+                    OR EXISTS (SELECT 1 FROM contributor_whitelist cw3 WHERE cw3.vault_id = vault.id AND cw3.wallet_address = :userWalletAddress)
+                  ))`,
+                {
+                  semiPrivate: VaultPrivacy.semiPrivate,
+                  contribStatuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.expansion],
+                  userWalletAddress,
+                }
+              )
+              // semi-private acquire phases: visible if no acquirer whitelist, or user is in it
+              .orWhere(
+                `(vault.privacy = :semiPrivate
+                  AND vault.vault_status IN (:...acquireStatuses)
+                  AND (
+                    NOT EXISTS (SELECT 1 FROM acquirer_whitelist aw2 WHERE aw2.vault_id = vault.id)
+                    OR EXISTS (SELECT 1 FROM acquirer_whitelist aw3 WHERE aw3.vault_id = vault.id AND aw3.wallet_address = :userWalletAddress)
+                  ))`,
+                {
+                  semiPrivate: VaultPrivacy.semiPrivate,
+                  acquireStatuses: [
+                    VaultStatus.acquire,
+                    VaultStatus.acquire_expansion,
+                    VaultStatus.locked,
+                    VaultStatus.failed,
+                    VaultStatus.burned,
+                    VaultStatus.terminating,
+                  ],
+                  userWalletAddress,
+                }
+              )
+              // private vaults: user must be in contributor or acquirer whitelist
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND vault.privacy != :semiPrivate AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, semiPrivate: VaultPrivacy.semiPrivate, userWalletAddress }
               )
               .orWhere(
-                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
-                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+                '(vault.privacy != :publicPrivacy AND vault.privacy != :semiPrivate AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, semiPrivate: VaultPrivacy.semiPrivate, userWalletAddress }
               );
           })
         );
@@ -1553,7 +1607,37 @@ export class VaultsService {
       queryBuilder.andWhere('vault.owner_id = :ownerId', { ownerId });
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     } else {
-      queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+      // unauthenticated: public + semi-private only when the relevant whitelist is empty
+      queryBuilder.andWhere(
+        new Brackets(qb => {
+          qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+            .orWhere(
+              `(vault.privacy = :semiPrivate
+                AND vault.vault_status IN (:...contribStatuses)
+                AND NOT EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id))`,
+              {
+                semiPrivate: VaultPrivacy.semiPrivate,
+                contribStatuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.expansion],
+              }
+            )
+            .orWhere(
+              `(vault.privacy = :semiPrivate
+                AND vault.vault_status IN (:...acquireStatuses)
+                AND NOT EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id))`,
+              {
+                semiPrivate: VaultPrivacy.semiPrivate,
+                acquireStatuses: [
+                  VaultStatus.acquire,
+                  VaultStatus.acquire_expansion,
+                  VaultStatus.locked,
+                  VaultStatus.failed,
+                  VaultStatus.burned,
+                  VaultStatus.terminating,
+                ],
+              }
+            );
+        })
+      );
     }
 
     if (search) {

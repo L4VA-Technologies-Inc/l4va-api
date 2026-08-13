@@ -395,7 +395,9 @@ export class VaultManagingService {
                 vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
-                ...(contributorKeyHashes && { contributor_whitelist: contributorKeyHashes }),
+                // semi-private: whitelist enforced backend-only so acquirers are not blocked on-chain
+                ...(contributorKeyHashes &&
+                  vaultConfig.contractType !== 2 && { contributor_whitelist: contributorKeyHashes }),
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {
@@ -705,7 +707,8 @@ export class VaultManagingService {
               vault_status: vaultStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
-              ...(contributorKeyHashes && { contributor_whitelist: contributorKeyHashes }),
+              // semi-private: whitelist enforced backend-only so acquirers are not blocked on-chain
+              ...(contributorKeyHashes && contract_type !== 2 && { contributor_whitelist: contributorKeyHashes }),
               asset_window: {
                 lower_bound: {
                   bound_type: asset_window?.start

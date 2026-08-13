@@ -1278,10 +1278,10 @@ export class LifecycleService {
           acquirerClaims: finalAcquirerClaims,
         });
 
-        // Validate claim amounts to detect multiplier underflow
+        // Validate claim amounts — include acquirer claims so 100% acquirer vaults pass
         const validationPassed = await this.validateClaimsBeforeDistribution(
           vault,
-          finalContributorClaims,
+          [...finalContributorClaims, ...finalAcquirerClaims],
           acquireMultiplier
         );
 
