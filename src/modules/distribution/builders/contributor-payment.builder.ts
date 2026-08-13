@@ -278,11 +278,19 @@ export class ContributorPaymentBuilder {
         },
       });
 
-      // Output: Return remaining ADA to dispatch address
-      outputs.push({
-        address: DISPATCH_ADDRESS,
-        lovelace: actualRemainingDispatchLovelace,
-      });
+      // Output: Return remaining ADA to dispatch address only if above minimum UTXO
+      // If dust remains (<1 ADA), skip the change output — the SC balance equation still holds
+      const MIN_DISPATCH_CHANGE_LOVELACE = 1_000_000;
+      if (actualRemainingDispatchLovelace >= MIN_DISPATCH_CHANGE_LOVELACE) {
+        outputs.push({
+          address: DISPATCH_ADDRESS,
+          lovelace: actualRemainingDispatchLovelace,
+        });
+      } else if (actualRemainingDispatchLovelace > 0) {
+        this.logger.log(
+          `Dispatch change ${actualRemainingDispatchLovelace} lovelace is below minimum UTXO — omitting change output`
+        );
+      }
     }
 
     // Add mint script interaction
