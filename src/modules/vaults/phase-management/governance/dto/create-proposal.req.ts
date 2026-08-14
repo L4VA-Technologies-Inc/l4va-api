@@ -108,6 +108,8 @@ export enum ExecType {
   SELL = 'SELL',
   UNLIST = 'UNLIST',
   UPDATE_LISTING = 'UPDATE_LISTING',
+  /** EVM only — close an open adapter position by positionId. */
+  CLOSE_POSITION = 'CLOSE_POSITION',
 }
 
 export enum SellType {
@@ -268,6 +270,47 @@ export class MarketplaceActionDto {
     assetName: string;
     collectionName: string | null;
   };
+
+  // ===== EVM-only fields (Uniswap swaps / close-position) =====
+  @ApiProperty({ description: 'EVM: ERC-20 input token address (0x…)', required: false })
+  @ValidateIf(o => o.inputAsset !== undefined)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'inputAsset must be a 20-byte hex EVM address' })
+  inputAsset?: string;
+
+  @ApiProperty({ description: 'EVM: ERC-20 expected output token address (0x…)', required: false })
+  @ValidateIf(o => o.expectedOutputAsset !== undefined)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'expectedOutputAsset must be a 20-byte hex EVM address' })
+  expectedOutputAsset?: string;
+
+  @ApiProperty({ description: 'EVM: raw token amount in smallest unit (wei-scale string)', required: false })
+  @ValidateIf(o => o.amount !== undefined)
+  @IsNumberString({}, { message: 'amount must be a valid unsigned integer string' })
+  amount?: string;
+
+  @ApiProperty({ description: 'EVM: human-readable token amount for display', required: false })
+  @IsOptional()
+  @IsString()
+  humanAmount?: string;
+
+  @ApiProperty({ description: 'EVM: on-chain positionId for CLOSE_POSITION actions', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @IsNumberString({}, { message: 'positionId must be a valid unsigned integer string' })
+  positionId?: string;
+
+  @ApiProperty({ description: 'EVM: position asset address for CLOSE_POSITION', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'positionAsset must be a 20-byte hex EVM address' })
+  positionAsset?: string;
+
+  @ApiProperty({ description: 'EVM: underlying asset address to receive on CLOSE_POSITION', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'underlyingAsset must be a 20-byte hex EVM address' })
+  underlyingAsset?: string;
+
+  @ApiProperty({ description: 'EVM: raw position amount for CLOSE_POSITION', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @IsNumberString({}, { message: 'positionAmount must be a valid unsigned integer string' })
+  positionAmount?: string;
 }
 
 export class ExpansionPolicyIdDto {
@@ -293,6 +336,23 @@ export class ExpansionPolicyIdDto {
 }
 
 export class AssetWhitelistProposalDto extends OmitType(AssetWhitelistDto, ['countCapMin', 'countCapMax'] as const) {}
+
+// EVM expansion: ERC-20 / ERC-721 contract address selected for the new cycle
+export class ExpansionEvmAssetDto {
+  @ApiProperty({
+    description: 'ERC-20 or ERC-721 contract address (0x-prefixed)',
+    example: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'Must be a valid EVM address (0x followed by 40 hex chars)' })
+  contractAddress: string;
+
+  @ApiProperty({ description: 'Human-readable label for display', required: false })
+  @IsOptional()
+  @IsString()
+  label?: string;
+}
 
 export class CreateProposalReq {
   @ApiProperty({
@@ -412,6 +472,19 @@ export class CreateProposalReq {
   @Type(() => ExpansionPolicyIdDto)
   @Expose()
   expansionPolicyIds?: ExpansionPolicyIdDto[];
+
+  @ApiProperty({
+    description:
+      'EVM: ERC-20/ERC-721 contract addresses accepted during expansion (replaces expansionPolicyIds for Robinhood vaults)',
+    type: [ExpansionEvmAssetDto],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ExpansionEvmAssetDto)
+  @Expose()
+  expansionEvmAssets?: ExpansionEvmAssetDto[];
 
   @ApiProperty({
     description: 'Duration in milliseconds for vault expansion period',

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
@@ -21,17 +21,22 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
-import { EvmAllocationService } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
+import {
+  EmptyAllocationError,
+  EvmAllocationService,
+} from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
+import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/onchain/evm-fee-withdraw.service';
 import {
   EvmLockTimePricingService,
   MissingPriceError,
 } from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
 import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
+import { EvmTerminationService } from '@/modules/vaults/processing-tx/onchain/evm-termination.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
-import { EvmCycleStatus } from '@/modules/vaults/processing-tx/onchain/vault.abi';
+import { EvmCycleStatus, VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -86,7 +91,9 @@ export class LifecycleService {
     private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
     private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
     private readonly evmAllocationService: EvmAllocationService,
-    private readonly evmLockTimePricingService: EvmLockTimePricingService
+    private readonly evmLockTimePricingService: EvmLockTimePricingService,
+    private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
+    private readonly evmTerminationService: EvmTerminationService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -112,6 +119,8 @@ export class LifecycleService {
       await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
       await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
       await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
+      await this.handleEvmFeeWithdraw(); // EVM: sweep accrued protocol fees to treasury
+      await this.handleEvmFinalizeTerminating(); // EVM: call finalizeTermination when all VT has been redeemed
     } finally {
       this.isRunning = false;
     }
@@ -221,7 +230,8 @@ export class LifecycleService {
         vault.acquire_multiplier = data.acquire_multiplier;
         vault.ada_distribution = data.ada_distribution;
         vault.fdv = data.fdv;
-        vault.fdv_tvl = data.fdvTvl;
+        // fdv_tvl column is numeric(12,6)
+        vault.fdv_tvl = data.fdvTvl != null ? Math.min(Math.round(data.fdvTvl * 100) / 100, 999999.99) : data.fdvTvl;
 
         // Set initial value for gains calculation (baseline for future price changes)
         // This is the total value of all contributed assets at the moment of locking
@@ -1069,7 +1079,7 @@ export class LifecycleService {
         // This avoids needing to recalculate everything later
         const minAcquirerMultiplier =
           vtSupply > 0 && totalAcquiredAda > 0
-            ? Math.floor(((vtSupply - lpVtAmount) * ASSETS_OFFERED_PERCENT) / totalAcquiredAda / 1_000_000)
+            ? Math.floor(((vtSupply - lpVtAmount) * ASSETS_OFFERED_PERCENT) / totalAcquiredAda)
             : Infinity;
 
         this.logger.log(
@@ -1223,7 +1233,7 @@ export class LifecycleService {
 
             for (const claim of acquirerClaims) {
               const transaction = acquisitionTransactions.find(tx => tx.id === claim.transaction.id);
-              claim.amount = String(minMultiplier * transaction.amount * 1_000_000);
+              claim.amount = String(minMultiplier * transaction.amount);
               claim.multiplier = minMultiplier;
             }
 
@@ -1369,7 +1379,7 @@ export class LifecycleService {
           ada_pair_multiplier: finalAdaPairMultiplier,
           vtPrice,
           fdv,
-          fdvTvl: +(fdv / totalContributedValueAda).toFixed(2) || 0,
+          fdvTvl: totalContributedValueAda > 0 ? +(fdv / totalContributedValueAda).toFixed(2) : 0,
         });
 
         try {
@@ -1870,13 +1880,14 @@ export class LifecycleService {
   private async findExpansionVaultsAtAssetMax(): Promise<
     Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>[]
   > {
-    // Find all expansion vaults not already being processed
+    // Find all expansion vaults not already being processed (Cardano only)
     const expansionVaults: Pick<
       Vault,
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'
     >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.expansion,
+        chain_type: Not(ChainType.robinhood),
       },
       select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals'],
     });
@@ -2053,13 +2064,14 @@ export class LifecycleService {
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[]
   > {
-    // Find all acquire_expansion vaults not already being processed
+    // Find all acquire_expansion vaults not already being processed (Cardano only)
     const expansionVaults: Pick<
       Vault,
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.acquire_expansion,
+        chain_type: Not(ChainType.robinhood),
       },
       select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals', 'ft_token_supply'],
     });
@@ -2611,23 +2623,48 @@ export class LifecycleService {
     if (!this.isEvmCycleAutomationEnabled()) return;
 
     // Candidate vaults: EVM, deployed, no root yet committed, not cancelled,
-    // in a pre-lock DB status. We intentionally include `published` in case
-    // the DB row lags behind on-chain state (createVault confirmed, cycle
-    // opened, contributions already routed).
-    const candidates = await this.vaultRepository
+    // in acquire or higher status. Vaults must transition contribution → acquire
+    // via handleEvmContributionToAcquireLabel FIRST before we build snapshots here.
+    // We include `published` for edge cases where DB row lags behind on-chain state.
+    const candidates: Array<
+      Pick<
+        Vault,
+        | 'id'
+        | 'contract_address'
+        | 'vault_status'
+        | 'ft_token_decimals'
+        | 'acquire_phase_start'
+        | 'acquire_window_duration'
+        | 'tokens_for_acquires'
+      >
+    > = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.evm_root_committed_at IS NULL')
       .andWhere('vault.evm_cancel_cycle_tx_hash IS NULL')
       .andWhere('vault.vault_status IN (:...statuses)', {
-        statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
+        statuses: [
+          VaultStatus.contribution,
+          VaultStatus.acquire,
+          VaultStatus.published,
+          VaultStatus.expansion,
+          VaultStatus.acquire_expansion,
+        ],
       })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
       })
-      .select(['vault.id', 'vault.contract_address'])
+      .select([
+        'vault.id',
+        'vault.contract_address',
+        'vault.vault_status',
+        'vault.ft_token_decimals',
+        'vault.acquire_phase_start',
+        'vault.acquire_window_duration',
+        'vault.tokens_for_acquires',
+      ])
       .getMany();
 
     if (candidates.length === 0) return;
@@ -2638,35 +2675,73 @@ export class LifecycleService {
     for (const vault of candidates) {
       if (this.processingVaults.has(vault.id)) continue;
 
+      // Vaults with acquirers must pass through the acquire label flip first;
+      // only 0% acquirer vaults can snapshot directly from contribution.
+      if (vault.vault_status === VaultStatus.contribution && Number(vault.tokens_for_acquires) > 0) continue;
+
       let cycleId: bigint;
       let nativeCollected: bigint;
       let minThreshold: bigint;
       try {
         cycleId = await this.evmContractReader.currentCycleId(vault.contract_address as `0x${string}`);
-        if (cycleId === 0n) continue; // no cycle opened yet
+        if (cycleId === 0n) {
+          this.logger.debug(`EVM snapshot skip: vault=${vault.id} reason=no-cycle-opened`);
+          continue;
+        }
 
         const cycleView = await this.evmContractReader.getCycle(vault.contract_address as `0x${string}`, cycleId);
 
         // Only act on Active cycles — Locked/Cancelled are handled elsewhere.
-        if (cycleView.status !== EvmCycleStatus.Active) continue;
+        if (cycleView.status !== EvmCycleStatus.Active) {
+          this.logger.debug(
+            `EVM snapshot skip: vault=${vault.id} cycle=${cycleId} reason=cycle-not-active status=${cycleView.status}`
+          );
+          continue;
+        }
 
         // Both configured windows must have ended. Zero-length windows are
         // treated as already closed.
         const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
         const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
-        if (!assetEnded || !acquireEnded) continue;
+        if (!assetEnded || !acquireEnded) {
+          continue;
+        }
+
+        // DB-side guard: on-chain both windows share the same end time when
+        // acquire_open_window_type=upon-asset-window-closing, so the on-chain
+        // check above passes the moment the asset window closes. We must also
+        // wait for the DB-recorded sequential acquire window to elapse.
+        // acquire_window_duration is a bigint column — TypeORM hands it back as a
+        // string, so it must be coerced or `+` concatenates instead of adding.
+        if (vault.acquire_phase_start && vault.acquire_window_duration) {
+          const dbAcquireEnd = new Date(vault.acquire_phase_start).getTime() + Number(vault.acquire_window_duration);
+          if (dbAcquireEnd > Date.now()) {
+            this.logger.debug(
+              `EVM snapshot skip: vault=${vault.id} cycle=${cycleId} reason=db-acquire-window-open ` +
+                `endsAt=${new Date(dbAcquireEnd).toISOString()}`
+            );
+            continue;
+          }
+        }
 
         nativeCollected = cycleView.nativeCollected;
         minThreshold = cycleView.minAcquireThreshold;
       } catch (err) {
-        this.logger.debug(
-          `EVM handleEvmContributionToSnapshotReady: read failed for vault ${vault.id}: ${(err as Error).message}`
+        this.logger.warn(
+          `EVM handleEvmContributionToSnapshotReady: on-chain read failed for vault ${vault.id} ` +
+            `(${vault.contract_address}): ${(err as Error).message}`
         );
         continue;
       }
 
       // Threshold not met → refund path picks it up. Nothing to snapshot here.
-      if (nativeCollected < minThreshold) continue;
+      if (nativeCollected < minThreshold) {
+        this.logger.debug(
+          `EVM snapshot skip: vault=${vault.id} cycle=${cycleId} reason=below-min-threshold ` +
+            `collected=${nativeCollected} min=${minThreshold}`
+        );
+        continue;
+      }
 
       // Parity with Cardano flow: enforce asset whitelist min/max caps before
       // preparing lock snapshot. If violated, cancel on-chain cycle and mark
@@ -2706,7 +2781,61 @@ export class LifecycleService {
         // 1. Price every active contribution at lock-time.
         const pricing = await this.evmLockTimePricingService.resolvePricesForCycle(vault.id, cycleId);
 
-        // 2. Compute + persist the snapshot (status='calculated').
+        // 2. For expansion cycles with limit pricing, compute VT entitlements directly
+        //    from limitPrice × normalizedQuantity instead of using full vault supply.
+        let expansionVtOverride: Map<string, bigint> | undefined;
+        if (vault.vault_status === VaultStatus.expansion) {
+          const expansionProposal = await this.proposalRepository.findOne({
+            where: { vaultId: vault.id, proposalType: ProposalType.EXPANSION, status: ProposalStatus.EXECUTED },
+            order: { createdAt: 'DESC' },
+          });
+          const expCfg = expansionProposal?.metadata?.expansion;
+          if (expCfg?.priceType === 'limit' && expCfg.limitPrice > 0) {
+            const vtDecimals = vault.ft_token_decimals ?? 18;
+            const vtDecimalMul = 10n ** BigInt(vtDecimals);
+            const SCALE = 1_000_000n;
+            const limitPriceScaled = BigInt(Math.round(expCfg.limitPrice * 1_000_000));
+            expansionVtOverride = new Map<string, bigint>();
+            for (const [contribId, v] of pricing.contributionValues) {
+              const unitPrice = BigInt(v.unitPriceNative);
+              if (unitPrice === 0n) continue;
+              const valueNative = BigInt(v.valueNative);
+              // VT = (valueNative / unitPrice) * limitPrice * 10^vtDecimals
+              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (unitPrice * SCALE));
+            }
+            this.logger.log(
+              `EVM expansion limit-price override: vault=${vault.id} limitPrice=${expCfg.limitPrice} contributions=${expansionVtOverride.size} ` +
+                `totalVt=${[...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)} base units`
+            );
+          }
+        }
+
+        if (vault.vault_status === VaultStatus.acquire_expansion) {
+          const acquireExpansionProposal = await this.proposalRepository.findOne({
+            where: { vaultId: vault.id, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
+            order: { createdAt: 'DESC' },
+          });
+          const expCfg = acquireExpansionProposal?.metadata?.acquireExpansion;
+          if (expCfg?.priceType === 'limit' && expCfg.limitPrice > 0) {
+            const vtDecimals = vault.ft_token_decimals ?? 18;
+            const vtDecimalMul = 10n ** BigInt(vtDecimals);
+            const SCALE = 1_000_000n;
+            const limitPriceScaled = BigInt(Math.round(expCfg.limitPrice * 1_000_000));
+            expansionVtOverride = new Map<string, bigint>();
+            for (const [contribId, v] of pricing.contributionValues) {
+              const unitPrice = BigInt(v.unitPriceNative);
+              if (unitPrice === 0n) continue;
+              const valueNative = BigInt(v.valueNative);
+              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (unitPrice * SCALE));
+            }
+            this.logger.log(
+              `EVM acquire-expansion limit-price override: vault=${vault.id} limitPrice=${expCfg.limitPrice} contributions=${expansionVtOverride.size} ` +
+                `totalVt=${[...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)} base units`
+            );
+          }
+        }
+
+        // 3. Compute + persist the snapshot (status='calculated').
         const { snapshotId, leafCount } = await this.evmAllocationService.computeSnapshot({
           vaultId: vault.id,
           cycleId,
@@ -2714,6 +2843,7 @@ export class LifecycleService {
           priceSource: pricing.priceSource,
           rawPrices: pricing.rawPrices,
           normalizedPrices: pricing.normalizedPrices,
+          expansionVtOverride,
         });
 
         // 3. Advance to 'ready' so handleEvmAcquireToLocked will broadcast
@@ -2732,6 +2862,19 @@ export class LifecycleService {
               error: err.message,
             },
             cancelReason: `Missing lock-time pricing at cycle close: ${err.message}`,
+          });
+          continue;
+        }
+        if (err instanceof EmptyAllocationError) {
+          await this.cancelAndFailEvmVault(vault.id, cycleId, {
+            failureReason: VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET,
+            failureDetails: {
+              message: 'No distributable allocation at cycle close — nothing was acquired',
+              nativeCollected: nativeCollected.toString(),
+              tokensForAcquires: vault.tokens_for_acquires,
+              error: err.message,
+            },
+            cancelReason: `Zero allocation at cycle close: ${err.message}`,
           });
           continue;
         }
@@ -3034,6 +3177,79 @@ export class LifecycleService {
       }
     } catch (err) {
       this.logger.error(`EVM finalize failed sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Sweep accrued native fees for all EVM vaults that have a non-zero balance.
+   * Runs every minute but `EvmFeeWithdrawService.withdrawNativeFees` no-ops when balance is 0.
+   */
+  private async handleEvmFeeWithdraw(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      // Only V4 vaults have accruedFeeNative(). evm_vault_id is set exclusively
+      // during the V4 createVault flow so it reliably gates pre-V4 contracts.
+      const vaults = await this.vaultRepository.find({
+        where: { chain_type: ChainType.robinhood },
+        select: ['id', 'contract_address', 'vault_status', 'evm_vault_id'],
+      });
+      for (const vault of vaults) {
+        if (!vault.contract_address || !vault.evm_vault_id) continue;
+        try {
+          await this.evmFeeWithdrawService.withdrawNativeFees(vault.id);
+        } catch (err) {
+          this.logger.error(`EVM fee withdraw failed for vault ${vault.id}: ${(err as Error).message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`EVM fee withdraw sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * For vaults in `terminating` status: check if all VT has been redeemed on-chain
+   * (outstandingVt == 0 or totalSupply == 0) and call `finalizeTermination()`.
+   */
+  private async handleEvmFinalizeTerminating(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const terminatingVaults = await this.vaultRepository.find({
+        where: { chain_type: ChainType.robinhood, vault_status: VaultStatus.terminating },
+        select: ['id', 'contract_address'],
+      });
+
+      for (const vault of terminatingVaults) {
+        if (!vault.contract_address) continue;
+        try {
+          const vtToken = (await this.evmContractReader.publicClient.readContract({
+            address: vault.contract_address as `0x${string}`,
+            abi: VAULT_ABI,
+            functionName: 'vaultToken',
+          })) as `0x${string}`;
+          const totalSupply = (await this.evmContractReader.publicClient.readContract({
+            address: vtToken,
+            abi: [
+              {
+                type: 'function',
+                stateMutability: 'view',
+                name: 'totalSupply',
+                inputs: [],
+                outputs: [{ type: 'uint256' }],
+              },
+            ],
+            functionName: 'totalSupply',
+          })) as bigint;
+
+          if (totalSupply === 0n) {
+            await this.evmTerminationService.finalizeTermination(vault.id);
+            this.logger.log(`EVM finalizeTermination submitted for vault ${vault.id}`);
+          }
+        } catch (err) {
+          this.logger.error(`EVM finalizeTermination check failed for vault ${vault.id}: ${(err as Error).message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`EVM finalize terminating sweep failed: ${(err as Error).message}`);
     }
   }
 }

@@ -10,6 +10,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
+import { VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -120,8 +121,6 @@ export class EvmVaultContributionService {
   private readonly mintingSignerAddress: Address;
   /** Validity window for issued authorization signatures. */
   private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour
-  /** V3 vault opens cycleId=1 immediately after createVault. */
-  private readonly DEFAULT_CYCLE_ID = 1n;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -173,6 +172,13 @@ export class EvmVaultContributionService {
       throw new BadRequestException('Vault contract address is not set — the vault may not yet be created on-chain');
     }
 
+    const isPaused = (await this.contractReader.publicClient.readContract({
+      address: vault.contract_address as Address,
+      abi: VAULT_ABI,
+      functionName: 'paused',
+    })) as boolean;
+    if (isPaused) throw new BadRequestException('Vault is paused — contributions are temporarily suspended');
+
     const contributor = transaction.user?.address as Address | undefined;
     if (!contributor) throw new BadRequestException('User has no EVM address on record');
 
@@ -188,6 +194,9 @@ export class EvmVaultContributionService {
     const vaultAddress = vault.contract_address as Address;
     const deadline = Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS;
 
+    // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
+    const currentCycleId = await this.contractReader.currentCycleId(vaultAddress);
+
     const calls: EvmContributionCall[] = [];
     for (let i = 0; i < rawAssets.length; i++) {
       const asset = rawAssets[i];
@@ -201,7 +210,7 @@ export class EvmVaultContributionService {
       const nonce = this.deriveNonce(txId, i);
 
       const authorization: EvmContributionAuthorization = {
-        cycleId: this.DEFAULT_CYCLE_ID.toString(),
+        cycleId: currentCycleId.toString(),
         contributor,
         kind,
         asset: assetAddress,

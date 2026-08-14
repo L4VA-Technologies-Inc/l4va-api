@@ -1238,6 +1238,7 @@ export class TaptoolsService {
     // Load custom prices from vault whitelist
     const { customPrices: customPriceMap } = await this.getVaultCustomPrices(vaultId);
     const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
+    const isEvmVault = vault.chain_type === ChainType.robinhood;
 
     // Group assets by policyId and assetId to handle quantities
     const assetMap = new Map<
@@ -1335,12 +1336,28 @@ export class TaptoolsService {
           continue;
         }
 
+        // EVM native ETH asset — mirrors lovelace handling for Cardano
+        if (
+          isEvmVault &&
+          (asset.policyId === '0x0000000000000000000000000000000000000000' || asset.assetId === 'eth')
+        ) {
+          const totalEthValue = asset.quantity / 1e18;
+          const acquiredEthValue = asset.acquiredQuantity / 1e18;
+          const valueUsd_ = totalEthValue * ethPrice;
+          const valueAda_ = adaPrice > 0 ? valueUsd_ / adaPrice : 0;
+          assetsWithValues.push({ ...asset, assetName: 'ETH', valueAda: valueAda_, valueUsd: valueUsd_ });
+          totalValueAda += valueAda_;
+          totalValueUsd += valueUsd_;
+          totalAcquiredAda += adaPrice > 0 ? (acquiredEthValue * ethPrice) / adaPrice : 0;
+          continue;
+        }
+
         // Use cached price if available and not updating prices
         let valueAda = 0;
         let valueUsd = 0;
 
         if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
-          // Use cached price from database
+          // dex_price is in ADA per whole token for all FT assets (Cardano and EVM alike)
           valueAda = asset.cachedPrice;
           valueUsd = valueAda * adaPrice;
 
@@ -1350,16 +1367,22 @@ export class TaptoolsService {
             void this.ensureRelicsCharacterCached(asset.policyId, asset.name, asset.id);
           }
         } else {
-          const assetValue = await this.getAssetValue({
-            policyId: asset.policyId,
-            assetName: asset.assetId,
-            isNFT: asset.isNft,
-            customPriceMap,
-            name: asset.name,
-            assetEntityId: asset.id,
-          });
-          valueAda = assetValue?.priceAda || 0;
-          valueUsd = assetValue?.priceUsd || 0;
+          if (isEvmVault && !this.isMainnet) {
+            // Testnet fallback: no market price available, show 0 rather than a misleading ETH-based estimate.
+            valueAda = 0;
+            valueUsd = 0;
+          } else {
+            const assetValue = await this.getAssetValue({
+              policyId: asset.policyId,
+              assetName: asset.assetId,
+              isNFT: asset.isNft,
+              customPriceMap,
+              name: asset.name,
+              assetEntityId: asset.id,
+            });
+            valueAda = assetValue?.priceAda || 0;
+            valueUsd = assetValue?.priceUsd || 0;
+          }
         }
 
         const totalAssetValueAda = valueAda * asset.quantity;

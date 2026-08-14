@@ -8,6 +8,7 @@ import { In, Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
+import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
@@ -32,7 +33,7 @@ import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -74,7 +75,8 @@ export class GovernanceExecutionService {
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -122,6 +124,18 @@ export class GovernanceExecutionService {
       this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
         this.processProposal(payload.proposalId)
       );
+
+      const activeProposal = await this.proposalRepository.findOne({
+        where: { id: payload.proposalId },
+        relations: ['vault', 'creator', 'snapshot'],
+      });
+
+      if (!activeProposal) {
+        this.logger.warn(`Active proposal ${payload.proposalId} not found for start notification`);
+        return;
+      }
+
+      await this.notifyProposalStarted(activeProposal);
     }
   }
 
@@ -276,7 +290,7 @@ export class GovernanceExecutionService {
     try {
       const proposal = await this.proposalRepository.findOne({
         where: { id: proposalId, status: ProposalStatus.UPCOMING },
-        relations: ['vault', 'creator'],
+        relations: ['vault', 'creator', 'snapshot'],
       });
 
       if (!proposal) {
@@ -295,6 +309,8 @@ export class GovernanceExecutionService {
           previousStatus: ProposalStatus.UPCOMING,
           timestamp: new Date(),
         });
+
+        await this.notifyProposalStarted(proposal);
 
         // Index reward event for proposal activation
         // Only ACTIVE proposals count toward governance participation rewards
@@ -329,6 +345,23 @@ export class GovernanceExecutionService {
       this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  private async notifyProposalStarted(proposal: Proposal): Promise<void> {
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+    if (tokenHolderIds.length === 0) {
+      this.logger.debug(`Proposal ${proposal.id} activated but no token holders were found to notify`);
+      return;
+    }
+
+    this.eventEmitter.emit('proposal.started', {
+      address: proposal.creator?.address,
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds,
+    });
   }
 
   async processProposal(proposalId: string): Promise<void> {
@@ -586,14 +619,19 @@ export class GovernanceExecutionService {
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
     // Get vault to check status for extraction-based proposals
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'chain_type'> = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
-      select: ['id', 'vault_status'],
+      select: ['id', 'vault_status', 'chain_type'],
     });
 
     if (!vault) {
       this.logger.error(`Vault ${proposal.vaultId} not found`);
       return false;
+    }
+
+    // EVM vaults: delegate entirely to the EVM execution service.
+    if (vault.chain_type === ChainType.robinhood) {
+      return this.evmGovernanceExecutionService.executeProposal(proposal, vault);
     }
 
     // Proposals that require vault to be LOCKED can only execute in that status

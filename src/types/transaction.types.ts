@@ -43,6 +43,24 @@ export enum TransactionType {
   evmRefund = 'evm-refund',
   /** EVM: admin-signed `cancelCurrentCycle()`. */
   evmCancelCycle = 'evm-cancel-cycle',
+  /** EVM: admin-signed `openCycle(CycleConfig)`. */
+  evmOpenCycle = 'evm-open-cycle',
+  /** EVM: admin-signed `openPosition(OpenPositionParams)`. */
+  evmOpenPosition = 'evm-open-position',
+  /** EVM: admin-signed `closePosition(ClosePositionParams)`. */
+  evmClosePosition = 'evm-close-position',
+  /** EVM: admin-signed `beginTerminationPreparing()`. */
+  evmBeginTerminationPreparing = 'evm-begin-termination-preparing',
+  /** EVM: admin-signed `beginTermination(assets[])`. */
+  evmBeginTermination = 'evm-begin-termination',
+  /** EVM: admin-signed `finalizeTermination()`. */
+  evmFinalizeTermination = 'evm-finalize-termination',
+  /** EVM: admin-signed `withdrawFees(asset)`. */
+  evmWithdrawFees = 'evm-withdraw-fees',
+  /** EVM: admin-signed `pause()`. */
+  evmPause = 'evm-pause',
+  /** EVM: admin-signed `unpause()`. */
+  evmUnpause = 'evm-unpause',
   all = 'all',
 }
 

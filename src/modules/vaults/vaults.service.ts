@@ -1095,9 +1095,17 @@ export class VaultsService {
         expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
         const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
         const expansionLabels = expansionProposal.metadata.expansion.labels || [];
+        // EVM expansion uses contractAddress instead of Cardano policyIds
+        const evmAssets: Array<{ contractAddress: string; label?: string }> =
+          expansionProposal.metadata.expansion.evmAssets || [];
 
-        // Fetch collection names for expansion policies
-        if (expansionPolicyIds.length > 0) {
+        if (evmAssets.length > 0) {
+          // EVM: map contractAddress → policyId so downstream wallet-summary filtering works
+          expansionWhitelist = evmAssets.map(a => ({
+            policyId: a.contractAddress,
+            collectionName: a.label ?? null,
+          }));
+        } else if (expansionPolicyIds.length > 0) {
           if (expansionLabels.length > 0 && expansionLabels.length === expansionPolicyIds.length) {
             expansionWhitelist = expansionPolicyIds.map((policyId, index) => ({
               policyId,
@@ -1118,7 +1126,7 @@ export class VaultsService {
               collectionName: tv.collection_name,
             }));
           }
-        }
+        } // close: else if (expansionPolicyIds.length > 0)
 
         // Count confirmed expansion contributions
         const expansionAssetData = await this.assetsRepository
@@ -1377,11 +1385,11 @@ export class VaultsService {
     };
 
     let canCreateProposal = false;
-    if (vault.chain_type !== ChainType.robinhood && userId !== undefined && userId !== null) {
+    if (userId !== undefined && userId !== null) {
       canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
     }
     let canCancelVault = false;
-    if (vault.chain_type !== ChainType.robinhood && userId !== undefined && userId !== null) {
+    if (userId !== undefined && userId !== null) {
       canCancelVault = await this.canCancelVaultByOwner(vaultId, userId);
     }
     const isChatVisible = await this.verifyChatAccess(userId, vaultId);

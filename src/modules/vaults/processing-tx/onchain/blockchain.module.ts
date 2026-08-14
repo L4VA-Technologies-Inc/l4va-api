@@ -10,19 +10,26 @@ import { TransactionsModule } from '../offchain-tx/transactions.module';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
+import { EvmAdapterRegistryService } from './evm-adapter-registry.service';
 import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmAirdropOrchestrator } from './evm-airdrop-orchestrator.service';
 import { EvmAllocationService } from './evm-allocation.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
+import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
+import { EvmOpenCycleService } from './evm-open-cycle.service';
+import { EvmPauseService } from './evm-pause.service';
+import { EvmPositionService } from './evm-position.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
+import { EvmTerminationService } from './evm-termination.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
+import { UniswapQuoteService } from './uniswap-quote.service';
 import { VaultContributionService } from './vault-contribution.service';
 import { VaultManagingService } from './vault-managing.service';
 
@@ -32,6 +39,7 @@ import { Claim } from '@/database/claim.entity';
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContributionValuation } from '@/database/evm-contribution-valuation.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
+import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -64,6 +72,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
       EvmContributionValuation,
       EvmAllocation,
       EvmAssetPriceFeedEntity,
+      EvmExternalPosition,
     ]),
   ],
   controllers: [BlockchainController],
@@ -84,6 +93,13 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmVaultEventReconciler,
     EvmContributionBackfillService,
     EvmWebhookService,
+    EvmOpenCycleService,
+    EvmFeeWithdrawService,
+    EvmPositionService,
+    EvmTerminationService,
+    EvmAdapterRegistryService,
+    EvmPauseService,
+    UniswapQuoteService,
     VaultManagingService,
     TransactionHealthService,
   ],
@@ -102,6 +118,13 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmContributionBackfillService,
+    EvmOpenCycleService,
+    EvmFeeWithdrawService,
+    EvmPositionService,
+    EvmTerminationService,
+    EvmAdapterRegistryService,
+    EvmPauseService,
+    UniswapQuoteService,
   ],
 })
 export class BlockchainModule {}

@@ -27,6 +27,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmSnapshotService } from './evm-snapshot.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { SnapshotService } from './snapshot.service';
@@ -49,6 +50,7 @@ import { RewardEventProducer } from '@/modules/rewards/services/reward-event-pro
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
+import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
@@ -56,7 +58,7 @@ import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
 /*
@@ -87,8 +89,13 @@ import { VoteType } from '@/types/vote.types';
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
+
+  private normalizeAddress(address?: string | null): string {
+    return (address || '').toLowerCase();
+  }
   private blockfrost: BlockFrostAPI;
   private readonly isMainnet: boolean;
+  private isDailySnapshotJobRunning = false;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly assetMetadataCache: NodeCache;
@@ -142,7 +149,9 @@ export class GovernanceService {
     private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly snapshotService: SnapshotService
+    private readonly snapshotService: SnapshotService,
+    private readonly evmSnapshotService: EvmSnapshotService,
+    private readonly uniswapQuoteService: UniswapQuoteService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -170,8 +179,14 @@ export class GovernanceService {
     });
   }
 
-  @Cron(CronExpression.EVERY_12_HOURS)
+  @Cron(CronExpression.EVERY_3_HOURS)
   async createDailySnapshots(): Promise<void> {
+    if (this.isDailySnapshotJobRunning) {
+      return;
+    }
+
+    this.isDailySnapshotJobRunning = true;
+    const startedAt = Date.now();
     this.logger.log('Starting daily snapshot creation');
 
     try {
@@ -214,8 +229,57 @@ export class GovernanceService {
       const failed = results.filter(r => r.status === 'rejected').length;
 
       this.logger.log(`Daily snapshot creation completed: ${successful} successful, ${failed} failed`);
+
+      // EVM vaults: scan VaultToken Transfer events to build holder snapshots.
+      await this.createDailyEvmSnapshots();
     } catch (error) {
-      this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Failed to create daily snapshots: ${message}`, stack);
+    } finally {
+      this.isDailySnapshotJobRunning = false;
+      const durationMs = Date.now() - startedAt;
+      this.logger.log(`[Snapshot Job] Run finished in ${durationMs}ms`);
+    }
+  }
+
+  private async createDailyEvmSnapshots(): Promise<void> {
+    const sweepStartedAt = Date.now();
+    this.logger.log('[EVM Snapshot] Daily EVM snapshot sweep started');
+
+    try {
+      const evmVaults = await this.evmSnapshotService.findEligibleVaults();
+      if (evmVaults.length === 0) {
+        this.logger.log('[EVM Snapshot] No eligible EVM vaults found for snapshot sweep');
+        return;
+      }
+
+      let successful = 0;
+      let failed = 0;
+
+      for (let index = 0; index < evmVaults.length; index++) {
+        const vault = evmVaults[index];
+
+        try {
+          await this.evmSnapshotService.createSnapshot(vault.id);
+          successful++;
+        } catch (error) {
+          failed++;
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `[EVM Snapshot] [${index + 1}/${evmVaults.length}] Snapshot failed for vault ${vault.id}: ${message}`
+          );
+        }
+      }
+
+      const durationMs = Date.now() - sweepStartedAt;
+      this.logger.log(
+        `[EVM Snapshot] Sweep finished: ${successful} successful, ${failed} failed, totalVaults=${evmVaults.length}, durationMs=${durationMs}`
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      this.logger.error(`[EVM Snapshot] Daily EVM snapshot sweep failed: ${message}`, stack);
     }
   }
 
@@ -390,10 +454,10 @@ export class GovernanceService {
         ft_token_supply: adjustedSupply,
       });
 
-      this.logger.log(
-        `Updated vault ${vaultId} total supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}). ` +
-          `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
-      );
+      // this.logger.log(
+      //   `Updated vault ${vaultId} total supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}). ` +
+      //     `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
+      // );
 
       const addressBalancesForSnapshot: Record<string, string> = {};
       for (const [address, balance] of Object.entries(addressBalances)) {
@@ -408,9 +472,9 @@ export class GovernanceService {
 
       await this.snapshotRepository.save(snapshot);
 
-      this.logger.log(
-        `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} voting addresses`
-      );
+      // this.logger.log(
+      //   `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} voting addresses`
+      // );
 
       return snapshot;
     } catch (error) {
@@ -440,6 +504,7 @@ export class GovernanceService {
       | 'name'
       | 'assets_whitelist'
       | 'is_expandable_asset_whitelist'
+      | 'chain_type'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -450,6 +515,7 @@ export class GovernanceService {
         'name',
         'assets_whitelist',
         'is_expandable_asset_whitelist',
+        'chain_type',
       ],
       relations: ['assets_whitelist'],
     });
@@ -479,10 +545,19 @@ export class GovernanceService {
       }
     }
 
-    const latestSnapshot = await this.snapshotRepository.findOne({
+    let latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
+
+    // EVM vault: create a fresh snapshot on-demand if none exists yet.
+    if (!latestSnapshot && vault.chain_type === ChainType.robinhood) {
+      try {
+        latestSnapshot = await this.evmSnapshotService.createSnapshot(vaultId);
+      } catch (err) {
+        throw new BadRequestException(`Could not create voting snapshot for EVM vault: ${(err as Error).message}`);
+      }
+    }
 
     // Get user early as we'll need their address for potential fee transaction
     const user = await this.userRepository.findOneBy({ id: userId });
@@ -546,7 +621,9 @@ export class GovernanceService {
     }
 
     // Check for only 1 active market action proposal for the same asset at a time
-    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
+    // EVM vaults skip all Cardano-specific marketplace action validation —
+    // asset IDs are ERC-20 addresses, not DB UUIDs.
+    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION && vault.chain_type !== ChainType.robinhood) {
       const requestedActions = createProposalReq.marketplaceActions || [];
 
       if (requestedActions.length > 0) {
@@ -889,6 +966,12 @@ export class GovernanceService {
       case ProposalType.MARKETPLACE_ACTION: {
         // Use direct marketplaceActions from request body
         const actions = createProposalReq.marketplaceActions || [];
+
+        // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
+        if (vault.chain_type === ChainType.robinhood) {
+          proposal.metadata.marketplaceActions = actions;
+          break;
+        }
 
         // Validate that all actions use the same market (no mixing DexHunter and WayUp)
         const markets = new Set(actions.map(a => a.market?.toLowerCase()));
@@ -1432,6 +1515,7 @@ export class GovernanceService {
         // Validate expansion fields
         const {
           expansionPolicyIds,
+          expansionEvmAssets,
           expansionDuration,
           expansionNoLimit,
           expansionAssetMax,
@@ -1440,6 +1524,85 @@ export class GovernanceService {
           expansionLimitPrice,
         } = createProposalReq;
 
+        // ── EVM expansion ────────────────────────────────────────────────────
+        if (vault.chain_type === ChainType.robinhood) {
+          if (!expansionEvmAssets || expansionEvmAssets.length === 0) {
+            throw new BadRequestException(
+              'At least one ERC-20/ERC-721 contract address must be selected for expansion'
+            );
+          }
+
+          if (expansionNoLimit && expansionNoMax) {
+            throw new BadRequestException(
+              'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Asset Max" enabled simultaneously.'
+            );
+          }
+          if (!expansionNoLimit && (!expansionDuration || expansionDuration <= 0)) {
+            throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+          }
+          const minExpansionDurationEvm = this.systemSettingsService.minExpansionDuration;
+          if (!expansionNoLimit && expansionDuration < minExpansionDurationEvm) {
+            throw new BadRequestException(
+              `Expansion duration must be at least ${minExpansionDurationEvm / 86400000} day(s). Provided: ${expansionDuration}ms`
+            );
+          }
+          if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
+            throw new BadRequestException('Asset max is required when "No Max" is not selected');
+          }
+          if (!expansionPriceType || !['limit', 'market'].includes(expansionPriceType)) {
+            throw new BadRequestException('Price type must be either "limit" or "market"');
+          }
+          if (expansionPriceType === 'limit') {
+            if (!expansionLimitPrice || expansionLimitPrice <= 0) {
+              throw new BadRequestException('Limit price is required when using limit pricing');
+            }
+            const MAX_LIMIT_PRICE = 1_000_000;
+            if (expansionLimitPrice > MAX_LIMIT_PRICE) {
+              throw new BadRequestException(
+                `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per asset.`
+              );
+            }
+          }
+          if (expansionPriceType === 'market') {
+            const vaultForEvmCheck = await this.vaultRepository.findOne({
+              where: { id: vaultId },
+              select: ['contract_address', 'name'],
+            });
+            if (!vaultForEvmCheck?.contract_address) {
+              throw new BadRequestException('Market pricing requires vault contract address to be set');
+            }
+            try {
+              // Verify a Uniswap pool exists for this vault's VT
+              await this.uniswapQuoteService.quoteExactInput(
+                vaultForEvmCheck.contract_address as `0x${string}`,
+                '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // native placeholder
+                BigInt(1e12), // small test amount
+                50
+              );
+              this.logger.log(`EVM expansion market pricing validated: pool exists for vault ${vaultForEvmCheck.name}`);
+            } catch (error) {
+              if (error instanceof BadRequestException) throw error;
+              throw new BadRequestException(
+                'Market pricing requires an active Uniswap pool for this vault token. ' +
+                  'No liquidity pool found on the Robinhood Chain. Please use limit pricing or create a pool first.'
+              );
+            }
+          }
+
+          proposal.metadata.expansion = {
+            evmAssets: expansionEvmAssets.map(a => ({ contractAddress: a.contractAddress, label: a.label })),
+            duration: expansionNoLimit ? undefined : expansionDuration,
+            noLimit: expansionNoLimit || false,
+            assetMax: expansionNoMax ? undefined : expansionAssetMax,
+            noMax: expansionNoMax || false,
+            priceType: expansionPriceType,
+            limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
+            currentAssetCount: 0,
+          };
+          break;
+        }
+
+        // ── Cardano expansion ─────────────────────────────────────────────────
         if (!expansionPolicyIds || expansionPolicyIds.length === 0) {
           throw new BadRequestException('At least one policy ID must be selected for expansion');
         }
@@ -1691,10 +1854,22 @@ export class GovernanceService {
         // Validate vault allows acquire expansion
         const vaultForAcquireExpansionCheck: Pick<
           Vault,
-          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name' | 'ft_token_decimals'
+          | 'allow_acquire_expansion'
+          | 'script_hash'
+          | 'asset_vault_name'
+          | 'name'
+          | 'ft_token_decimals'
+          | 'contract_address'
         > = await this.vaultRepository.findOne({
           where: { id: vaultId },
-          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name', 'ft_token_decimals'],
+          select: [
+            'allow_acquire_expansion',
+            'script_hash',
+            'asset_vault_name',
+            'name',
+            'ft_token_decimals',
+            'contract_address',
+          ],
         });
 
         if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
@@ -1733,6 +1908,55 @@ export class GovernanceService {
           throw new BadRequestException('Price type must be either "limit" or "market"');
         }
 
+        // ── EVM acquire expansion ─────────────────────────────────────────────
+        if (vault.chain_type === ChainType.robinhood) {
+          if (acquireExpansionPriceType === 'limit') {
+            if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
+              throw new BadRequestException('Limit price is required when using limit pricing');
+            }
+            const MAX_LIMIT_PRICE_EVM = 1_000_000;
+            if (acquireExpansionLimitPrice > MAX_LIMIT_PRICE_EVM) {
+              throw new BadRequestException(
+                `Limit price cannot exceed ${MAX_LIMIT_PRICE_EVM.toLocaleString()} VT per 1 native unit.`
+              );
+            }
+          }
+          if (acquireExpansionPriceType === 'market') {
+            if (!vaultForAcquireExpansionCheck.contract_address) {
+              throw new BadRequestException('Market pricing requires vault contract address to be set');
+            }
+            try {
+              await this.uniswapQuoteService.quoteExactInput(
+                vaultForAcquireExpansionCheck.contract_address as `0x${string}`,
+                '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
+                BigInt(1e12),
+                50
+              );
+              this.logger.log(
+                `EVM acquire expansion market pricing validated for vault ${vaultForAcquireExpansionCheck.name}`
+              );
+            } catch (error) {
+              if (error instanceof BadRequestException) throw error;
+              throw new BadRequestException(
+                'Market pricing requires an active Uniswap pool for this vault token on the Robinhood Chain. ' +
+                  'Please use limit pricing or create a pool first.'
+              );
+            }
+          }
+
+          proposal.metadata.acquireExpansion = {
+            duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+            noLimit: acquireExpansionNoLimit || false,
+            maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+            noMax: acquireExpansionNoMax || false,
+            priceType: acquireExpansionPriceType,
+            limitPrice: acquireExpansionPriceType === 'limit' ? acquireExpansionLimitPrice : undefined,
+            currentAdaRaised: 0,
+          };
+          break;
+        }
+
+        // ── Cardano acquire expansion ─────────────────────────────────────────
         // Validate limit price if using limit pricing
         if (acquireExpansionPriceType === 'limit') {
           if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
@@ -1877,7 +2101,9 @@ export class GovernanceService {
 
     // Check if governance fee is required for this proposal type
     const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
-    const requiresPayment = feeAmount > 0;
+    // EVM vaults use on-chain ETH payments — the Cardano fee builder (Blockfrost/CSL) cannot
+    // handle 0x addresses. Fees for EVM proposals will be collected on-chain in a future release.
+    const requiresPayment = feeAmount > 0 && vault.chain_type !== ChainType.robinhood;
 
     // If payment is required, set status to UNPAID and clear dates
     // Store original duration and start date in metadata so we can set correct dates after payment
@@ -1945,17 +2171,6 @@ export class GovernanceService {
       vaultName: vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-    });
-
-    // 3. proposal.started - notifies token holders
-    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(latestSnapshot?.addressBalances);
-    this.eventEmitter.emit('proposal.started', {
-      address: user.address,
-      vaultId: vault.id,
-      vaultName: vault.name,
-      proposalName: proposal.title,
-      creatorId: proposal.creatorId,
-      tokenHolderIds,
     });
 
     // Note: Reward event for governance proposals is emitted in activateProposal()
@@ -2092,16 +2307,16 @@ export class GovernanceService {
       const isActive = proposal.status === ProposalStatus.ACTIVE && proposal.endDate && new Date() <= proposal.endDate;
 
       if (user?.address && proposal.snapshot) {
-        const voteWeight = proposal.snapshot.addressBalances[user.address];
+        const normalizedUserAddress = this.normalizeAddress(user.address);
+        const voteWeight = proposal.snapshot.addressBalances[normalizedUserAddress];
         const hasVotingPower = voteWeight && voteWeight !== '0';
 
-        const existingVote = await this.voteRepository.findOne({
-          where: {
-            proposalId,
-            voterAddress: user.address,
-          },
-          select: ['vote'],
-        });
+        const existingVote = await this.voteRepository
+          .createQueryBuilder('vote')
+          .select('vote.vote', 'vote')
+          .where('vote.proposalId = :proposalId', { proposalId })
+          .andWhere('LOWER(vote.voterAddress) = :voterAddress', { voterAddress: normalizedUserAddress })
+          .getRawOne<{ vote: VoteType }>();
 
         if (existingVote) {
           selectedVote = existingVote.vote;
@@ -2125,9 +2340,12 @@ export class GovernanceService {
         ?.filter(ma => ma.exec !== ExecType.BUY && ma.exec !== ExecType.OFFER)
         .map(ma => ma.assetId) || [];
 
-    [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
-      allAssetIds.add(id)
-    );
+    [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id => {
+      // Skip empty strings and EVM addresses — only DB UUIDs are valid here.
+      if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        allAssetIds.add(id);
+      }
+    });
 
     // Fetch all assets in a single query
     const allAssets =
@@ -2409,6 +2627,8 @@ export class GovernanceService {
   }
 
   async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {
+    const normalizedVoterAddress = this.normalizeAddress(voteReq.voterAddress);
+
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
@@ -2430,12 +2650,11 @@ export class GovernanceService {
     }
 
     // Check if user has already voted
-    const existingVote = await this.voteRepository.exists({
-      where: {
-        proposalId,
-        voterAddress: voteReq.voterAddress,
-      },
-    });
+    const existingVote = await this.voteRepository
+      .createQueryBuilder('vote')
+      .where('vote.proposalId = :proposalId', { proposalId })
+      .andWhere('LOWER(vote.voterAddress) = :voterAddress', { voterAddress: normalizedVoterAddress })
+      .getExists();
 
     if (existingVote) {
       throw new BadRequestException('Address has already voted on this proposal');
@@ -2447,7 +2666,7 @@ export class GovernanceService {
       proposalId,
       snapshotId: proposal.snapshotId,
       voterId: userId,
-      voterAddress: voteReq.voterAddress,
+      voterAddress: normalizedVoterAddress,
       voteWeight,
       vote: voteReq.vote,
     });
@@ -2458,7 +2677,7 @@ export class GovernanceService {
     // Await for durability, but don't fail the main operation
     try {
       await this.rewardEventProducer.indexEvent({
-        walletAddress: voteReq.voterAddress,
+        walletAddress: normalizedVoterAddress,
         vaultId: proposal.vaultId,
         eventType: RewardActivityType.GOVERNANCE_VOTE,
         units: 1,
@@ -2482,7 +2701,7 @@ export class GovernanceService {
         id: vote.id,
         proposalId,
         voterId: userId,
-        voterAddress: voteReq.voterAddress,
+        voterAddress: normalizedVoterAddress,
         voteWeight,
         vote: voteReq.vote,
         timestamp: vote.timestamp,
@@ -2658,20 +2877,6 @@ export class GovernanceService {
       vaultName: proposal.vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-    });
-
-    // 3. proposal.started - notifies token holders
-    const snapshotForNotif = proposal.snapshotId
-      ? await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId }, select: ['addressBalances'] })
-      : null;
-    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(snapshotForNotif?.addressBalances);
-    this.eventEmitter.emit('proposal.started', {
-      address: proposal.creator.address,
-      vaultId: proposal.vault.id,
-      vaultName: proposal.vault.name,
-      proposalName: proposal.title,
-      creatorId: proposal.creatorId,
-      tokenHolderIds,
     });
 
     this.logger.log(
@@ -3752,10 +3957,26 @@ export class GovernanceService {
     action?: 'vote' | 'create_proposal'
   ): Promise<string> {
     try {
-      const snapshot = await this.snapshotRepository.findOne({
+      let snapshot = await this.snapshotRepository.findOne({
         where: { vaultId },
         order: { createdAt: 'DESC' },
       });
+
+      // EVM vault with no snapshot yet: create one on-demand so voting power
+      // is available immediately after the airdrop without waiting for the cron.
+      if (!snapshot) {
+        const vaultForChainCheck = await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'chain_type', 'vault_status'],
+        });
+        if (vaultForChainCheck?.chain_type === ChainType.robinhood) {
+          try {
+            snapshot = await this.evmSnapshotService.createSnapshot(vaultId);
+          } catch {
+            // Fall through to the NotFoundException below.
+          }
+        }
+      }
 
       if (!snapshot) {
         throw new NotFoundException('No voting snapshot found for this vault');
@@ -3787,7 +4008,7 @@ export class GovernanceService {
         );
       }
 
-      const voteWeight = snapshot.addressBalances[user.address];
+      const voteWeight = snapshot.addressBalances[user.address.toLocaleLowerCase()];
 
       if (!voteWeight || voteWeight === '0') {
         throw new BadRequestException(

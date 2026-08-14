@@ -165,8 +165,9 @@ export class DistributionCalculationService {
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
     const percentOfTotalAcquireAdaSent = this.round25(adaSent / totalAcquiredValueAda);
     const vtReceived = this.round25(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
-    const multiplier = Math.floor(vtReceived / adaSent / 1_000_000);
-    const adjustedVtAmount = multiplier * adaSent * 1_000_000;
+    // adaSent is lovelace; on-chain mints multiplier × lovelace, so the multiplier is VT base units per lovelace
+    const multiplier = Math.floor(vtReceived / adaSent);
+    const adjustedVtAmount = multiplier * adaSent;
     return {
       vtReceived: adjustedVtAmount,
       multiplier,

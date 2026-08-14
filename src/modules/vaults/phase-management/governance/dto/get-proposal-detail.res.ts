@@ -269,11 +269,71 @@ export class MarketplaceActionDetailDto {
   wayupUrl?: string;
 
   @Expose()
-  @ApiPropertyOptional({
-    description: 'Current status of the asset (e.g., LOCKED, LISTED, SOLD)',
-    example: 'SOLD',
-  })
+  @ApiPropertyOptional({ description: 'Current status of the asset (e.g., LOCKED, LISTED, SOLD)', example: 'SOLD' })
   assetStatus?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Market platform (WayUp, DexHunter, Uniswap)', example: 'Uniswap' })
+  market?: string;
+
+  // DexHunter swap fields
+  @Expose()
+  @ApiPropertyOptional({ description: 'Slippage tolerance % for DexHunter swaps', example: 0.5 })
+  slippage?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Use market price at execution time', example: true })
+  useMarketPrice?: boolean;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Custom limit price in ADA', example: 1.5 })
+  customPriceAda?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Estimated ADA output from swap', example: 100 })
+  estimatedOutput?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Actual ADA output after execution', example: 99.5 })
+  actualOutput?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Execution tx hash' })
+  txHash?: string;
+
+  // EVM Uniswap swap fields
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: ERC-20 input token address', example: '0xc9f9...' })
+  inputAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: ERC-20 expected output token address', example: '0x3b82...' })
+  expectedOutputAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: raw token amount in smallest unit', example: '1000000000000000000' })
+  amount?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: human-readable token amount', example: '1.5' })
+  humanAmount?: string;
+
+  // EVM close-position fields
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: on-chain positionId for CLOSE_POSITION', example: '3' })
+  positionId?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: position asset address', example: '0xc9f9...' })
+  positionAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: underlying asset to receive on close', example: '0x3b82...' })
+  underlyingAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: raw position amount', example: '1000000000000000000' })
+  positionAmount?: string;
 }
 
 /**

@@ -307,7 +307,7 @@ export class EvmVaultSignerService {
 
     return {
       vaultId: evmVaultId,
-      archetype: '0x6261746368000000000000000000000000000000000000000000000000000000' as Hex, // keccak256("batch") prefix — matches batchDeployer.BATCH()
+      archetype: '0xaf85f1959fc2aa8b532f1218046c19fa780e1da2664cec6949ee750524d8ccfd' as Hex, // BatchVaultDeployer.BATCH = keccak256("L4VA.Vault.Batch")
       vaultDeployer: this.configService.get<string>('EVM_BATCH_DEPLOYER_ADDRESS') as Address,
       creator: creatorAddress,
       creationApprover: this.adminAddress,

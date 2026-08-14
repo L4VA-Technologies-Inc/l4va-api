@@ -18,6 +18,14 @@ import { ChainType } from '@/types/vault.types';
 
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
 
+/** Nothing is distributable for this cycle — caller should cancel + refund. */
+export class EmptyAllocationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmptyAllocationError';
+  }
+}
+
 export interface ComputeSnapshotParams {
   vaultId: string;
   cycleId: bigint;
@@ -35,6 +43,12 @@ export interface ComputeSnapshotParams {
   normalizedPrices?: Record<string, string>;
   /** Optional bumping — defaults to 1. */
   schemaVersion?: number;
+  /**
+   * Expansion cycle override: maps contribution.id → VT base-unit entitlement.
+   * When provided the formula is bypassed — VT is taken directly from this map
+   * (proportional only within aggregated per-wallet sums). assetsOfferedBps = 0.
+   */
+  expansionVtOverride?: Map<string, bigint>;
 }
 
 /**
@@ -81,6 +95,7 @@ export class EvmAllocationService {
       rawPrices = {},
       normalizedPrices = {},
       schemaVersion = 1,
+      expansionVtOverride,
     } = params;
 
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
@@ -168,15 +183,21 @@ export class EvmAllocationService {
       formulaRows.push({
         contributor: c.contributor.toLowerCase() as `0x${string}`,
         nativeRaised: c.kind === EvmAssetKindOnchain.Native ? contributionAmount : 0n,
-        contributedValue: c.kind === EvmAssetKindOnchain.Native ? 0n : valueNative,
+        // For expansion limit-pricing, override contributedValue with VT entitlement so
+        // proportional distribution yields exactly the right per-contributor VT amount.
+        contributedValue: c.kind === EvmAssetKindOnchain.Native ? 0n : (expansionVtOverride?.get(c.id) ?? valueNative),
       });
 
       valuationRowsData.push({ contribution: c, valueNative, unitPriceNative });
     }
 
     // Run the formulas.
-    const vtSupplyBaseUnits = BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
-    const assetsOfferedBps = Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
+    const vtSupplyBaseUnits =
+      expansionVtOverride && expansionVtOverride.size > 0
+        ? [...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)
+        : BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
+    const assetsOfferedBps =
+      expansionVtOverride && expansionVtOverride.size > 0 ? 0 : Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
     const formulaResult = computeEvmAllocationRows({
       rows: formulaRows,
       vtSupplyBaseUnits,
@@ -187,7 +208,10 @@ export class EvmAllocationService {
     });
 
     if (formulaResult.perWallet.length === 0) {
-      throw new BadRequestException('Allocation formula produced zero-length wallet result');
+      throw new EmptyAllocationError(
+        `Vault ${vaultId} cycle ${cycleId} allocates nothing: ` +
+          `nativeRaised=${formulaResult.totalNativeRaised}, vtToContributors=${formulaResult.vtToContributors}`
+      );
     }
 
     // Build Merkle leaves.

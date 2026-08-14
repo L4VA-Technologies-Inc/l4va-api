@@ -65,13 +65,19 @@ export class NotificationService {
   }
 
   async sendBulkNotification(body: INotificationBody, bulkOptions: string[]): Promise<void> {
-    if (!bulkOptions || !Array.isArray(bulkOptions) || bulkOptions.length === 0) {
-      this.logger.warn('Bulk options are empty or invalid. No notifications will be sent.');
+    if (!bulkOptions || !Array.isArray(bulkOptions)) {
+      this.logger.warn('Bulk options are invalid. No notifications will be sent.');
+      return;
+    }
+
+    const recipientIds = [...new Set(bulkOptions.filter(id => typeof id === 'string' && id.trim().length > 0))];
+    if (recipientIds.length === 0) {
+      this.logger.debug('Bulk notification skipped: recipient list is empty.');
       return;
     }
 
     const users = await this.userRepository.findBy({
-      id: In(bulkOptions),
+      id: In(recipientIds),
     });
 
     if (users.length === 0) {
@@ -79,11 +85,22 @@ export class NotificationService {
       return;
     }
 
+    const usersWithAddress = users.filter(user => !!user.address);
+    if (usersWithAddress.length === 0) {
+      this.logger.warn(
+        `Bulk notification skipped: resolved ${users.length} user(s), but none have a wallet address on profile.`
+      );
+      return;
+    }
+
+    if (usersWithAddress.length < users.length) {
+      this.logger.debug(
+        `Bulk notification: ${users.length - usersWithAddress.length} user(s) skipped due to missing wallet address.`
+      );
+    }
+
     await Promise.all(
-      users.map(async user => {
-        if (!user.address) {
-          return;
-        }
+      usersWithAddress.map(async user => {
         await this.sendNotification({ ...body, address: user.address });
       })
     );

@@ -14,7 +14,7 @@
 // Struct components — matched by name/order to VaultTypes.sol.
 // -----------------------------------------------------------------------------
 
-const TIME_WINDOW = [
+export const TIME_WINDOW = [
   { name: 'start', type: 'uint64' as const },
   { name: 'end', type: 'uint64' as const },
 ];
@@ -149,6 +149,13 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [],
   },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'closeAssetWindow',
+    inputs: [],
+    outputs: [],
+  },
 
   // --- Cycle lifecycle -----------------------------------------------------
   {
@@ -273,14 +280,14 @@ export const VAULT_ABI = [
   {
     type: 'function',
     stateMutability: 'nonpayable',
-    name: 'proposeAuthorityTransfer',
+    name: 'proposeAuthority',
     inputs: [{ name: 'newAuthority', type: 'address' }],
     outputs: [],
   },
   {
     type: 'function',
     stateMutability: 'nonpayable',
-    name: 'acceptAuthorityTransfer',
+    name: 'acceptAuthority',
     inputs: [],
     outputs: [],
   },
@@ -297,6 +304,197 @@ export const VAULT_ABI = [
     type: 'function',
     stateMutability: 'view',
     name: 'accruedFeeNative',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+
+  // --- Cycle open (Phase 1) -----------------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'openCycle',
+    inputs: [
+      {
+        name: 'cycle',
+        type: 'tuple',
+        components: [
+          { name: 'assetWindow', type: 'tuple', components: TIME_WINDOW },
+          { name: 'acquireWindow', type: 'tuple', components: TIME_WINDOW },
+          { name: 'minAcquireThreshold', type: 'uint256' },
+          { name: 'adaPairVtPerNativeUnit', type: 'uint256' },
+          { name: 'assetWhitelist', type: 'address[]' },
+          { name: 'contributorWhitelist', type: 'address[]' },
+        ],
+      },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+
+  // --- Adapter positions (Phase 2) -----------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'openPosition',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          { name: 'operationId', type: 'bytes32' },
+          { name: 'adapter', type: 'address' },
+          { name: 'protocol', type: 'address' },
+          { name: 'inputAsset', type: 'address' },
+          { name: 'maxInputAmount', type: 'uint256' },
+          { name: 'expectedPositionAsset', type: 'address' },
+          { name: 'minExpectedOutput', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'protocolParams', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [{ name: 'positionId', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'closePosition',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          { name: 'positionId', type: 'uint256' },
+          { name: 'minUnderlyingReturned', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'protocolParams', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'totalPositions',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'activeExternalPositionCount',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+
+  // --- Termination (Phase 4) -----------------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'beginTerminationPreparing',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'beginTermination',
+    inputs: [{ name: 'distributableAssets', type: 'address[]' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'finalizeTermination',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'redeemForTermination',
+    inputs: [{ name: 'vtAmount', type: 'uint256' }],
+    outputs: [{ name: 'redemptionId', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'claimTerminationNative',
+    inputs: [{ name: 'redemptionId', type: 'uint256' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'claimTerminationAsset',
+    inputs: [
+      { name: 'redemptionId', type: 'uint256' },
+      { name: 'asset', type: 'address' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'totalRedemptions',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+
+  // --- Emergency & pause (Phase 5) -----------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'pause',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'unpause',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'emergencyRecoverNative',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'emergencyRecoverERC20',
+    inputs: [{ name: 'token', type: 'address' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'accruedFeeErc20',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'paused',
+    inputs: [],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'vaultToken',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'totalSupply',
     inputs: [],
     outputs: [{ type: 'uint256' }],
   },
@@ -399,6 +597,106 @@ export const VAULT_ABI = [
       { name: 'contributor', type: 'address', indexed: true },
       { name: 'vtAmount', type: 'uint256', indexed: false },
       { name: 'nativeAmount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'VaultStatusChanged',
+    inputs: [
+      { name: 'previous', type: 'uint8', indexed: true },
+      { name: 'next', type: 'uint8', indexed: true },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'CycleOpened',
+    inputs: [
+      { name: 'cycleId', type: 'uint256', indexed: true },
+      { name: 'assetWindowStart', type: 'uint64', indexed: false },
+      { name: 'assetWindowEnd', type: 'uint64', indexed: false },
+      { name: 'acquireWindowStart', type: 'uint64', indexed: false },
+      { name: 'acquireWindowEnd', type: 'uint64', indexed: false },
+      { name: 'adaPairVtPerNativeUnit', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'PositionOpened',
+    inputs: [
+      { name: 'positionId', type: 'uint256', indexed: true },
+      { name: 'adapter', type: 'address', indexed: true },
+      { name: 'underlyingAsset', type: 'address', indexed: true },
+      { name: 'amountConsumed', type: 'uint256', indexed: false },
+      { name: 'positionAsset', type: 'address', indexed: false },
+      { name: 'positionAmount', type: 'uint256', indexed: false },
+      { name: 'operationId', type: 'bytes32', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'PositionClosed',
+    inputs: [
+      { name: 'positionId', type: 'uint256', indexed: true },
+      { name: 'underlyingReturned', type: 'uint256', indexed: false },
+      { name: 'status', type: 'uint8', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'TerminationPrepared',
+    inputs: [],
+  },
+  {
+    type: 'event',
+    name: 'TerminationSnapshotTaken',
+    inputs: [
+      { name: 'vtSupply', type: 'uint256', indexed: false },
+      { name: 'nativeSnapshot', type: 'uint256', indexed: false },
+      { name: 'distributableAssetsCount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'RedemptionCreated',
+    inputs: [
+      { name: 'redemptionId', type: 'uint256', indexed: true },
+      { name: 'holder', type: 'address', indexed: true },
+      { name: 'vtBurned', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'RedemptionNativeClaimed',
+    inputs: [
+      { name: 'redemptionId', type: 'uint256', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'RedemptionAssetClaimed',
+    inputs: [
+      { name: 'redemptionId', type: 'uint256', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'EmergencyRecovered',
+    inputs: [
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'to', type: 'address', indexed: true },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'ProtocolFeeWithdrawn',
+    inputs: [
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
     ],
   },
 ] as const;
