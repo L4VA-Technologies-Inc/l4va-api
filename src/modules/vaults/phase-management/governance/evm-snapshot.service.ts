@@ -521,7 +521,7 @@ export class EvmSnapshotService {
     }
 
     this.logger.debug(
-      `[EVM Snapshot] Vault ${vaultId}: Alchemy fallback start rpc=${rpcUrl} token=${vtAddress.toLowerCase()} baselineHolders=${addresses.length}`
+      `[EVM Snapshot] Vault ${vaultId}: Alchemy fallback start token=${vtAddress.toLowerCase()} baselineHolders=${addresses.length}`
     );
 
     const balances = new Map<string, bigint>();
