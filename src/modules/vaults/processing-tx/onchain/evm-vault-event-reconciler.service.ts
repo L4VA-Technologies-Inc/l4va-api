@@ -607,7 +607,7 @@ export class EvmVaultEventReconciler {
       open_tx_id: tx?.id ?? undefined,
       on_chain_position_id: positionId,
       adapter,
-      protocol: tx?.metadata ? (tx.metadata as any)?.adapter : undefined,
+      protocol: tx?.metadata ? (tx.metadata as any)?.protocol : undefined,
       underlying_asset: underlyingAsset || '0x0000000000000000000000000000000000000000',
       amount_deposited: amountConsumed,
       position_asset: positionAsset,

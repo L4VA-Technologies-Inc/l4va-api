@@ -2810,6 +2810,31 @@ export class LifecycleService {
           }
         }
 
+        if (vault.vault_status === VaultStatus.acquire_expansion) {
+          const acquireExpansionProposal = await this.proposalRepository.findOne({
+            where: { vaultId: vault.id, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
+            order: { createdAt: 'DESC' },
+          });
+          const expCfg = acquireExpansionProposal?.metadata?.acquireExpansion;
+          if (expCfg?.priceType === 'limit' && expCfg.limitPrice > 0) {
+            const vtDecimals = vault.ft_token_decimals ?? 18;
+            const vtDecimalMul = 10n ** BigInt(vtDecimals);
+            const SCALE = 1_000_000n;
+            const limitPriceScaled = BigInt(Math.round(expCfg.limitPrice * 1_000_000));
+            expansionVtOverride = new Map<string, bigint>();
+            for (const [contribId, v] of pricing.contributionValues) {
+              const unitPrice = BigInt(v.unitPriceNative);
+              if (unitPrice === 0n) continue;
+              const valueNative = BigInt(v.valueNative);
+              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (unitPrice * SCALE));
+            }
+            this.logger.log(
+              `EVM acquire-expansion limit-price override: vault=${vault.id} limitPrice=${expCfg.limitPrice} contributions=${expansionVtOverride.size} ` +
+                `totalVt=${[...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)} base units`
+            );
+          }
+        }
+
         // 3. Compute + persist the snapshot (status='calculated').
         const { snapshotId, leafCount } = await this.evmAllocationService.computeSnapshot({
           vaultId: vault.id,

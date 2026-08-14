@@ -273,18 +273,18 @@ export class MarketplaceActionDto {
 
   // ===== EVM-only fields (Uniswap swaps / close-position) =====
   @ApiProperty({ description: 'EVM: ERC-20 input token address (0x…)', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.inputAsset !== undefined)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'inputAsset must be a 20-byte hex EVM address' })
   inputAsset?: string;
 
   @ApiProperty({ description: 'EVM: ERC-20 expected output token address (0x…)', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.expectedOutputAsset !== undefined)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'expectedOutputAsset must be a 20-byte hex EVM address' })
   expectedOutputAsset?: string;
 
   @ApiProperty({ description: 'EVM: raw token amount in smallest unit (wei-scale string)', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.amount !== undefined)
+  @IsNumberString({}, { message: 'amount must be a valid unsigned integer string' })
   amount?: string;
 
   @ApiProperty({ description: 'EVM: human-readable token amount for display', required: false })
@@ -293,23 +293,23 @@ export class MarketplaceActionDto {
   humanAmount?: string;
 
   @ApiProperty({ description: 'EVM: on-chain positionId for CLOSE_POSITION actions', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @IsNumberString({}, { message: 'positionId must be a valid unsigned integer string' })
   positionId?: string;
 
   @ApiProperty({ description: 'EVM: position asset address for CLOSE_POSITION', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'positionAsset must be a 20-byte hex EVM address' })
   positionAsset?: string;
 
   @ApiProperty({ description: 'EVM: underlying asset address to receive on CLOSE_POSITION', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'underlyingAsset must be a 20-byte hex EVM address' })
   underlyingAsset?: string;
 
   @ApiProperty({ description: 'EVM: raw position amount for CLOSE_POSITION', required: false })
-  @IsOptional()
-  @IsString()
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @IsNumberString({}, { message: 'positionAmount must be a valid unsigned integer string' })
   positionAmount?: string;
 }
 

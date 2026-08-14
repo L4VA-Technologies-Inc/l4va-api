@@ -97,7 +97,7 @@ export class EvmPositionService {
       reconciliation_status: EvmReconciliationStatus.pending,
       reconciliation_attempts: 0,
       expected_events: [{ name: 'PositionOpened', count: 1 }],
-      metadata: { operationId: params.operationId, adapter: params.adapter },
+      metadata: { operationId: params.operationId, adapter: params.adapter, protocol: params.protocol },
     });
     await this.transactionsRepository.save(adminTx);
 

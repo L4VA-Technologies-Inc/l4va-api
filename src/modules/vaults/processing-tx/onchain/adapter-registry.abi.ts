@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT — ABI for AdapterRegistry.sol
 // Source of truth: vault-contract-solidity/src/AdapterRegistry.sol
 
+import { keccak256, toHex } from 'viem';
+
 export const ADAPTER_REGISTRY_ABI = [
   {
     type: 'function',
@@ -59,5 +61,4 @@ export const ADAPTER_REGISTRY_ABI = [
 ] as const;
 
 /** keccak256("ADAPTER_MANAGER_ROLE") — mirrors AdapterRegistry.ADAPTER_MANAGER_ROLE */
-export const ADAPTER_MANAGER_ROLE = ('0x' +
-  Buffer.from('ADAPTER_MANAGER_ROLE').reduce((acc, b) => acc + b.toString(16).padStart(2, '0'), '')) as `0x${string}`;
+export const ADAPTER_MANAGER_ROLE = keccak256(toHex('ADAPTER_MANAGER_ROLE'));

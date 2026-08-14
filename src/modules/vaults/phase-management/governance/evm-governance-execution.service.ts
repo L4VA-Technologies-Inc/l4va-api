@@ -15,6 +15,7 @@ import {
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
+import { EvmExternalPosition, EvmPositionStatus } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { ProposalType } from '@/types/proposal.types';
@@ -43,6 +44,8 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   constructor(
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Proposal) private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(EvmExternalPosition)
+    private readonly positionsRepository: Repository<EvmExternalPosition>,
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
@@ -436,8 +439,12 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted`);
 
       // Step 2: snapshot + begin
-      // Distributable assets = all ERC-20s currently held (from metadata or empty list)
-      const distributableAssets: Address[] = (proposal.metadata as any)?.distributableAssets ?? [];
+      // Distributable assets = all unique ERC-20 position tokens currently held by the vault.
+      const activePositions = await this.positionsRepository.find({
+        where: { vault_id: vault.id, status: EvmPositionStatus.active },
+        select: ['position_asset'],
+      });
+      const distributableAssets: Address[] = [...new Set(activePositions.map(p => p.position_asset as Address))];
       await this.terminationService.beginTermination(vault.id, distributableAssets);
       this.logger.log(`Proposal ${proposal.id}: beginTermination submitted — vault is now Terminating`);
 

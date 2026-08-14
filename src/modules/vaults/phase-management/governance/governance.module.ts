@@ -26,6 +26,7 @@ import { VoteCountingService } from './vote-counting.service';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { TokenVerification } from '@/database/token-verification.entity';
@@ -59,6 +60,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       VaultTreasuryWallet,
       AssetsWhitelistEntity,
       TokenVerification,
+      EvmExternalPosition,
     ]),
     RedisModule,
     SnapshotModule,

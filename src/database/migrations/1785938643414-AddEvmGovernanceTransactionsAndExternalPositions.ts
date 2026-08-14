@@ -84,6 +84,11 @@ export class AddEvmGovernanceTransactionsAndExternalPositions1785938643414 imple
     await queryRunner.query(
       `CREATE TYPE "public"."transactions_type_enum" AS ENUM('create-vault', 'mint', 'payment', 'contribute', 'claim', 'extract', 'extract-dispatch', 'cancel', 'acquire', 'investment', 'burn', 'swap', 'stake', 'unstake', 'harvest', 'compound', 'extract-lp', 'distribute-lp', 'distribution', 'update-vault', 'wayup', 'evm-close-cycle', 'evm-claim', 'evm-refund', 'evm-cancel-cycle', 'all')`
     );
+    // Remove rows whose type is not present in the old enum before casting to avoid
+    // "invalid input value for enum" on rollback.
+    await queryRunner.query(
+      `DELETE FROM "transactions" WHERE "type" IN ('evm-open-cycle', 'evm-open-position', 'evm-close-position', 'evm-begin-termination-preparing', 'evm-begin-termination', 'evm-finalize-termination', 'evm-withdraw-fees', 'evm-pause', 'evm-unpause')`
+    );
     await queryRunner.query(
       `ALTER TABLE "transactions" ALTER COLUMN "type" TYPE "public"."transactions_type_enum" USING "type"::"text"::"public"."transactions_type_enum"`
     );
