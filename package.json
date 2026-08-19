@@ -68,6 +68,7 @@
     "dotenv": "^17.2.3",
     "multer": "^2.2.0",
     "node-cache": "^5.1.2",
+    "openai": "^4.104.0",
     "pg": "^8.13.1",
     "raw-body": "^3.0.0",
     "reflect-metadata": "^0.2.0",
