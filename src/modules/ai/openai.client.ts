@@ -13,7 +13,7 @@ export class OpenAiClient {
   constructor(configService: ConfigService) {
     const apiKey = configService.get<string>('OPENAI_API_KEY');
     this.client = apiKey ? new OpenAI({ apiKey }) : null;
-    this.chatModel = configService.get<string>('OPENAI_CHAT_MODEL') || 'gpt-4o';
+    this.chatModel = configService.get<string>('OPENAI_CHAT_MODEL') || 'gpt-4o-mini';
     this.imageModel = configService.get<string>('OPENAI_IMAGE_MODEL') || 'gpt-image-1';
     this.maxOutputTokens = Number(configService.get<string>('OPENAI_MAX_OUTPUT_TOKENS') || '2000');
 
