@@ -78,7 +78,7 @@ export function buildVaultDraftJsonSchema(
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['message', 'status', 'missingFields', 'vaultDraft'],
+    required: ['message', 'status', 'missingFields', 'vaultDraft', 'resetDraft'],
     properties: {
       message: {
         type: 'string',
@@ -93,6 +93,11 @@ export function buildVaultDraftJsonSchema(
         type: 'array',
         items: { type: 'string' },
         description: 'Names of required fields still without a value.',
+      },
+      resetDraft: {
+        type: 'boolean',
+        description:
+          'Set to true only when the user explicitly asks to clear/reset/start over the draft. When true, vaultDraft is applied to a blank draft instead of merged onto the existing one.',
       },
       vaultDraft: {
         type: 'object',

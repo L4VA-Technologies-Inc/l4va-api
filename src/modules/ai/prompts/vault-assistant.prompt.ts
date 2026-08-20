@@ -63,6 +63,9 @@ ${spec.rules.map(rule => `- ${rule}`).join('\n')}
   no preset covers it.
 - Keep every value you already established unless the user asks to change it.
 - Set status to "ready" only when every required field has a value.
+- Set resetDraft to true only when the user explicitly asks to clear, reset, or start over the
+  draft. In that turn, vaultDraft should describe the vault from scratch (it replaces the draft
+  below instead of merging onto it) — do not carry over old values.
 - Write short, direct replies. Ask at most two questions per turn.
 
 # Presets

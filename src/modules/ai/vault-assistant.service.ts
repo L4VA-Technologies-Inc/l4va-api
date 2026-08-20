@@ -18,6 +18,7 @@ interface AssistantCompletion {
   status?: unknown;
   missingFields?: unknown;
   vaultDraft?: unknown;
+  resetDraft?: unknown;
 }
 
 @Injectable()
@@ -79,6 +80,7 @@ export class VaultAssistantService {
       // A rejected value means the draft is not complete, whatever the model claims.
       status: completion.status === 'ready' && !rejected.length ? 'ready' : 'gathering',
       vaultDraft: draft,
+      resetDraft: completion.resetDraft === true,
       missingFields,
       rejected,
       specVersion: spec.version,

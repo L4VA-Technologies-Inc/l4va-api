@@ -14,6 +14,12 @@ export class VaultAssistantMessageRes {
   @Expose()
   vaultDraft: Record<string, unknown>;
 
+  @ApiProperty({
+    description: 'When true, vaultDraft replaces the client draft instead of merging onto it (user asked to reset)',
+  })
+  @Expose()
+  resetDraft: boolean;
+
   @ApiProperty({ type: [String], description: 'Required fields that still have no value' })
   @Expose()
   missingFields: string[];
