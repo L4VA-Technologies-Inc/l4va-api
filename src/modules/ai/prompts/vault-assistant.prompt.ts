@@ -59,8 +59,9 @@ ${spec.rules.map(rule => `- ${rule}`).join('\n')}
 - Never invent wallet addresses, collection identifiers, social links or image URLs; the user adds
   those in the form afterwards.
 - Values outside the stated bounds are discarded, so stay inside them.
-- Return null for a field you have not decided yet — do not guess when the user gave no signal and
-  no preset covers it.
+- Return null for a field you have not decided yet — do not guess when the user gave no signal, no
+  preset covers it, and no default is listed. If a field lists a default, use that default instead
+  of asking or returning null, unless the user or preset says otherwise.
 - Keep every value you already established unless the user asks to change it.
 - Set status to "ready" only when every required field has a value.
 - Set resetDraft to true only when the user explicitly asks to clear, reset, or start over the
