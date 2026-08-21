@@ -95,8 +95,15 @@ export class GovernanceService {
   private readonly poolAddress: string;
   private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
-  /** LP tokens held by DEX AMM contracts; balances this large are contract-locked liquidity, not user positions */
-  private readonly LP_CONTRACT_BALANCE_THRESHOLD = BigInt('1000000000000000000');
+  /**
+   * Quantity-based DEX contract detection threshold (2^62).
+   *
+   * Some DEXes (Minswap, SundaeSwap) lock LP tokens at the pool's own script address using
+   * sentinel-style quantities close to int64 max (2^63-1 = 9,223,372,036,854,775,807) instead
+   * of burning them. A real user LP position never approaches this — any holder at or above
+   * 2^62 is the DEX contract itself, not a user, so it's excluded from voting power.
+   */
+  private readonly LP_DEX_CONTRACT_THRESHOLD = BigInt('4611686018427387904');
 
   // private readonly snapshotCache: NodeCache;
 
@@ -170,7 +177,7 @@ export class GovernanceService {
     });
   }
 
-  @Cron(CronExpression.EVERY_12_HOURS)
+  @Cron(CronExpression.EVERY_3_HOURS)
   async createDailySnapshots(): Promise<void> {
     this.logger.log('Starting daily snapshot creation');
 
@@ -310,9 +317,23 @@ export class GovernanceService {
 
       if (vault.has_active_lp) {
         const pools = await this.tapToolsClient.getTokenPools(assetId);
+        this.logger.debug(`[LP] Fetched ${pools.length} pool(s) from TapTools for asset ${assetId.slice(0, 16)}...`);
 
-        // Collect locked VT raw amounts per pool to identify DEX pool contract addresses later
-        const lpPoolLockedAmounts = new Set<bigint>();
+        // Real DEX pool/order contract addresses, detected by TWO complementary strategies
+        // instead of guessing after the fact by matching balance values:
+        //  1) Address-based: DEXes that expose their validator addresses directly (VyFi's
+        //     poolValidatorAddress / orderValidatorAddress) — added as soon as we see them.
+        //  2) Quantity-based: DEXes that don't expose an address (Minswap, SundaeSwap) but lock
+        //     LP tokens at their own script address using sentinel-sized quantities
+        //     (>= LP_DEX_CONTRACT_THRESHOLD) — the holder of such a balance IS the pool
+        //     contract, discovered while scanning LP token holders below.
+        const dexContractAddresses = new Set<string>();
+        if (this.poolAddress) dexContractAddresses.add(this.poolAddress);
+        if (this.adminAddress) dexContractAddresses.add(this.adminAddress);
+        for (const pool of pools) {
+          if (pool.poolValidatorAddress) dexContractAddresses.add(pool.poolValidatorAddress);
+          if (pool.orderValidatorAddress) dexContractAddresses.add(pool.orderValidatorAddress);
+        }
 
         for (const pool of pools) {
           try {
@@ -323,12 +344,18 @@ export class GovernanceService {
               pool.tokenA === assetId ? pool.tokenALocked : pool.tokenBLocked,
               decimals
             );
-            lpPoolLockedAmounts.add(lockedVaultTokensRaw);
+
+            this.logger.debug(
+              `[LP] Pool ${pool.exchange} (onchainID=${pool.onchainID?.slice(0, 10)}...): ` +
+                `lockedVaultTokensRaw=${lockedVaultTokensRaw}n, lpTokenUnit=${lpAssetId?.slice(0, 16)}..., ` +
+                `knownPoolAddress=${pool.poolValidatorAddress ?? 'UNKNOWN (relying on quantity-based detection)'}`
+            );
 
             let lpPage = 1;
             let lpHasMore = true;
 
             let activeLpSupply = BigInt(0);
+            let quantityDetectedCount = 0;
             const realLpHolders: { address: string; lpBalance: bigint }[] = [];
 
             while (lpHasMore) {
@@ -340,46 +367,77 @@ export class GovernanceService {
                 for (const holder of lpHolders) {
                   const holderLpBalance = BigInt(holder.quantity);
 
-                  // Skip balances that belong to DEX AMM contracts (not real user positions)
-                  if (holderLpBalance > this.LP_CONTRACT_BALANCE_THRESHOLD) {
+                  // Quantity-based detection: this holder IS the DEX contract, not a real user position
+                  if (holderLpBalance >= this.LP_DEX_CONTRACT_THRESHOLD) {
+                    quantityDetectedCount++;
+                    dexContractAddresses.add(holder.address);
+                    this.logger.debug(
+                      `[LP] Pool ${pool.exchange}: quantity-based filter matched DEX contract ${holder.address} (${holderLpBalance}n LP tokens >= ${this.LP_DEX_CONTRACT_THRESHOLD}n)`
+                    );
                     continue;
                   }
 
                   activeLpSupply += holderLpBalance;
-
-                  if (holder.address === this.poolAddress || holder.address === this.adminAddress) continue;
-
                   realLpHolders.push({ address: holder.address, lpBalance: holderLpBalance });
                 }
                 lpPage++;
               }
             }
 
-            if (activeLpSupply === BigInt(0)) continue;
+            // Defensive: drop any holder that's since been identified as a DEX contract address
+            // (address-based detection above, or quantity-based detection from another pool
+            // sharing the same script address) before computing supply and distributing.
+            const filteredHolders = realLpHolders.filter(h => !dexContractAddresses.has(h.address));
+            if (filteredHolders.length !== realLpHolders.length) {
+              activeLpSupply = filteredHolders.reduce((sum, h) => sum + h.lpBalance, BigInt(0));
+            }
 
-            for (const user of realLpHolders) {
+            this.logger.debug(
+              `[LP] Pool ${pool.exchange}: activeLpSupply=${activeLpSupply}n across ${filteredHolders.length} real holder(s), ` +
+                `${quantityDetectedCount} DEX contract balance(s) detected by quantity`
+            );
+
+            if (activeLpSupply === BigInt(0)) {
+              this.logger.warn(
+                `[LP] Pool ${pool.exchange}: activeLpSupply is 0 — skipping redistribution (locked ${lockedVaultTokensRaw}n VT will NOT be attributed to any holder)`
+              );
+              continue;
+            }
+
+            let distributedTotal = BigInt(0);
+            for (const user of filteredHolders) {
               // Integer division: (userLp * lockedVaultTokens) / totalLpSupply — no float rounding
               const underlyingTokens = (user.lpBalance * lockedVaultTokensRaw) / activeLpSupply;
               addressBalances[user.address] = (addressBalances[user.address] ?? BigInt(0)) + underlyingTokens;
+              distributedTotal += underlyingTokens;
             }
+            this.logger.debug(
+              `[LP] Pool ${pool.exchange}: distributed ${distributedTotal}n of ${lockedVaultTokensRaw}n locked VT ` +
+                `(rounding remainder=${lockedVaultTokensRaw - distributedTotal}n) to ${filteredHolders.length} holder(s)`
+            );
             this.logger.log(`Processed LP pool ${pool.exchange} successfully.`);
           } catch (poolError) {
             this.logger.error(`Failed to process pool ${pool.exchange}: ${poolError.message}`);
           }
         }
 
-        // Remove DEX pool contract addresses from the snapshot.
-        // Each pool contract holds VT equal to its lockedVaultTokensRaw — these tokens are
-        // already redistributed proportionally to LP holders above, so keeping the pool
-        // address would double-count that VT in voting power.
-        for (const [address, balance] of Object.entries(addressBalances)) {
-          if (lpPoolLockedAmounts.has(balance)) {
-            this.logger.log(
-              `Excluded DEX pool contract ${address} from snapshot (${balance}n VT redistributed to LP holders)`
-            );
+        // Remove DEX pool contract addresses from the snapshot by real address membership —
+        // no value-matching involved. Each pool contract's VT balance was already redistributed
+        // proportionally to real LP holders above, so leaving the pool address in the snapshot
+        // would double-count that VT in voting power.
+        let removedCount = 0;
+        for (const address of dexContractAddresses) {
+          const balance = addressBalances[address];
+          if (balance !== undefined) {
+            this.logger.log(`Excluded DEX pool contract ${address} from snapshot (${balance}n VT in liquidity pool)`);
             delete addressBalances[address];
+            removedCount++;
           }
         }
+
+        this.logger.debug(
+          `[LP] Removed ${removedCount} DEX contract address(es) from snapshot out of ${dexContractAddresses.size} tracked (pools+admin+pool addresses).`
+        );
       }
 
       const divisor = BigInt(10) ** BigInt(decimals);
