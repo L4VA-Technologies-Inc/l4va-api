@@ -236,30 +236,22 @@ export class TapToolsClient {
     }
 
     try {
-      // Step 1: Get all pools from DexHunter
+      // Step 1: Get ADA-paired pools from DexHunter. NOTE: this endpoint is ADA-pair-only —
+      // it cannot see pools where the token trades against something other than ADA
+      // (e.g. TOKEN/OTHER-TOKEN pools with no ADA leg at all). Step 4 below fills that gap
+      // for Minswap specifically, using Minswap's own policy-ID search.
       const dhResp = await fetch(`${this.dexHunterBaseUrl}/stats/pools/ADA/${tokenUnit}`, {
         headers: { 'X-Partner-Id': this.dexHunterApiKey, 'Content-Type': 'application/json' },
       });
 
-      if (!dhResp.ok) {
-        // Cache empty results in Redis for 2 minutes
-        await this.redis.set(cacheKey, JSON.stringify([]), 'EX', 120).catch(() => {});
-        return [];
-      }
-
-      const dhPools: DexHunterPoolItem[] = await dhResp.json();
-      if (!dhPools || dhPools.length === 0) {
-        // Cache empty results in Redis for 2 minutes
-        await this.redis.set(cacheKey, JSON.stringify([]), 'EX', 120).catch(() => {});
-        return [];
-      }
+      const dhPools: DexHunterPoolItem[] = dhResp.ok ? ((await dhResp.json()) ?? []) : [];
 
       // Step 2: Pre-fetch VyFi pools for VyFi DEXs (Nexus returns empty lpUnit for VyFi)
       const hasVyFi = dhPools.some(p => p.dex_name.toLowerCase().includes('vyfi'));
       const vyfiPools = hasVyFi ? await this.fetchVyFiPoolsForToken(tokenUnit) : [];
 
-      // Step 3: Map to TapToolsTokenPoolDto with LP token resolution and supply
-      const result: TapToolsTokenPoolDto[] = await Promise.all(
+      // Step 3: Map ADA-paired pools to TapToolsTokenPoolDto with LP token resolution and supply
+      const adaPairedResult: TapToolsTokenPoolDto[] = await Promise.all(
         dhPools.map(async pool => {
           const dex = pool.dex_name.toLowerCase();
           let lpTokenUnit = '';
@@ -303,8 +295,15 @@ export class TapToolsClient {
         })
       );
 
-      // Cache in Redis with 10-minute TTL (600 seconds)
-      await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 600).catch(redisError => {
+      // Step 4: Fill in Minswap pools DexHunter's ADA-only view can't see, via Minswap's own
+      // policy-ID search (returns every pool for the token regardless of counter-asset).
+      const knownPoolIds = new Set(dhPools.map(p => p.pool_id));
+      const nonAdaMinswapPools = await this.fetchNonAdaMinswapPools(tokenUnit, knownPoolIds);
+
+      const result = [...adaPairedResult, ...nonAdaMinswapPools];
+
+      // Cache in Redis with 10-minute TTL (600 seconds), or 2 minutes if nothing was found
+      await this.redis.set(cacheKey, JSON.stringify(result), 'EX', result.length > 0 ? 600 : 120).catch(redisError => {
         this.logger.warn(
           `Redis set failed for ${cacheKey}: ${redisError instanceof Error ? redisError.message : String(redisError)}`
         );
@@ -483,6 +482,84 @@ export class TapToolsClient {
         `Failed to fetch pool data from Minswap API for ${poolId.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
+    }
+  }
+
+  /**
+   * Fetch Minswap pools for a token that DexHunter's ADA-only `/stats/pools/ADA/{token}`
+   * endpoint can't see — i.e. pools where the token trades against something other than ADA
+   * (TOKEN/OTHER-TOKEN pairs with no ADA leg at all). Minswap's own `/v1/pools/metrics` search
+   * by policy ID returns every pool for the token regardless of counter-asset, so we use it here
+   * purely as a gap-filler: any pool whose ID is already in `knownPoolIds` (already covered via
+   * DexHunter) is skipped.
+   *
+   * @param tokenUnit Full token unit (policyId + assetName in hex)
+   * @param knownPoolIds Pool IDs already discovered via DexHunter's ADA-paired list
+   */
+  private async fetchNonAdaMinswapPools(tokenUnit: string, knownPoolIds: Set<string>): Promise<TapToolsTokenPoolDto[]> {
+    try {
+      const policyId = tokenUnit.slice(0, 56);
+
+      const response = await fetch(`${this.minswapBaseUrl}/v1/pools/metrics`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10_000),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ term: policyId, sort_field: 'liquidity', limit: 100 }),
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const data: MinswapPoolMetricsResponse = await response.json();
+      const pools = data?.pool_metrics;
+      if (!Array.isArray(pools) || pools.length === 0) {
+        return [];
+      }
+
+      const results: TapToolsTokenPoolDto[] = [];
+
+      for (const pool of pools) {
+        const poolId = pool.lp_asset?.token_name;
+        if (!poolId || knownPoolIds.has(poolId)) continue; // already covered via DexHunter's ADA-paired list
+
+        const aUnit = `${pool.asset_a?.currency_symbol ?? ''}${pool.asset_a?.token_name ?? ''}`;
+        const bUnit = `${pool.asset_b?.currency_symbol ?? ''}${pool.asset_b?.token_name ?? ''}`;
+        const isTokenA = aUnit === tokenUnit;
+        const isTokenB = bUnit === tokenUnit;
+        // The policy-ID search can match a different asset minted under the same policy — skip those
+        if (!isTokenA && !isTokenB) continue;
+
+        const counterUnit = isTokenA ? bUnit : aUnit;
+        const counterIsAda = counterUnit === '';
+        if (counterIsAda) continue; // already covered via DexHunter's ADA-paired list
+
+        const counterMeta = isTokenA ? pool.asset_b : pool.asset_a;
+
+        results.push({
+          exchange: pool.type === 'MinswapV2' ? 'MINSWAPV2' : pool.type.toUpperCase(),
+          lpTokenUnit: `${pool.lp_asset.currency_symbol}${pool.lp_asset.token_name}`,
+          onchainID: poolId,
+          tokenA: tokenUnit,
+          tokenALocked: isTokenA ? pool.liquidity_a : pool.liquidity_b,
+          tokenATicker: '',
+          tokenB: counterUnit,
+          tokenBLocked: isTokenA ? pool.liquidity_b : pool.liquidity_a,
+          tokenBTicker: counterMeta?.metadata?.ticker ?? '',
+          lpTotalSupply: null,
+        });
+
+        this.logger.log(
+          `✅ Found non-ADA Minswap pool for ${tokenUnit.slice(0, 10)}...: ${pool.type} pool ${poolId.slice(0, 10)}... paired with ${counterMeta?.metadata?.ticker ?? counterUnit.slice(0, 10) + '...'}`
+        );
+      }
+
+      return results;
+    } catch (error) {
+      this.logger.warn(
+        `fetchNonAdaMinswapPools failed for ${tokenUnit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return [];
     }
   }
 
