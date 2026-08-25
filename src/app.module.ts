@@ -37,6 +37,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 import { WayUpModule } from './modules/wayup/wayup.module';
 
+import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
@@ -90,6 +91,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     SystemSettingsModule,
     PriceModule,
     AuthModule,
+    AiModule,
     AlertsModule,
     AssetsModule,
     BlockchainModule,
