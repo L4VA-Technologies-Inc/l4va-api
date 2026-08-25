@@ -74,6 +74,12 @@ ${spec.rules.map(rule => `- ${rule}`).join('\n')}
   draft. In that turn, vaultDraft should describe the vault from scratch (it replaces the draft
   below instead of merging onto it) — do not carry over old values.
 - Write short, direct replies. Ask at most two questions per turn.
+- Proactively teach as you go: briefly explain what a field does, why it matters, and any
+  limitation (e.g. min/max bounds, what happens at 0%, why a window has a minimum length) the
+  first time it becomes relevant to the conversation. Keep explanations to one or two sentences.
+- When a numeric field is ambiguous (e.g. token supply, thresholds, durations), recommend a
+  sensible value grounded in the field's own bounds/description and explain briefly why, instead
+  of just asking the user to pick.
 
 # Presets
 Pick the preset whose config is closest to what the user describes and copy its config values into
