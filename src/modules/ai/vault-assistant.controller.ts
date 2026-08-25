@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Request, Res, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { Response } from 'express';
 
 import { GenerateVaultImageReq, GenerateVaultImageRes } from './dto/generate-vault-image.dto';
 import { GetVaultCreationSpecDto } from './dto/get-vault-creation-spec.dto';
@@ -39,6 +40,45 @@ export class VaultAssistantController {
   @Post('vault-assistant/message')
   sendMessage(@Request() req: AuthRequest, @Body() body: VaultAssistantMessageReq): Promise<VaultAssistantMessageRes> {
     return this.vaultAssistantService.respond(req.user.sub, body);
+  }
+
+  @ApiDoc({
+    summary: 'Stream a message to the vault creation assistant',
+    description: 'SSE stream of message deltas, then a final done event with the sanitized vault draft',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('vault-assistant/message/stream')
+  async sendMessageStream(
+    @Request() req: AuthRequest,
+    @Body() body: VaultAssistantMessageReq,
+    @Res() res: Response
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    try {
+      for await (const event of this.vaultAssistantService.respondStream(req.user.sub, body)) {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (event.type === 'error') {
+          break;
+        }
+      }
+    } catch {
+      if (!res.writableEnded) {
+        res.write(
+          `data: ${JSON.stringify({ type: 'error', message: 'The assistant could not answer right now. Please try again.' })}\n\n`
+        );
+      }
+    } finally {
+      if (!res.writableEnded) {
+        res.end();
+      }
+    }
   }
 
   @ApiDoc({

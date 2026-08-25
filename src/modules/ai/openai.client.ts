@@ -33,6 +33,26 @@ export class OpenAiClient {
     return this.client;
   }
 
+  private structuredCompletionParams(params: {
+    systemPrompt: string;
+    messages: { role: 'user' | 'assistant'; content: string }[];
+    schemaName: string;
+    schema: Record<string, unknown>;
+  }) {
+    return {
+      model: this.chatModel,
+      max_completion_tokens: this.maxOutputTokens,
+      messages: [
+        { role: 'system' as const, content: params.systemPrompt },
+        ...params.messages,
+      ],
+      response_format: {
+        type: 'json_schema' as const,
+        json_schema: { name: params.schemaName, schema: params.schema, strict: true },
+      },
+    };
+  }
+
   /** Chat completion constrained to `schema` via strict structured outputs. */
   async createStructuredCompletion(params: {
     systemPrompt: string;
@@ -40,15 +60,7 @@ export class OpenAiClient {
     schemaName: string;
     schema: Record<string, unknown>;
   }): Promise<unknown> {
-    const completion = await this.require().chat.completions.create({
-      model: this.chatModel,
-      max_completion_tokens: this.maxOutputTokens,
-      messages: [{ role: 'system', content: params.systemPrompt }, ...params.messages],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: params.schemaName, schema: params.schema, strict: true },
-      },
-    });
+    const completion = await this.require().chat.completions.create(this.structuredCompletionParams(params));
 
     const choice = completion.choices[0];
     if (choice?.finish_reason === 'length') {
@@ -63,6 +75,30 @@ export class OpenAiClient {
       throw new Error('AI response was empty');
     }
     return JSON.parse(content);
+  }
+
+  /** Streams structured JSON content deltas (same schema as {@link createStructuredCompletion}). */
+  async *createStructuredCompletionStream(params: {
+    systemPrompt: string;
+    messages: { role: 'user' | 'assistant'; content: string }[];
+    schemaName: string;
+    schema: Record<string, unknown>;
+  }): AsyncGenerator<string> {
+    const stream = await this.require().chat.completions.create({
+      ...this.structuredCompletionParams(params),
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const choice = chunk.choices[0];
+      if (choice?.finish_reason === 'length') {
+        throw new Error('AI response was truncated before it could be parsed');
+      }
+      const delta = choice?.delta?.content;
+      if (delta) {
+        yield delta;
+      }
+    }
   }
 
   /** Returns the raw image bytes for `prompt`. */
