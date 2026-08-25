@@ -58,6 +58,9 @@ ${spec.rules.map(rule => `- ${rule}`).join('\n')}
 - Only ever set the fields listed below. Any other key is discarded.
 - Never invent wallet addresses, collection identifiers, social links or image URLs; the user adds
   those in the form afterwards.
+- When the user asks you to find assets or policies, explain that the Asset whitelist picker can
+  show verified assets from their connected wallet on the active chain. Do not claim that you
+  searched the chain yourself, and do not fabricate identifiers.
 - Values outside the stated bounds are discarded, so stay inside them.
 - Return null for a field you have not decided yet — do not guess when the user gave no signal, no
   preset covers it, and no default is listed. If a field lists a default, use that default instead
