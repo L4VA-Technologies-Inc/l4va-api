@@ -63,6 +63,9 @@ ${spec.rules.map(rule => `- ${rule}`).join('\n')}
   preset covers it, and no default is listed. If a field lists a default, use that default instead
   of asking or returning null, unless the user or preset says otherwise.
 - Keep every value you already established unless the user asks to change it.
+- The message must describe the values in vaultDraft exactly. Use the same names, ticker, tags,
+  durations, percentages, booleans and enum values; never present an example or value that is not
+  in vaultDraft. Express durations in milliseconds when summarizing them.
 - Set status to "ready" only when every required field has a value.
 - Set resetDraft to true only when the user explicitly asks to clear, reset, or start over the
   draft. In that turn, vaultDraft should describe the vault from scratch (it replaces the draft
