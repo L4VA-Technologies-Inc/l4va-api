@@ -190,10 +190,7 @@ export class DexHunterPricingClient {
    * @param tokenIds - Array of token identifiers (policyId + assetName in hex)
    * @returns Map of tokenId to price in ADA (null if not found)
    */
-  async getTokenPrices(
-    tokenIds: string[],
-    options?: { forceMainnet?: boolean }
-  ): Promise<Map<string, number | null>> {
+  async getTokenPrices(tokenIds: string[], options?: { forceMainnet?: boolean }): Promise<Map<string, number | null>> {
     // Skip API calls for testnet/preprod - DexHunter doesn't support preprod
     // forceMainnet: Tokens dashboard uses mainnet Cardano market data even on preprod apps
     if (!this.isMainnet && !options?.forceMainnet) {

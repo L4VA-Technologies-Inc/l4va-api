@@ -93,11 +93,11 @@ async function fetchJson(url: string, label: string, retries = 5): Promise<any> 
   try {
     console.warn(`${label}: falling back to curl`);
     const { execFileSync } = await import('child_process');
-    const out = execFileSync(
-      'curl',
-      ['-sS', '-H', 'Accept: application/json', '-H', 'User-Agent: Mozilla/5.0', url],
-      { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, timeout: 60000 }
-    );
+    const out = execFileSync('curl', ['-sS', '-H', 'Accept: application/json', '-H', 'User-Agent: Mozilla/5.0', url], {
+      encoding: 'utf8',
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: 60000,
+    });
     return JSON.parse(out);
   } catch (curlErr: any) {
     throw lastError ?? new Error(`${label} failed (${curlErr.message})`);
@@ -106,7 +106,7 @@ async function fetchJson(url: string, label: string, retries = 5): Promise<any> 
 
 async function fetchRobinhoodRWAs(): Promise<RwaSeed[]> {
   const body: any = await fetchJson(ROBINHOOD_ASSETS_API, 'Robinhood');
-  const items: any[] = Array.isArray(body) ? body : body.assets ?? body.results ?? [];
+  const items: any[] = Array.isArray(body) ? body : (body.assets ?? body.results ?? []);
 
   const mapped: RwaSeed[] = items
     .filter(
@@ -155,9 +155,7 @@ async function fetchBlockscoutTokens(type: string, maxItems = 2000): Promise<any
 
     params = new URLSearchParams({
       type,
-      ...Object.fromEntries(
-        Object.entries(body.next_page_params).map(([key, value]) => [key, String(value)])
-      ),
+      ...Object.fromEntries(Object.entries(body.next_page_params).map(([key, value]) => [key, String(value)])),
     });
 
     // Be polite to Blockscout — their API is flaky under load
@@ -172,9 +170,7 @@ function chooseBestPair(pairs: any[], tokenAddress: string) {
   return (
     pairs
       .filter(
-        pair =>
-          pair.baseToken?.address?.toLowerCase() === target ||
-          pair.quoteToken?.address?.toLowerCase() === target
+        pair => pair.baseToken?.address?.toLowerCase() === target || pair.quoteToken?.address?.toLowerCase() === target
       )
       .sort((a, b) => Number(b.liquidity?.usd ?? 0) - Number(a.liquidity?.usd ?? 0))[0] ?? null
   );
@@ -344,11 +340,7 @@ async function main() {
     console.log(`Fallback RWA list from Blockscout name heuristic: ${rwas.length}`);
   }
 
-  const rwaContracts = new Set(
-    rwas
-      .map(x => x.contract?.toLowerCase())
-      .filter((x): x is string => !!x)
-  );
+  const rwaContracts = new Set(rwas.map(x => x.contract?.toLowerCase()).filter((x): x is string => !!x));
   console.log(`RWA exclusion set: ${rwaContracts.size} contracts`);
 
   try {

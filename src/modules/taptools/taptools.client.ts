@@ -872,13 +872,7 @@ export class TapToolsClient {
     try {
       const scriptHash = unit.slice(0, 56);
       const assetName = unit.slice(56);
-      const ohlcv = await this.dexHunterPricingClient.getTokenOHLCV(
-        scriptHash,
-        assetName,
-        '1d',
-        31,
-        options
-      );
+      const ohlcv = await this.dexHunterPricingClient.getTokenOHLCV(scriptHash, assetName, '1d', 31, options);
       if (ohlcv && ohlcv.length > 0) {
         const changes = this.calculatePriceChangesFromOHLCV(ohlcv, timeframes);
         if (changes) {

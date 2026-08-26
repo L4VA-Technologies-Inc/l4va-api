@@ -42,10 +42,7 @@ export class OpenAiClient {
     return {
       model: this.chatModel,
       max_completion_tokens: this.maxOutputTokens,
-      messages: [
-        { role: 'system' as const, content: params.systemPrompt },
-        ...params.messages,
-      ],
+      messages: [{ role: 'system' as const, content: params.systemPrompt }, ...params.messages],
       response_format: {
         type: 'json_schema' as const,
         json_schema: { name: params.schemaName, schema: params.schema, strict: true },

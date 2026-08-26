@@ -316,9 +316,7 @@ export class PriceService {
           const best =
             pairs
               .filter(
-                p =>
-                  p.baseToken?.address?.toLowerCase() === target ||
-                  p.quoteToken?.address?.toLowerCase() === target
+                p => p.baseToken?.address?.toLowerCase() === target || p.quoteToken?.address?.toLowerCase() === target
               )
               .sort((a, b) => Number(b.liquidity?.usd ?? 0) - Number(a.liquidity?.usd ?? 0))[0] ?? null;
 
@@ -423,7 +421,6 @@ export class PriceService {
     const mapped = rows.slice(0, safeLimit).map(row => {
       const a = row.attributes ?? {};
       const fromAddr = (a.from_token_address || '').toLowerCase();
-      const toAddr = (a.to_token_address || '').toLowerCase();
       const tokenIsFrom = fromAddr === token;
       const priceUsd = tokenIsFrom
         ? a.price_from_in_usd != null

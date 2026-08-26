@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
@@ -166,13 +167,9 @@ export class TokensService {
     // 24h series (hourly) → %Δ, sparkline, range, volume
     const ohlcStats = await this.mapWithConcurrency(seed, 8, async coin => {
       try {
-        const series = await this.tapToolsClient.getTokenOHLCV(
-          coin.policy_id,
-          coin.asset_name,
-          '1h',
-          24,
-          { forceMainnet: true }
-        );
+        const series = await this.tapToolsClient.getTokenOHLCV(coin.policy_id, coin.asset_name, '1h', 24, {
+          forceMainnet: true,
+        });
         if (!series?.length) {
           return [coin.id, null] as const;
         }
@@ -182,8 +179,7 @@ export class TokensService {
         const volAda = series.reduce((s, c) => s + (Number(c.volume) || 0), 0);
         const first = closes[0];
         const last = closes[closes.length - 1];
-        const change24h =
-          first && last ? ((last - first) / first) * 100 : null;
+        const change24h = first && last ? ((last - first) / first) * 100 : null;
         return [
           coin.id,
           {
@@ -279,13 +275,9 @@ export class TokensService {
     }
 
     try {
-      const series = await this.tapToolsClient.getTokenOHLCV(
-        coin.policy_id,
-        coin.asset_name,
-        interval,
-        numIntervals,
-        { forceMainnet: true }
-      );
+      const series = await this.tapToolsClient.getTokenOHLCV(coin.policy_id, coin.asset_name, interval, numIntervals, {
+        forceMainnet: true,
+      });
       const { adaUsd } = await this.getFxRates();
       const ohlcv = (series || []).map(p => ({
         time: p.time,
@@ -573,11 +565,7 @@ export class TokensService {
     }
 
     try {
-      const trades = await this.priceService.getGeckoTerminalTrades(
-        pairAddress,
-        address,
-        limit
-      );
+      const trades = await this.priceService.getGeckoTerminalTrades(pairAddress, address, limit);
       return { id: address.toLowerCase(), pair_address: pairAddress, trades };
     } catch (error) {
       this.logger.error(`GeckoTerminal trades failed for ${address}: ${error.message}`);

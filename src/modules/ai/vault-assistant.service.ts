@@ -63,10 +63,7 @@ export class VaultAssistantService {
     return this.toResponse(completion, context.spec);
   }
 
-  async *respondStream(
-    userId: string,
-    request: VaultAssistantMessageReq
-  ): AsyncGenerator<VaultAssistantStreamEvent> {
+  async *respondStream(userId: string, request: VaultAssistantMessageReq): AsyncGenerator<VaultAssistantStreamEvent> {
     const context = await this.buildTurnContext(userId, request);
 
     let raw = '';
