@@ -44,6 +44,7 @@ import { OgModule } from '@/modules/og/og.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { StakeModule } from '@/modules/stake/stake.module';
+import { TokensModule } from '@/modules/tokens/tokens.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 @Module({
@@ -119,6 +120,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     OgModule,
     RewardsModule,
     StakeModule,
+    TokensModule,
   ],
   controllers: [AppController],
   providers: [
