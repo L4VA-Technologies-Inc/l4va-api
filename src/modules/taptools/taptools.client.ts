@@ -202,6 +202,38 @@ export class TapToolsClient {
   }
 
   /**
+   * Mainnet DexHunter prices even when the app runs on preprod —
+   * used by Tokens market dashboard (demo Cardano assets are mainnet units).
+   */
+  async getMainnetTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
+    const priceMap = new Map<string, number | null>();
+    const tokensToFetch: string[] = [];
+
+    tokenIds.forEach(tokenId => {
+      const cacheKey = `token_price_mainnet_${tokenId}`;
+      const cached = this.priceCache.get<number | null>(cacheKey);
+      if (cached !== undefined) {
+        priceMap.set(tokenId, cached);
+      } else {
+        tokensToFetch.push(tokenId);
+      }
+    });
+
+    if (tokensToFetch.length === 0) return priceMap;
+
+    const dexHunterPrices = await this.dexHunterPricingClient.getTokenPrices(tokensToFetch, {
+      forceMainnet: true,
+    });
+    dexHunterPrices.forEach((price, tokenId) => {
+      const normalized = price && price > 0 ? price : null;
+      priceMap.set(tokenId, normalized);
+      this.priceCache.set(`token_price_mainnet_${tokenId}`, normalized);
+    });
+
+    return priceMap;
+  }
+
+  /**
    * Get LP pools for a token.
    * Strategy: DexHunter for pool list → VyFi API for lpTokenUnit on VyFi pools
    *           → Minswap API for lpTokenUnit on Minswap pools.
@@ -693,9 +725,10 @@ export class TapToolsClient {
     scriptHash: string,
     assetName: string,
     interval: string,
-    numIntervals?: number
+    numIntervals?: number,
+    options?: { forceMainnet?: boolean }
   ): Promise<MarketOhlcvSeries | null> {
-    if (!this.isMainnet) return null;
+    if (!this.isMainnet && !options?.forceMainnet) return null;
 
     if (!this.validOHLCVIntervals.includes(interval)) {
       this.logger.warn(`Invalid interval '${interval}'. Valid intervals: ${this.validOHLCVIntervals.join(', ')}`);
@@ -703,8 +736,8 @@ export class TapToolsClient {
     }
 
     const cacheKey = numIntervals
-      ? `ohlcv_${scriptHash}_${assetName}_${interval}_${numIntervals}`
-      : `ohlcv_${scriptHash}_${assetName}_${interval}`;
+      ? `ohlcv_${scriptHash}_${assetName}_${interval}_${numIntervals}${options?.forceMainnet ? '_mn' : ''}`
+      : `ohlcv_${scriptHash}_${assetName}_${interval}${options?.forceMainnet ? '_mn' : ''}`;
 
     const cached = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
     if (cached !== undefined) return cached;
@@ -714,7 +747,8 @@ export class TapToolsClient {
         scriptHash,
         assetName,
         interval,
-        numIntervals
+        numIntervals,
+        options
       );
       if (dexHunterData && dexHunterData.length > 0) {
         this.ohlcvCache.set(cacheKey, dexHunterData);
@@ -820,14 +854,15 @@ export class TapToolsClient {
    */
   async getTokenPriceChanges(
     unit: string,
-    timeframes: string = '1h,24h,7d,30d'
+    timeframes: string = '1h,24h,7d,30d',
+    options?: { forceMainnet?: boolean }
   ): Promise<Record<string, number> | null> {
-    if (!this.isMainnet) {
+    if (!this.isMainnet && !options?.forceMainnet) {
       this.logger.debug(`Skipping price changes API call for non-mainnet environment`);
       return null;
     }
 
-    const cacheKey = `price_chg_${unit}_${timeframes}`;
+    const cacheKey = `price_chg_${unit}_${timeframes}${options?.forceMainnet ? '_mn' : ''}`;
     const cached = this.marketDataCache.get<Record<string, number>>(cacheKey);
     if (cached !== undefined) {
       return cached;
@@ -837,7 +872,13 @@ export class TapToolsClient {
     try {
       const scriptHash = unit.slice(0, 56);
       const assetName = unit.slice(56);
-      const ohlcv = await this.dexHunterPricingClient.getTokenOHLCV(scriptHash, assetName, '1d', 31);
+      const ohlcv = await this.dexHunterPricingClient.getTokenOHLCV(
+        scriptHash,
+        assetName,
+        '1d',
+        31,
+        options
+      );
       if (ohlcv && ohlcv.length > 0) {
         const changes = this.calculatePriceChangesFromOHLCV(ohlcv, timeframes);
         if (changes) {

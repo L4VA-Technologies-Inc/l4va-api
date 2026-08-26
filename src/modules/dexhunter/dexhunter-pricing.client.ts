@@ -190,9 +190,13 @@ export class DexHunterPricingClient {
    * @param tokenIds - Array of token identifiers (policyId + assetName in hex)
    * @returns Map of tokenId to price in ADA (null if not found)
    */
-  async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
+  async getTokenPrices(
+    tokenIds: string[],
+    options?: { forceMainnet?: boolean }
+  ): Promise<Map<string, number | null>> {
     // Skip API calls for testnet/preprod - DexHunter doesn't support preprod
-    if (!this.isMainnet) {
+    // forceMainnet: Tokens dashboard uses mainnet Cardano market data even on preprod apps
+    if (!this.isMainnet && !options?.forceMainnet) {
       this.logger.debug(`Skipping DexHunter API call for non-mainnet environment (${tokenIds.length} tokens)`);
       // Return null for all tokens
       const resultMap = new Map<string, number | null>();
@@ -398,10 +402,11 @@ export class DexHunterPricingClient {
     scriptHash: string,
     assetName: string,
     interval: string,
-    numIntervals?: number
+    numIntervals?: number,
+    options?: { forceMainnet?: boolean }
   ): Promise<MarketOhlcvSeries | null> {
     // Skip API calls for testnet/preprod - DexHunter doesn't support preprod
-    if (!this.isMainnet) {
+    if (!this.isMainnet && !options?.forceMainnet) {
       this.logger.debug(`Skipping DexHunter OHLCV call for non-mainnet environment`);
       return null;
     }

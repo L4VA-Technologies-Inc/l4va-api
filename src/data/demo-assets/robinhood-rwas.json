@@ -1,0 +1,227 @@
+[
+  {
+    "id": null,
+    "symbol": "NVDA",
+    "name": "NVIDIA • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+  },
+  {
+    "id": null,
+    "symbol": "SPCX",
+    "name": "Space Exploration Technologies Corp • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea"
+  },
+  {
+    "id": null,
+    "symbol": "SPY",
+    "name": "SPDR S&P 500 ETF Trust • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x117cc2133c37b721f49de2a7a74833232b3b4c0c.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x117cc2133c37b721f49de2a7a74833232b3b4c0c"
+  },
+  {
+    "id": null,
+    "symbol": "MU",
+    "name": "Micron Technology • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xff080c8ce2e5feadaca0da81314ae59d232d4afd.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xff080c8ce2e5feadaca0da81314ae59d232d4afd"
+  },
+  {
+    "id": null,
+    "symbol": "USO",
+    "name": "United States Oil Fund • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xa30fa36db767ad9ed3f7a60fc79526fb4d56d344.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xa30fa36db767ad9ed3f7a60fc79526fb4d56d344"
+  },
+  {
+    "id": null,
+    "symbol": "MSFT",
+    "name": "Microsoft • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xe93237c50d904957cf27e7b1133b510c669c2e74.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xe93237c50d904957cf27e7b1133b510c669c2e74"
+  },
+  {
+    "id": null,
+    "symbol": "INTC",
+    "name": "Intel • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xc72b96e0e48ecd4dc75e1e45396e26300bc39681.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xc72b96e0e48ecd4dc75e1e45396e26300bc39681"
+  },
+  {
+    "id": null,
+    "symbol": "COIN",
+    "name": "Coinbase • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x6330d8c3178a418788df01a47479c0ce7ccf450b.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x6330d8c3178a418788df01a47479c0ce7ccf450b"
+  },
+  {
+    "id": null,
+    "symbol": "AMD",
+    "name": "AMD • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x86923f96303d656e4aa86d9d42d1e57ad2023fdc.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x86923f96303d656e4aa86d9d42d1e57ad2023fdc"
+  },
+  {
+    "id": null,
+    "symbol": "PLTR",
+    "name": "Palantir Technologies • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x894e1ec2d74ffe5aef8dc8a9e84686accb964f2a.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x894e1ec2d74ffe5aef8dc8a9e84686accb964f2a"
+  },
+  {
+    "id": null,
+    "symbol": "MSTR",
+    "name": "Strategy Inc. • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xec262a75e413fafd0df80480274532c79d42da09.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xec262a75e413fafd0df80480274532c79d42da09"
+  },
+  {
+    "id": null,
+    "symbol": "AAPL",
+    "name": "Apple • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xaf3d76f1834a1d425780943c99ea8a608f8a93f9.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xaf3d76f1834a1d425780943c99ea8a608f8a93f9"
+  },
+  {
+    "id": null,
+    "symbol": "META",
+    "name": "Meta Platforms • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xc0d6457c16cc70d6790dd43521c899c87ce02f35.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xc0d6457c16cc70d6790dd43521c899c87ce02f35"
+  },
+  {
+    "id": null,
+    "symbol": "AMZN",
+    "name": "Amazon • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x12f190a9f9d7d37a250758b26824b97ce941bf54.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x12f190a9f9d7d37a250758b26824b97ce941bf54"
+  },
+  {
+    "id": null,
+    "symbol": "DJT",
+    "name": "Trump Media & Technology Group Corp. • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x1d11f0496982706c5e14a514d4e79f2e6bde4516.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x1d11f0496982706c5e14a514d4e79f2e6bde4516"
+  },
+  {
+    "id": null,
+    "symbol": "GOOGL",
+    "name": "Alphabet Class A • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x2e0847e8910a9732eb3fb1bb4b70a580adad4fe3.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x2e0847e8910a9732eb3fb1bb4b70a580adad4fe3"
+  },
+  {
+    "id": null,
+    "symbol": "RDDT",
+    "name": "Reddit • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x05b37fb53a299a1b874a619e1c4c404d52c36f4c.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x05b37fb53a299a1b874a619e1c4c404d52c36f4c"
+  },
+  {
+    "id": null,
+    "symbol": "TSLA",
+    "name": "Tesla • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x322f0929c4625ed5bad873c95208d54e1c003b2d.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x322f0929c4625ed5bad873c95208d54e1c003b2d"
+  },
+  {
+    "id": null,
+    "symbol": "GLD",
+    "name": "SPDR Gold Shares • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xc9a981fee1f9dec688bb123ccdecc63d0debfc4e.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xc9a981fee1f9dec688bb123ccdecc63d0debfc4e"
+  },
+  {
+    "id": null,
+    "symbol": "TTWO",
+    "name": "Take-Two Interactive Software • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x5e81213613b6b86eab4c6c50d718d34359459786.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x5e81213613b6b86eab4c6c50d718d34359459786"
+  },
+  {
+    "id": null,
+    "symbol": "QQQ",
+    "name": "Invesco QQQ • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xd5f3879160bc7c32ebb4dc785f8a4f505888de68.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xd5f3879160bc7c32ebb4dc785f8a4f505888de68"
+  },
+  {
+    "id": null,
+    "symbol": "COST",
+    "name": "Costco • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x4ea005168d7f09a7a0ba9d1def21a479950e44c2.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x4ea005168d7f09a7a0ba9d1def21a479950e44c2"
+  },
+  {
+    "id": null,
+    "symbol": "SLV",
+    "name": "iShares Silver Trust • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0x411efb0e7f985935daec3d4c3ebaea0d0ad7d89f.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0x411efb0e7f985935daec3d4c3ebaea0d0ad7d89f"
+  },
+  {
+    "id": null,
+    "symbol": "SNDK",
+    "name": "Sandisk Corporation • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xb90a19ff0af67f7779aff50a882a9cff42446400.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xb90a19ff0af67f7779aff50a882a9cff42446400"
+  },
+  {
+    "id": null,
+    "symbol": "CRCL",
+    "name": "Circle Internet Group • Robinhood Token",
+    "logo": "https://cdn.robinhood.com/ncw_assets/logos/0xdf0992e440dd0be65bd8439b609d6d4366bf1cb5.png",
+    "decimals": null,
+    "multiplier": null,
+    "contract": "0xdf0992e440dd0be65bd8439b609d6d4366bf1cb5"
+  }
+]
