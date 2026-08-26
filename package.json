@@ -28,6 +28,9 @@
     "docs:generate": "npx @compodoc/compodoc -p tsconfig.json -d documentation",
     "docs:serve": "npx @compodoc/compodoc -p tsconfig.json -d documentation -s"
   },
+  "bin": {
+    "generate-demo-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-demo-assets.ts"
+  },
   "dependencies": {
     "@blaze-cardano/uplc": "^0.5.1",
     "@blockfrost/blockfrost-js": "^6.0.0",
