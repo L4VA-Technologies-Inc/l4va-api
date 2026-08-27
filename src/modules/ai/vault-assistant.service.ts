@@ -4,6 +4,7 @@ import { GenerateVaultImageRes } from './dto/generate-vault-image.dto';
 import { VaultAssistantAction } from './dto/vault-assistant-action';
 import { VaultAssistantMessageReq } from './dto/vault-assistant-message.req';
 import { VaultAssistantMessageRes } from './dto/vault-assistant-message.res';
+import { VaultAssistantOption } from './dto/vault-assistant-option';
 import { extractPartialJsonString } from './extract-partial-json-string';
 import { ChatMessage, ChatTurn, ChatTurnParams, OpenAiClient } from './openai.client';
 import { buildVaultAssistantPrompt, PresetContext } from './prompts/vault-assistant.prompt';
@@ -21,6 +22,7 @@ interface AssistantCompletion {
   message?: unknown;
   status?: unknown;
   missingFields?: unknown;
+  options?: unknown;
   vaultDraft?: unknown;
   resetDraft?: unknown;
 }
@@ -44,6 +46,28 @@ const SCHEMA_NAME = 'vault_assistant_turn';
  * runs with `tool_choice: 'none'`, so a turn always ends with a user-facing message.
  */
 const MAX_TOOL_ROUNDS = 3;
+
+/** Enough for a real choice, few enough that the chat never turns into a menu. */
+const MAX_OPTIONS = 3;
+const MAX_OPTION_LABEL_LENGTH = 40;
+const MAX_OPTION_VALUE_LENGTH = 200;
+
+/** Quick replies are model-authored text that becomes a button, so they are length-capped here. */
+function sanitizeOptions(raw: unknown): VaultAssistantOption[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .flatMap(item => {
+      if (!item || typeof item !== 'object') return [];
+      const { label, value } = item as Record<string, unknown>;
+      if (typeof label !== 'string' || typeof value !== 'string') return [];
+
+      const trimmedLabel = label.trim().slice(0, MAX_OPTION_LABEL_LENGTH);
+      const trimmedValue = value.trim().slice(0, MAX_OPTION_VALUE_LENGTH);
+      return trimmedLabel && trimmedValue ? [{ label: trimmedLabel, value: trimmedValue }] : [];
+    })
+    .slice(0, MAX_OPTIONS);
+}
 
 @Injectable()
 export class VaultAssistantService {
@@ -296,6 +320,7 @@ export class VaultAssistantService {
       vaultDraft: draft,
       resetDraft: completion.resetDraft === true,
       missingFields,
+      options: sanitizeOptions(completion.options),
       rejected,
       specVersion: spec.version,
       // An action only exists because a tool produced it after server-side validation — the model

@@ -78,7 +78,7 @@ export function buildVaultDraftJsonSchema(
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['message', 'status', 'missingFields', 'vaultDraft', 'resetDraft'],
+    required: ['message', 'status', 'missingFields', 'options', 'vaultDraft', 'resetDraft'],
     properties: {
       message: {
         type: 'string',
@@ -88,6 +88,22 @@ export function buildVaultDraftJsonSchema(
         type: 'string',
         enum: ['gathering', 'ready'],
         description: '"ready" only when every required field has a value and the user confirmed the summary.',
+      },
+      options: {
+        type: ['array', 'null'],
+        description:
+          'Two or three quick replies when the turn ends on a constrained decision, otherwise null. ' +
+          'label is what the user sees; value is the reply sent on their behalf, or one of the reserved ' +
+          'UI actions "choose_assets" / "generate_image".',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['label', 'value'],
+          properties: {
+            label: { type: 'string', description: 'Short button text, at most a few words.' },
+            value: { type: 'string', description: 'Reply to send as the user, or a reserved UI action.' },
+          },
+        },
       },
       missingFields: {
         type: 'array',

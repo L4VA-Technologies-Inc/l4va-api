@@ -55,8 +55,10 @@ export class LaunchVaultTool implements VaultAiTool {
           missingFields: validation.missingFields,
           errors: validation.errors,
           guidance:
-            'The vault cannot be launched yet. Tell the user exactly what is still missing or invalid and help ' +
-            'them fill it in. Do not claim the vault was launched.',
+            'The vault cannot be launched yet. Name what is still missing in plain English — no field names — and ' +
+            'help the user fill it in. Do not claim the vault was launched, and do not re-summarize the whole ' +
+            'vault. For assetsWhitelist offer the "choose_assets" option, and for vaultImage or ftTokenImg offer ' +
+            'the "generate_image" option.',
         },
       };
     }

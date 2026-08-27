@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 
 import { VaultAssistantAction } from './vault-assistant-action';
+import { VaultAssistantOption } from './vault-assistant-option';
 
 export class VaultAssistantMessageRes {
   @ApiProperty({ description: 'Assistant reply to show in the chat' })
@@ -21,6 +22,14 @@ export class VaultAssistantMessageRes {
   })
   @Expose()
   resetDraft: boolean;
+
+  @ApiProperty({
+    type: [VaultAssistantOption],
+    description: 'Quick replies to offer under the message; empty when the turn ends on no choice',
+  })
+  @Type(() => VaultAssistantOption)
+  @Expose()
+  options: VaultAssistantOption[];
 
   @ApiProperty({ type: [String], description: 'Required fields that still have no value' })
   @Expose()
