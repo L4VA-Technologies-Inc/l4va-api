@@ -8,6 +8,24 @@ import { VaultAiTool, VaultAiToolContext, VaultAiToolOutcome } from './vault-ai-
 export const LAUNCH_VAULT_TOOL = 'launch_vault';
 
 /**
+ * Plain-English blockers for the fields the user has to supply themselves. Both image fields map to
+ * one phrase because L4VA uses a single image for the vault and its token — the user must never be
+ * told two images are missing.
+ */
+const USER_SUPPLIED_NEEDS: Record<string, string> = {
+  assetsWhitelist: 'the real asset collection to allow',
+  vaultImage: 'a vault image',
+  ftTokenImg: 'a vault image',
+  contributorWhitelist: 'the contributor whitelist',
+  acquirerWhitelist: 'the acquirer whitelist',
+};
+
+/** Distinct, user-facing descriptions of what the user still has to provide. */
+function describeNeeds(missingFields: string[]): string[] {
+  return [...new Set(missingFields.map(field => USER_SUPPLIED_NEEDS[field]).filter(Boolean))];
+}
+
+/**
  * Asks to launch the vault the user is currently configuring.
  *
  * The model never launches anything: this validates the current draft server-side and, at best,
@@ -53,12 +71,14 @@ export class LaunchVaultTool implements VaultAiTool {
           ok: false,
           reason: 'validation_failed',
           missingFields: validation.missingFields,
+          // What to actually say to the user; the raw field names above are for your reasoning only.
+          needs: describeNeeds(validation.missingFields),
           errors: validation.errors,
           guidance:
-            'The vault cannot be launched yet. Name what is still missing in plain English — no field names — and ' +
-            'help the user fill it in. Do not claim the vault was launched, and do not re-summarize the whole ' +
-            'vault. For assetsWhitelist offer the "choose_assets" option, and for vaultImage or ftTokenImg offer ' +
-            'the "generate_image" option.',
+            'The vault cannot be launched yet. Say only what is still needed, using the "needs" wording — never ' +
+            'field names, and never "two images". Do not claim the vault was launched and do not re-summarize the ' +
+            'vault. Offer "choose_assets" when the collection is missing, and "generate_image" plus "upload_image" ' +
+            'when the image is. Anything else that is missing you should simply fill in yourself.',
         },
       };
     }
