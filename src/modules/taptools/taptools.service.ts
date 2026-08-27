@@ -1258,7 +1258,8 @@ export class TaptoolsService {
 
     let totalAcquiredAda = 0;
 
-    // Group assets and track acquired quantities in one pass
+    // Group assets and track acquired quantities in one pass.
+    // Identity-merge only fungibles (FT/ETH/ADA) — NFTs are already unique, keep one entry each.
     for (const asset of vault.assets) {
       // Skip assets that are not in a valid status for valuation
       // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
@@ -1270,8 +1271,10 @@ export class TaptoolsService {
         continue;
       }
 
-      const key = `${asset.policy_id}_${asset.asset_id}`;
-      const existingAsset = assetMap.get(key);
+      const isFungible =
+        asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
+      const key = isFungible ? `${asset.policy_id}_${asset.asset_id}_${asset.type}` : `nft_${asset.id}`;
+      const existingAsset = isFungible ? assetMap.get(key) : undefined;
 
       if (existingAsset) {
         existingAsset.quantity += asset.normalizedQuantity;
@@ -1591,8 +1594,10 @@ export class TaptoolsService {
             continue;
           }
 
-          const key = `${asset.policy_id}_${asset.asset_id}`;
-          const existingAsset = assetMap.get(key);
+          const isFungible =
+            asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
+          const key = isFungible ? `${asset.policy_id}_${asset.asset_id}_${asset.type}` : `nft_${asset.id}`;
+          const existingAsset = isFungible ? assetMap.get(key) : undefined;
 
           if (existingAsset) {
             existingAsset.quantity += asset.normalizedQuantity;

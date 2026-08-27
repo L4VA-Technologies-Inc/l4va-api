@@ -321,11 +321,10 @@ export class AssetsService {
     const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
     const adjustedTotalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
-    const [assets, total] = await queryBuilder
-      .skip((page - 1) * limit)
-      .take(limit)
-      .orderBy('asset.added_at', 'DESC')
-      .getManyAndCount();
+    // Fetch all matching rows, then identity-merge fungibles only.
+    // NFTs stay one row each (already unique by asset_id); FTs/ETH with the same
+    // policy_id+asset_id are collapsed and quantities summed.
+    const assets = await queryBuilder.orderBy('asset.added_at', 'DESC').getMany();
 
     const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
     // Calculate average per token (including all assets)
@@ -354,7 +353,11 @@ export class AssetsService {
       return plain;
     });
 
-    const items = plainToInstance(AssetItemDto, itemsSource, {
+    const aggregatedSource = this.aggregateFungibleAssets(itemsSource);
+    const total = aggregatedSource.length;
+    const pageItems = aggregatedSource.slice((page - 1) * limit, page * limit);
+
+    const items = plainToInstance(AssetItemDto, pageItems, {
       excludeExtraneousValues: true,
     });
 
@@ -363,7 +366,7 @@ export class AssetsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit) || 0,
       statistics: {
         totalAssetValueAda: adjustedTotalValueAda,
         totalAssetValueUsd,
@@ -373,6 +376,52 @@ export class AssetsService {
         totalFTAssets: adjustedTotalFTAssets,
       },
     };
+  }
+
+  /**
+   * Collapse duplicate FT/ETH rows that share policy_id + asset_id.
+   * NFTs are left untouched — each is already a unique asset.
+   */
+  private aggregateFungibleAssets(items: Record<string, unknown>[]): Record<string, unknown>[] {
+    const ftByKey = new Map<string, Record<string, unknown>>();
+    const result: Record<string, unknown>[] = [];
+
+    for (const item of items) {
+      const type = item.type as AssetType;
+      const isFungible = type === AssetType.FT || type === AssetType.ETH || type === AssetType.ADA;
+
+      if (!isFungible) {
+        result.push(item);
+        continue;
+      }
+
+      const key = `${item.policyId ?? item.policy_id}_${item.assetId ?? item.asset_id}_${type}`;
+      const existing = ftByKey.get(key);
+
+      if (!existing) {
+        const clone = { ...item };
+        ftByKey.set(key, clone);
+        result.push(clone);
+        continue;
+      }
+
+      existing.quantity = Number(existing.quantity || 0) + Number(item.quantity || 0);
+      existing.valueAda = Number(existing.valueAda || 0) + Number(item.valueAda || 0);
+      existing.valueUsd = Number(existing.valueUsd || 0) + Number(item.valueUsd || 0);
+
+      // Keep the most recent contribution metadata on the merged row
+      const existingAdded = existing.addedAt ?? existing.added_at;
+      const itemAdded = item.addedAt ?? item.added_at;
+      if (itemAdded && (!existingAdded || new Date(String(itemAdded)) > new Date(String(existingAdded)))) {
+        existing.addedAt = item.addedAt ?? item.added_at;
+        existing.updatedAt = item.updatedAt ?? item.updated_at;
+        existing.status = item.status;
+        existing.addedBy = item.addedBy ?? item.added_by;
+        existing.originType = item.originType ?? item.origin_type;
+      }
+    }
+
+    return result;
   }
 
   async getAcquiredAssets(
