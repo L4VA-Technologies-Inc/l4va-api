@@ -5,6 +5,12 @@ export type SpecNetwork = 'preprod' | 'mainnet';
 
 export type VaultFieldType = 'string' | 'number' | 'integer' | 'boolean' | 'enum' | 'enumArray';
 
+/** Machine-readable counterpart of `requiredWhen`, evaluated by the launch validator. */
+export interface FieldCondition {
+  field: string;
+  equals: string | number | boolean;
+}
+
 export interface VaultFieldSpec {
   type: VaultFieldType;
   /** Create-vault wizard step the field belongs to. */
@@ -15,6 +21,10 @@ export interface VaultFieldSpec {
   required?: boolean;
   /** Human-readable condition rendered into the prompt when the field is conditionally required. */
   requiredWhen?: string;
+  /** Field is required only when every condition holds (AND). Machine-readable `requiredWhen`. */
+  requiredIf?: readonly FieldCondition[];
+  /** Field is not part of this vault at all when any condition holds (OR) — never reported missing. */
+  notApplicableIf?: readonly FieldCondition[];
   unit?: string;
   min?: number;
   max?: number;

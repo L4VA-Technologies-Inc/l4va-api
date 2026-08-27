@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
+
+import { VaultAssistantAction } from './vault-assistant-action';
 
 export class VaultAssistantMessageRes {
   @ApiProperty({ description: 'Assistant reply to show in the chat' })
@@ -31,4 +33,13 @@ export class VaultAssistantMessageRes {
   @ApiProperty({ description: 'Spec version the draft was produced against' })
   @Expose()
   specVersion: string;
+
+  @ApiProperty({
+    type: VaultAssistantAction,
+    nullable: true,
+    description: 'Action the assistant requested and the server validated, e.g. a launch confirmation',
+  })
+  @Type(() => VaultAssistantAction)
+  @Expose()
+  action: VaultAssistantAction | null;
 }
