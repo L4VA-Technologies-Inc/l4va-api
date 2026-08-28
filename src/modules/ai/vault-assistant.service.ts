@@ -8,6 +8,7 @@ import { VaultAssistantOption } from './dto/vault-assistant-option';
 import { extractPartialJsonString } from './extract-partial-json-string';
 import { ChatMessage, ChatTurn, ChatTurnParams, OpenAiClient } from './openai.client';
 import { buildVaultAssistantPrompt, PresetContext } from './prompts/vault-assistant.prompt';
+import { buildVaultCompletionContext } from './spec/completion-context';
 import { resolveVaultCreationSpec } from './spec/resolve-spec';
 import { sanitizeVaultDraft } from './spec/sanitize-draft';
 import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork } from './spec/spec.types';
@@ -277,6 +278,9 @@ export class VaultAssistantService {
       spec,
       presets: presetContext,
       currentDraft,
+      // Computed from the untouched client draft: the assistant has to know about the image and the
+      // collections it cannot set itself, which the sanitized draft above deliberately drops.
+      completion: buildVaultCompletionContext(request.currentDraft ?? {}, spec),
       validationErrors: request.validationErrors,
     });
 

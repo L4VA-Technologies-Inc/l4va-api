@@ -43,7 +43,7 @@ export const VAULT_TAGS = [
  * feeds the errors back for correction, so a stale spec costs an extra turn, not a bad vault.
  */
 export const VAULT_CREATION_SPEC: VaultCreationSpec = {
-  version: '1.1.0',
+  version: '1.2.0',
 
   rules: [
     'Percentages are whole-number percents (0-100), not basis points.',
@@ -206,7 +206,9 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
         { field: 'privacy', equals: 'private' },
         { field: 'valueMethod', equals: 'fixed' },
       ],
-      description: 'Currency of the fixed valuation.',
+      description:
+        'Currency of the fixed valuation. Only applies to a private vault using fixed valuation; ' +
+        'leave null otherwise and never ask the user for it.',
       aiEditable: true,
     },
     valuationAmount: {
@@ -218,7 +220,9 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
         { field: 'valueMethod', equals: 'fixed' },
       ],
       min: 0,
-      description: 'Amount of the fixed valuation.',
+      description:
+        'Amount of the fixed valuation. Only applies to a private vault using fixed valuation; ' +
+        'leave null otherwise and never ask the user for it.',
       aiEditable: true,
     },
     contributionOpenWindowType: {
@@ -237,7 +241,9 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       requiredWhen: 'contributionOpenWindowType is "custom"',
       requiredIf: [{ field: 'contributionOpenWindowType', equals: 'custom' }],
       notApplicableIf: [{ field: 'isAcquireOnly', equals: true }],
-      description: 'Unix timestamp in milliseconds for a custom contribution window opening.',
+      description:
+        'Unix timestamp in milliseconds for a custom contribution window opening. Only applies when the ' +
+        'contribution window type is "custom"; leave null otherwise.',
       aiEditable: true,
     },
     contributionDuration: {
@@ -269,7 +275,9 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       requiredWhen: 'acquireOpenWindowType is "custom"',
       requiredIf: [{ field: 'acquireOpenWindowType', equals: 'custom' }],
       notApplicableIf: [{ field: 'tokensForAcquires', equals: 0 }],
-      description: 'Unix timestamp in milliseconds for a custom acquire window opening.',
+      description:
+        'Unix timestamp in milliseconds for a custom acquire window opening. Only applies when the acquire ' +
+        'window type is "custom"; leave null otherwise.',
       aiEditable: true,
     },
     acquireWindowDuration: {
@@ -338,7 +346,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       min: 1_000_000,
       max: 1_000_000_000_000,
       default: 1_000_000,
-      description: 'Total supply of the vault (governance) token.',
+      unit: 'vault tokens',
+      description: 'Total supply of the vault (governance) token, denominated in vault tokens.',
       aiEditable: true,
     },
     terminationType: {

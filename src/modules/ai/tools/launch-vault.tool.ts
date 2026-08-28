@@ -1,29 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type OpenAI from 'openai';
 
+import { describeUserNeeds } from '../spec/completion-context';
 import { validateVaultDraftForLaunch } from '../spec/validate-draft-for-launch';
 
 import { VaultAiTool, VaultAiToolContext, VaultAiToolOutcome } from './vault-ai-tool.types';
 
 export const LAUNCH_VAULT_TOOL = 'launch_vault';
-
-/**
- * Plain-English blockers for the fields the user has to supply themselves. Both image fields map to
- * one phrase because L4VA uses a single image for the vault and its token — the user must never be
- * told two images are missing.
- */
-const USER_SUPPLIED_NEEDS: Record<string, string> = {
-  assetsWhitelist: 'the real asset collection to allow',
-  vaultImage: 'a vault image',
-  ftTokenImg: 'a vault image',
-  contributorWhitelist: 'the contributor whitelist',
-  acquirerWhitelist: 'the acquirer whitelist',
-};
-
-/** Distinct, user-facing descriptions of what the user still has to provide. */
-function describeNeeds(missingFields: string[]): string[] {
-  return [...new Set(missingFields.map(field => USER_SUPPLIED_NEEDS[field]).filter(Boolean))];
-}
 
 /**
  * Asks to launch the vault the user is currently configuring.
@@ -72,7 +55,7 @@ export class LaunchVaultTool implements VaultAiTool {
           reason: 'validation_failed',
           missingFields: validation.missingFields,
           // What to actually say to the user; the raw field names above are for your reasoning only.
-          needs: describeNeeds(validation.missingFields),
+          needs: describeUserNeeds(validation.missingFields),
           errors: validation.errors,
           guidance:
             'The vault cannot be launched yet. Say only what is still needed, using the "needs" wording — never ' +
