@@ -16,6 +16,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
+import { resolveCardanoTestnetPriceAda } from '@/modules/taptools/cardano-testnet-pricing';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import {
   GetTransactionsDto,
@@ -226,8 +227,17 @@ export class TransactionsService {
           (blockfrostMetadata?.onchain_metadata as any)?.description ||
           null;
 
-        // Use prices from frontend if provided, otherwise will be fetched later
-        const floorPrice = assetItem.type === AssetType.NFT ? assetItem.priceAda : null;
+        // Use prices from frontend if provided, otherwise apply testnet fallback for NFTs
+        const isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+        let floorPrice = assetItem.type === AssetType.NFT ? assetItem.priceAda : null;
+        if (
+          assetItem.type === AssetType.NFT &&
+          (!floorPrice || floorPrice <= 0) &&
+          !isMainnet &&
+          assetItem.policyId
+        ) {
+          floorPrice = resolveCardanoTestnetPriceAda(assetItem.policyId, assetItem.assetName || '');
+        }
         const dexPrice = assetItem.type === AssetType.FT ? assetItem.priceAda : null;
 
         // Get decimals for FT metadata storage

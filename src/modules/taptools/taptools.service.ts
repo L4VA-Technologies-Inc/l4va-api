@@ -18,6 +18,10 @@ import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
 import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
+import {
+  readPositiveStoredPriceAda,
+  resolveCardanoTestnetPriceAda,
+} from './cardano-testnet-pricing';
 import { TapToolsClient } from './taptools.client';
 
 import { Asset } from '@/database/asset.entity';
@@ -139,33 +143,6 @@ export class TaptoolsService {
     Balaena: 140, // 140 ADA
   };
   private readonly RELICS_PORTA_PRICE_FALLBACK = 70; // 70 ADA for all Porta NFTs - fallback
-  private readonly testnetPrices = {
-    // Policy-level prices (fallback when no asset-specific price exists)
-    f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
-    ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
-    '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 250.0,
-    fd948c7248ecef7654f77a0264a188dccc76bae5b73415fc51824cf3: 15000.0,
-    add6529cc60380af5d51566e32925287b5b04328332652ccac8de0a9: 36.0,
-    '4e529151fe66164ebcf52f81033eb0ec55cc012cb6c436104b30fa36': 69.0,
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16': 3400.0,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8': 115.93,
-    '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 188.57,
-    '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
-    '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
-
-    // Asset-specific prices (policyId + assetName) - for testing multiple multipliers
-    // Example: Different prices for individual NFTs within the same policy
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303031': 3400.0,
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303032': 3500.0,
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303033': 3600.0,
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303034': 3700.0,
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303035': 3800.0,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543031': 115.93,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543032': 120.5,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543033': 125.75,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543034': 130.25,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543035': 135,
-  };
 
   constructor(
     @InjectRepository(Vault)
@@ -705,41 +682,19 @@ export class TaptoolsService {
         };
       }
 
-      // Priority 2: Check for hardcoded testnet prices
+      // Priority 2: Testnet hardcoded / default prices (no external APIs on preprod)
       if (!this.isMainnet) {
-        // Check for asset-specific price first (policyId + assetName)
-        const assetId = `${policyId}${assetName}`;
-        if (this.testnetPrices[assetId] !== undefined) {
-          const hardcodedPriceAda = this.testnetPrices[assetId];
-          return {
-            priceAda: hardcodedPriceAda,
-            priceUsd: hardcodedPriceAda * adaPrice,
-          };
-        }
-
-        // Fall back to policy-level price
-        if (this.testnetPrices[policyId] !== undefined) {
-          const hardcodedPriceAda = this.testnetPrices[policyId];
-          return {
-            priceAda: hardcodedPriceAda,
-            priceUsd: hardcodedPriceAda * adaPrice,
-          };
-        }
+        const testnetPriceAda = resolveCardanoTestnetPriceAda(policyId, assetName);
+        return {
+          priceAda: testnetPriceAda,
+          priceUsd: testnetPriceAda * adaPrice,
+        };
       }
 
       const cacheKey = `asset_value_${policyId}_${assetName}`;
       const cached = this.cache.get<{ priceAda: number; priceUsd: number }>(cacheKey);
 
-      if (cached) return cached;
-
-      // Skip external API calls for testnet - return fallback prices
-      if (!this.isMainnet) {
-        const fallbackPrice = 5.0; // Default testnet price
-        return {
-          priceAda: fallbackPrice,
-          priceUsd: fallbackPrice * adaPrice,
-        };
-      }
+      if (cached && cached.priceAda > 0) return cached;
 
       // Fetch cached price from database for deviation protection
       let cachedPriceAda: number | null = null;
@@ -1116,9 +1071,9 @@ export class TaptoolsService {
               priceAda = vaultCustomPrices.get(asset.policy_id)!;
               priceSource = 'custom';
             }
-            // Priority 2: Use hardcoded testnet prices if available
+            // Priority 2: Testnet hardcoded / default prices (aligned with getAssetValue)
             else if (!this.isMainnet) {
-              priceAda = this.testnetPrices[asset.policy_id] || 5.0;
+              priceAda = resolveCardanoTestnetPriceAda(asset.policy_id, asset.asset_id);
               priceSource = 'testnet';
             }
             // Priority 3: Fetch from external APIs
@@ -1287,9 +1242,10 @@ export class TaptoolsService {
         if (customPriceMap && customPriceMap.has(asset.policy_id)) {
           cachedPrice = customPriceMap.get(asset.policy_id);
         } else {
-          // Use cached market price from database (dex_price for FTs, floor_price for NFTs)
-          cachedPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
-          cachedPrice = cachedPrice ? Number(cachedPrice) : undefined;
+          const storedPrice = readPositiveStoredPriceAda(asset.type, asset.floor_price, asset.dex_price);
+          cachedPrice =
+            storedPrice ??
+            (!this.isMainnet ? resolveCardanoTestnetPriceAda(asset.policy_id, asset.asset_id) : undefined);
         }
 
         assetMap.set(key, {
@@ -1607,9 +1563,10 @@ export class TaptoolsService {
             if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
               cachedPrice = vaultCustomPrices.get(asset.policy_id);
             } else {
-              // Use cached market price from database
-              const marketPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
-              cachedPrice = marketPrice ? Number(marketPrice) : undefined;
+              const storedPrice = readPositiveStoredPriceAda(asset.type, asset.floor_price, asset.dex_price);
+              cachedPrice =
+                storedPrice ??
+                (!this.isMainnet ? resolveCardanoTestnetPriceAda(asset.policy_id, asset.asset_id) : undefined);
             }
 
             assetMap.set(key, {
@@ -3698,10 +3655,6 @@ export class TaptoolsService {
    * Uses DexHunter service which prioritizes VyFi cache, then falls back to DexHunter/TapTools.
    */
   public async getTokenPriceAda(tokenUnit: string): Promise<TokenPriceResult> {
-    if (!this.isMainnet) {
-      return { tokenUnit, priceAda: null };
-    }
-
     // Cardano token unit = 56-char policyId + optional assetName (hex)
     if (!tokenUnit || tokenUnit.length < 56) {
       this.logger.warn(`Invalid token unit received for price lookup: ${tokenUnit}`);

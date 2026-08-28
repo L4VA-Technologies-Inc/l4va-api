@@ -17,6 +17,10 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
+import {
+  readPositiveStoredPriceAda,
+  resolveCardanoTestnetPriceAda,
+} from '@/modules/taptools/cardano-testnet-pricing';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PriceService } from '@/modules/price/price.service';
@@ -76,6 +80,29 @@ export class AssetsService {
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
+
+  /**
+   * Resolve per-unit ADA price from stored DB fields, with testnet fallback when unset/zero.
+   */
+  private resolveEffectivePriceAda(
+    asset: Pick<Asset, 'type' | 'floor_price' | 'dex_price' | 'policy_id' | 'asset_id'>,
+    ethPriceInAda = 0
+  ): number {
+    if (asset.type === AssetType.ETH) {
+      return readPositiveStoredPriceAda(asset.type, asset.floor_price, asset.dex_price) ?? ethPriceInAda;
+    }
+
+    const storedPrice = readPositiveStoredPriceAda(asset.type, asset.floor_price, asset.dex_price);
+    if (storedPrice !== null) {
+      return storedPrice;
+    }
+
+    if (!this.isMainnet && asset.policy_id) {
+      return resolveCardanoTestnetPriceAda(asset.policy_id, asset.asset_id ?? '');
+    }
+
+    return 0;
   }
 
   async addAssetToVault(userId: string, data: CreateAssetDto): Promise<Record<string, unknown>> {
@@ -281,6 +308,7 @@ export class AssetsService {
 
     const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
     const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+    const testnetPriceFallbackSql = this.isMainnet ? '0' : '5.0';
 
     // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
@@ -289,11 +317,13 @@ export class AssetsService {
         `SUM(
           CASE 
             WHEN asset.type = :ftType THEN 
-              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), ${testnetPriceFallbackSql})
             WHEN asset.type = :ethType THEN
-              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
+              (asset.quantity / 1000000000000000000.0) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), :ethPriceInAda, ${testnetPriceFallbackSql})
+            WHEN asset.type = :nftType THEN
+              asset.quantity * COALESCE(NULLIF(asset.floor_price, 0), NULLIF(asset.dex_price, 0), ${testnetPriceFallbackSql})
             ELSE 
-              asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+              asset.quantity * COALESCE(NULLIF(asset.floor_price, 0), NULLIF(asset.dex_price, 0), ${testnetPriceFallbackSql})
           END
         )`,
         'totalValue'
@@ -334,20 +364,15 @@ export class AssetsService {
 
     const itemsSource = assets.map(asset => {
       const isNft = asset.type === AssetType.NFT;
-      // dex_price is in ADA per whole token for all FT assets (Cardano and EVM).
-      // For ETH assets, use ethPriceInAda if no dex_price/floor_price is set.
-      const effectivePriceAda =
-        asset.type === AssetType.ETH
-          ? (asset.dex_price ?? asset.floor_price ?? ethPriceInAda)
-          : (asset.dex_price ?? asset.floor_price ?? 0);
+      const effectivePriceAda = this.resolveEffectivePriceAda(asset, ethPriceInAda);
       const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
       const plain = instanceToPlain(asset) as Record<string, unknown>;
 
       plain.quantity = asset.normalizedQuantity;
       plain.valueAda = effectiveValueAda;
       plain.valueUsd = effectiveValueAda * adaPrice;
-      if (isNft && asset.floor_price) {
-        plain.floorPriceUsd = asset.floor_price * adaPrice;
+      if (isNft && effectivePriceAda > 0) {
+        plain.floorPriceUsd = effectivePriceAda * adaPrice;
       }
 
       return plain;
@@ -495,6 +520,7 @@ export class AssetsService {
 
     const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
     const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+    const testnetPriceFallbackSql = this.isMainnet ? '0' : '5.0';
 
     const statsResult = await queryBuilder
       .clone()
@@ -511,12 +537,12 @@ export class AssetsService {
       .addSelect(
         `SUM(
           CASE
-            WHEN asset.type = :nftType THEN asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+            WHEN asset.type = :nftType THEN asset.quantity * COALESCE(NULLIF(asset.floor_price, 0), NULLIF(asset.dex_price, 0), ${testnetPriceFallbackSql})
             WHEN asset.type = :ftType THEN
-              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), ${testnetPriceFallbackSql})
             WHEN asset.type = :ethType THEN
-              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
-            ELSE asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+              (asset.quantity / 1000000000000000000.0) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), :ethPriceInAda, ${testnetPriceFallbackSql})
+            ELSE asset.quantity * COALESCE(NULLIF(asset.floor_price, 0), NULLIF(asset.dex_price, 0), ${testnetPriceFallbackSql})
           END
         )`,
         'totalAcquiredValueAda'
@@ -561,9 +587,7 @@ export class AssetsService {
     return {
       items: assets.map(asset => {
         const plain = instanceToPlain(asset) as Record<string, unknown>;
-        // Acquired assets are always native (ADA or ETH) — use ethPriceInAda for ETH type.
-        const effectivePriceAda =
-          asset.type === AssetType.ETH ? ethPriceInAda : (asset.dex_price ?? asset.floor_price ?? 0);
+        const effectivePriceAda = this.resolveEffectivePriceAda(asset, ethPriceInAda);
         const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
         plain.quantity = asset.normalizedQuantity;
         plain.valueAda = effectiveValueAda;
