@@ -46,22 +46,24 @@ export class LaunchVaultTool implements VaultAiTool {
 
     if (!validation.ok) {
       this.logger.log(
-        `launch_vault rejected for user ${context.userId}: missing=[${validation.missingFields.join(', ')}] ` +
-          `errors=[${validation.errors.join('; ')}]`
+        `launch_vault rejected for user ${context.userId}: ` +
+          validation.blockers.map(blocker => `${blocker.field} (${blocker.action ?? 'form'})`).join(', ')
       );
       return {
         result: {
           ok: false,
           reason: 'validation_failed',
-          missingFields: validation.missingFields,
-          // What to actually say to the user; the raw field names above are for your reasoning only.
+          // The authoritative, ordered list. Each entry already carries a user-facing message and,
+          // where one exists, the reserved UI action that resolves it.
+          errors: validation.blockers,
+          // Kept for backwards compatibility with earlier guidance wording.
           needs: describeUserNeeds(validation.missingFields),
-          errors: validation.errors,
           guidance:
-            'The vault cannot be launched yet. Say only what is still needed, using the "needs" wording — never ' +
-            'field names, and never "two images". Do not claim the vault was launched and do not re-summarize the ' +
-            'vault. Offer "choose_assets" when the collection is missing, and "generate_image" plus "upload_image" ' +
-            'when the image is. Anything else that is missing you should simply fill in yourself.',
+            'The vault cannot be launched yet. Tell the user only what the "errors" entries say, using their ' +
+            '"message" wording — never field names, and never "two images". For each error whose "action" is set, ' +
+            'offer that option: "choose_assets" for a missing collection, "generate_image" plus "upload_image" for ' +
+            'the image. Errors with a null action must be fixed by the user in the vault form — say so. Do not ' +
+            'claim the vault was launched and do not re-summarize the vault. Do not call launch_vault again this turn.',
         },
       };
     }

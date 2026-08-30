@@ -197,8 +197,15 @@ ${JSON.stringify(completion)}
   "upload_image" for the image, and for a participant whitelist tell the user it has to be added in
   the vault form.
 - invalidValues are values that were rejected — correct them yourself.
-- When isLaunchable is true, say the vault is ready to launch and stop there. Do not call
-  launch_vault until the user asks for it.
+- blockers is the exact list that stops the launch. Each has a "message" (say that, near-verbatim,
+  never the "field" name) and an "action". Offer the "action" as an option when it is
+  "choose_assets", "generate_image" or "upload_image"; when it is null the user must fix it in the
+  vault form, so tell them that.
+- When isLaunchable is true, the vault will pass launch validation exactly as it stands. Say it is
+  ready to launch — by name, e.g. "Artemis Vault is ready to launch" — and stop. Do not ask the
+  user to confirm the configuration, and do not re-summarise it; the launch modal is the only
+  confirmation. Do not call launch_vault until the user asks to launch.
+- When isLaunchable is false, never call launch_vault and never claim the vault is ready.
 - Never tell the user to inspect the settings panel to find out what remains.
 
 # Conversation UX

@@ -1,4 +1,9 @@
-import { validateVaultDraftForLaunch } from './validate-draft-for-launch';
+import {
+  countValidAssetRows,
+  countValidWalletRows,
+  LaunchBlocker,
+  validateVaultDraftForLaunch,
+} from './validate-draft-for-launch';
 
 import { ResolvedVaultCreationSpec } from '@/modules/ai/spec/spec.types';
 
@@ -32,21 +37,12 @@ export interface VaultCompletionContext {
   missingUserControlledFields: string[];
   missingAiFields: string[];
   invalidValues: string[];
+  /** The exact, ordered launch blockers — the same list `launch_vault` would return. */
+  blockers: LaunchBlocker[];
   hasVaultImage: boolean;
   assetWhitelistCount: number;
   hasContributorWhitelist: boolean;
   hasAcquirerWhitelist: boolean;
-}
-
-function whitelistLength(value: unknown): number {
-  if (!Array.isArray(value)) return 0;
-  return value.filter(item =>
-    item && typeof item === 'object'
-      ? Object.values(item as Record<string, unknown>).some(
-          entry => entry !== null && entry !== undefined && entry !== ''
-        )
-      : !!item
-  ).length;
 }
 
 /**
@@ -70,9 +66,16 @@ export function buildVaultCompletionContext(
     missingUserControlledFields,
     missingAiFields,
     invalidValues: validation.errors,
-    hasVaultImage: typeof draft.vaultImage === 'string' && draft.vaultImage.trim().length > 0,
-    assetWhitelistCount: whitelistLength(draft.assetsWhitelist),
-    hasContributorWhitelist: whitelistLength(draft.contributorWhitelist) > 0,
-    hasAcquirerWhitelist: whitelistLength(draft.acquirerWhitelist) > 0,
+    blockers: validation.blockers,
+    hasVaultImage:
+      typeof draft.vaultImage === 'string' &&
+      draft.vaultImage.trim().length > 0 &&
+      typeof draft.ftTokenImg === 'string' &&
+      draft.ftTokenImg.trim().length > 0,
+    // Counted the same way the launch gate and the client yup schema count them: only rows that
+    // would actually pass validation, never the blank scaffold row the form starts with.
+    assetWhitelistCount: countValidAssetRows(draft.assetsWhitelist, spec),
+    hasContributorWhitelist: countValidWalletRows(draft.contributorWhitelist, spec) > 0,
+    hasAcquirerWhitelist: countValidWalletRows(draft.acquirerWhitelist, spec) > 0,
   };
 }
