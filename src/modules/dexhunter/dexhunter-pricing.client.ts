@@ -7,6 +7,23 @@ import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 
 /**
+ * Cached VyFi pool entry stored in Redis
+ * Populated from fetchmaster?data=allPools every 10 minutes
+ */
+export interface VyFiPoolCacheEntry {
+  unitsPair: string; // e.g. "lovelace/tokenBUnit"
+  lpTokenUnit: string; // policyId + assetId (no dash)
+  lpTokenTotalSupply: number;
+  tvl: number; // in ADA
+  tokenAUnit: string;
+  tokenADecimals: number;
+  tokenBUnit: string;
+  tokenBDecimals: number;
+  poolAddress: string;
+  orderAddress: string;
+}
+
+/**
  * DexHunter API client for token pricing and OHLCV data
  * Centralized client for DexHunter token price lookups and chart data
  *
@@ -152,6 +169,46 @@ export class DexHunterPricingClient {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Redis batch set prices failed: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Set VyFi pool data in Redis cache (bulk)
+   * @param pools - Map of unitsPair -> VyFiPoolCacheEntry
+   */
+  async setRedisPoolData(pools: Map<string, VyFiPoolCacheEntry>): Promise<void> {
+    if (pools.size === 0) return;
+
+    try {
+      const pipeline = this.redis.pipeline();
+
+      pools.forEach((entry, unitsPair) => {
+        const key = `vyfi_pool:${unitsPair}`;
+        pipeline.setex(key, this.PRICE_TTL_SECONDS, JSON.stringify(entry));
+      });
+
+      await pipeline.exec();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis batch set pool data failed: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Get VyFi pool data from Redis cache
+   * @param unitsPair - Pool pair string (e.g. "lovelace/tokenBUnit")
+   * @returns Cached pool entry or null if not cached
+   */
+  async getRedisPoolData(unitsPair: string): Promise<VyFiPoolCacheEntry | null> {
+    try {
+      const key = `vyfi_pool:${unitsPair}`;
+      const value = await this.redis.get(key);
+      if (!value) return null;
+      return JSON.parse(value) as VyFiPoolCacheEntry;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Redis get pool data failed for ${unitsPair}: ${errorMessage}`);
+      return null;
     }
   }
 

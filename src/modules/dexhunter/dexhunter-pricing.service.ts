@@ -4,7 +4,7 @@ import type Redis from 'ioredis';
 
 import { DexHunterPoolItem } from '../taptools/taptools.client';
 
-import { DexHunterPricingClient } from './dexhunter-pricing.client';
+import { DexHunterPricingClient, VyFiPoolCacheEntry } from './dexhunter-pricing.client';
 
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 
@@ -45,91 +45,122 @@ export class DexHunterPricingService {
   }
 
   /**
-   * Fetch all token prices from VyFi API bulk endpoint
-   * @returns Map of tokenUnit -> priceAda, or null on error
+   * Fetch all VyFi token prices and pool data in a single request
+   * Uses the combined fetchmaster endpoint: ?data=allPools,allTokenPricesMap
+   * Response shape: { allPools: [{},{},...], allTokenPricesMap: {...} }
    */
-  private async fetchVyFiBulkPrices(): Promise<Map<string, number> | null> {
+  private async fetchVyFiMasterData(): Promise<{
+    pricesMap: Map<string, number> | null;
+    poolsMap: Map<string, VyFiPoolCacheEntry> | null;
+  }> {
     try {
-      const response = await fetch('https://api-v3.vyfi.io/fetchmaster?data=allTokenPricesMap', {
+      const response = await fetch('https://api-v3.vyfi.io/fetchmaster?data=allPools,allTokenPricesMap', {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
 
       if (!response.ok) {
         const errorText = await response.text();
         const sanitizedError = this.sanitizeErrorText(errorText, response.status);
-        this.logger.error(`VyFi API error (${response.status}): ${sanitizedError}`);
-        return null;
+        if (response.status === 502) {
+          this.logger.warn(`VyFi fetchmaster temporarily unavailable (${response.status}): ${sanitizedError}`);
+        } else {
+          this.logger.error(`VyFi fetchmaster error (${response.status}): ${sanitizedError}`);
+        }
+        return { pricesMap: null, poolsMap: null };
       }
 
       const data = await response.json();
-      const pricesMap = data.allTokenPricesMap;
 
-      if (!pricesMap || typeof pricesMap !== 'object') {
-        this.logger.error('VyFi API returned invalid allTokenPricesMap structure');
-        return null;
-      }
+      // --- Parse allTokenPricesMap ---
+      let pricesMap: Map<string, number> | null = null;
+      const rawPrices = data.allTokenPricesMap;
 
-      // Parse VyFi response format: {"policyId-assetId": {priceADA: number, ...}}
-      const resultMap = new Map<string, number>();
-      let validCount = 0;
+      if (rawPrices && typeof rawPrices === 'object') {
+        pricesMap = new Map<string, number>();
+        let validCount = 0;
 
-      for (const [key, value] of Object.entries(pricesMap)) {
-        // Key format: "policyId-assetId", convert to tokenUnit: "policyIdassetId"
-        const tokenUnit = key.replace('-', '');
-        const priceData = value as any;
+        for (const [key, value] of Object.entries(rawPrices)) {
+          // Key format: "policyId-assetId" → tokenUnit: "policyIdassetId"
+          const tokenUnit = key.replace('-', '');
+          const priceData = value as any;
+          let price: number | null = null;
 
-        // VyFi uses two formats:
-        // Format 1 (LP tokens): {priceADA: number}
-        // Format 2 (regular tokens): {lpRatio: {"lovelace/tokenUnit": {priceRatioAB: number}}}
-        let price: number | null = null;
-
-        // Try Format 1: Direct priceADA field
-        if (priceData.priceADA && typeof priceData.priceADA === 'number' && priceData.priceADA > 0) {
-          price = priceData.priceADA;
-        }
-        // Try Format 2: lpRatio with priceRatioAB
-        else if (priceData.lpRatio && typeof priceData.lpRatio === 'object') {
-          // Find the lovelace pair (e.g., "lovelace/63efb704...56616c6f72756d")
-          for (const [poolPair, ratioData] of Object.entries(priceData.lpRatio)) {
-            if (poolPair.startsWith('lovelace/') && (ratioData as any).priceRatioAB) {
-              const priceRatioAB = (ratioData as any).priceRatioAB;
-              if (typeof priceRatioAB === 'number' && priceRatioAB > 0) {
-                price = priceRatioAB;
-                break;
+          // Format 1 (LP tokens): { priceADA: number }
+          if (priceData.priceADA && typeof priceData.priceADA === 'number' && priceData.priceADA > 0) {
+            price = priceData.priceADA;
+          }
+          // Format 2 (regular tokens): { lpRatio: { "lovelace/tokenUnit": { priceRatioAB: number } } }
+          else if (priceData.lpRatio && typeof priceData.lpRatio === 'object') {
+            for (const [poolPair, ratioData] of Object.entries(priceData.lpRatio)) {
+              if (poolPair.startsWith('lovelace/') && (ratioData as any).priceRatioAB) {
+                const priceRatioAB = (ratioData as any).priceRatioAB;
+                if (typeof priceRatioAB === 'number' && priceRatioAB > 0) {
+                  price = priceRatioAB;
+                  break;
+                }
               }
             }
           }
+
+          if (price !== null) {
+            pricesMap.set(tokenUnit, price);
+            validCount++;
+          }
         }
 
-        if (price !== null) {
-          resultMap.set(tokenUnit, price);
-          validCount++;
-        }
+        this.logger.log(`VyFi fetchmaster: ${validCount} token prices retrieved`);
+      } else {
+        this.logger.error('VyFi fetchmaster returned invalid allTokenPricesMap structure');
       }
 
-      this.logger.log(`VyFi bulk fetch: ${validCount} token prices retrieved`);
-      return resultMap;
+      // --- Parse allPools ---
+      let poolsMap: Map<string, VyFiPoolCacheEntry> | null = null;
+      const rawPools = data.allPools;
+
+      if (Array.isArray(rawPools)) {
+        poolsMap = new Map<string, VyFiPoolCacheEntry>();
+
+        for (const pool of rawPools) {
+          try {
+            const unitsPair: string = pool.unitsPair;
+            if (!unitsPair) continue;
+
+            // Extract LP token unit from "policyId-assetId" — policyId is always 56 hex chars
+            const lpRaw: string = pool['lpPolicyId-assetId'] ?? '';
+            const dashIdx = lpRaw.indexOf('-');
+            const lpTokenUnit = dashIdx === 56 ? lpRaw.slice(0, 56) + lpRaw.slice(57) : lpRaw.replace('-', '');
+
+            poolsMap.set(unitsPair, {
+              unitsPair,
+              lpTokenUnit,
+              lpTokenTotalSupply: pool.lpTokenTotalSupply ?? 0,
+              tvl: pool.tvl ?? 0,
+              tokenAUnit: pool.tokenA?.unit ?? 'lovelace',
+              tokenADecimals: pool.tokenA?.decimals ?? 6,
+              tokenBUnit: pool.tokenB?.unit ?? '',
+              tokenBDecimals: pool.tokenB?.decimals ?? 0,
+              poolAddress: pool.poolValidatorUtxoAddress ?? '',
+              orderAddress: pool.orderValidatorUtxoAddress ?? '',
+            });
+          } catch {
+            // Skip malformed pool entries silently
+          }
+        }
+
+        this.logger.log(`VyFi fetchmaster: ${poolsMap.size} pools retrieved`);
+      } else {
+        this.logger.error('VyFi fetchmaster returned unexpected allPools structure (expected array)');
+      }
+
+      return { pricesMap, poolsMap };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`VyFi bulk fetch failed: ${errorMessage}`);
-      return null;
+      this.logger.error(`VyFi fetchmaster failed: ${errorMessage}`);
+      return { pricesMap: null, poolsMap: null };
     }
   }
 
-  /**
-   * Refresh VyFi token price cache in Redis
-   * Fetches all token prices from VyFi and stores them in Redis
-   * Called by background cron task every 10 minutes
-   *
-   * Uses distributed Redis lock to prevent duplicate execution across multiple API instances.
-   * Lock TTL: 540 seconds (9 minutes) - slightly less than the 10-minute cron interval
-   * to ensure lock is released before next scheduled run.
-   *
-   * @returns Number of tokens cached, or null on failure
-   */
   async refreshVyFiCache(): Promise<number | null> {
     if (!this.isMainnet) {
       this.logger.debug('Skipping VyFi cache refresh for non-mainnet environment');
@@ -144,17 +175,32 @@ export class DexHunterPricingService {
       return null;
     }
 
-    const pricesMap = await this.fetchVyFiBulkPrices();
+    const { pricesMap, poolsMap } = await this.fetchVyFiMasterData();
 
     if (!pricesMap || pricesMap.size === 0) {
-      this.logger.warn('VyFi bulk fetch returned no prices');
+      this.logger.warn('VyFi fetchmaster returned no prices');
       return null;
     }
 
-    // Store all prices in Redis via DexHunterPricingClient
+    // Store prices and pool data in Redis (pool failures don't block price updates)
     await this.dexHunterClient.setRedisPrices(pricesMap);
 
+    if (poolsMap && poolsMap.size > 0) {
+      await this.dexHunterClient.setRedisPoolData(poolsMap);
+    }
+
     return pricesMap.size;
+  }
+
+  /**
+   * Get cached VyFi pool data from Redis
+   * Populated by the 10-minute fetchmaster cron via refreshVyFiCache()
+   * @param tokenAUnit - First token unit (e.g. "lovelace")
+   * @param tokenBUnit - Second token unit (hex)
+   * @returns Cached pool entry or null if not in cache
+   */
+  async getVyFiPoolFromCache(tokenAUnit: string, tokenBUnit: string): Promise<VyFiPoolCacheEntry | null> {
+    return this.dexHunterClient.getRedisPoolData(`${tokenAUnit}/${tokenBUnit}`);
   }
 
   /**
