@@ -14,10 +14,4 @@ export class CreateUserReq {
   @IsString()
   @ApiProperty({ description: 'User image URL', example: 'https://example.com/image.jpg', required: false })
   image?: string;
-
-  @Expose()
-  @IsOptional()
-  @IsString()
-  @ApiProperty({ description: 'User role', example: 'user', required: false })
-  role?: string;
 }

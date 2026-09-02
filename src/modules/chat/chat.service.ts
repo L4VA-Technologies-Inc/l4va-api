@@ -3,6 +3,8 @@ import { APIResponse, ChannelMemberResponse, StreamChat, UserResponse } from 'st
 
 @Injectable()
 export class ChatService {
+  static readonly TOKEN_TTL_SECONDS = 60 * 60;
+
   private readonly logger = new Logger(ChatService.name);
   private readonly serverClient: StreamChat;
 
@@ -44,13 +46,13 @@ export class ChatService {
   }
 
   generateUserToken(userId: string): string {
-    const token = this.serverClient.createToken(userId);
-    return token;
+    const expiresAt = Math.floor(Date.now() / 1000) + ChatService.TOKEN_TTL_SECONDS;
+    return this.serverClient.createToken(userId, expiresAt);
   }
 
   async createOrUpdateUser(
     userId: string,
-    userData: { name?: string; image?: string; role?: string }
+    userData: { name?: string; image?: string }
   ): Promise<
     APIResponse & {
       users: {
@@ -58,16 +60,15 @@ export class ChatService {
       };
     }
   > {
+    const name = userData.name || `User ${userId}`;
     const user = {
       id: userId,
-      name: userData.name || `User ${userId}`,
-      image: userData.image || `https://getstream.io/random_png/?id=${userId}&name=${userData.name || userId}`,
-      role: userData.role || 'user',
-      ...userData,
+      name,
+      image: userData.image || `https://getstream.io/random_png/?id=${userId}&name=${name}`,
+      role: 'user',
     };
 
-    const response = await this.serverClient.upsertUser(user);
-    return response;
+    return this.serverClient.upsertUser(user);
   }
 
   async addMembersToVaultChannel(vaultId: string, userIds: string[]): Promise<boolean> {

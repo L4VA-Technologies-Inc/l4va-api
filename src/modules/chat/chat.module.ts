@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { VaultsModule } from '../vaults/vaults.module';
+
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 
@@ -11,7 +13,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, FileEntity, LinkEntity, Vault, Asset])],
+  imports: [VaultsModule, TypeOrmModule.forFeature([User, FileEntity, LinkEntity, Vault, Asset])],
   controllers: [ChatController],
   providers: [ChatService],
   exports: [ChatService],
