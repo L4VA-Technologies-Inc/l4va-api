@@ -1,10 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
+import { MarketService } from '@/modules/market/market.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
+import { ChainType } from '@/types/vault.types';
 
 type SeedCoin = { id: string; symbol: string; name: string; image: string };
 
@@ -60,11 +64,28 @@ export class TokensService {
   private rhMemes: RhMemeSeed[] | null = null;
   private rhRwas: RhRwaSeed[] | null = null;
   private rhNfts: RhNftSeed[] | null = null;
+  private mainnetBlockfrost: BlockFrostAPI | null = null;
 
   constructor(
+    private readonly configService: ConfigService,
     private readonly priceService: PriceService,
-    private readonly tapToolsClient: TapToolsClient
+    private readonly tapToolsClient: TapToolsClient,
+    private readonly marketService: MarketService
   ) {}
+
+  private getMainnetBlockfrost(): BlockFrostAPI {
+    if (!this.mainnetBlockfrost) {
+      const isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+      const projectId =
+        this.configService.get<string>('BLOCKFROST_API_KEY_MAINNET') ||
+        (isMainnet ? this.configService.get<string>('BLOCKFROST_API_KEY') : undefined);
+      if (!projectId) {
+        throw new Error('BLOCKFROST_API_KEY_MAINNET is not configured');
+      }
+      this.mainnetBlockfrost = new BlockFrostAPI({ projectId });
+    }
+    return this.mainnetBlockfrost;
+  }
 
   private resolveSeedPath(filename: string): string {
     const candidates = [
@@ -145,12 +166,73 @@ export class TokensService {
   }
 
   async getCardanoMemecoin(id: string) {
-    const seed = this.loadCardanoSeed();
-    const coin = seed.find(c => c.id === id);
-    if (!coin) throw new NotFoundException(`Cardano token ${id} not found`);
-
+    const coin = await this.resolveCardanoCoin(id);
     const [listItem] = await this.enrichCardanoCoins([coin]);
     return listItem;
+  }
+
+  /** Seed first, then mainnet Blockfrost (policy ID or full unit). */
+  private async resolveCardanoCoin(id: string): Promise<CardanoSeed> {
+    const needle = String(id || '')
+      .trim()
+      .toLowerCase();
+    const seed = this.loadCardanoSeed();
+    const fromSeed = seed.find(c => c.id.toLowerCase() === needle || c.policy_id.toLowerCase() === needle);
+    if (fromSeed) return fromSeed;
+
+    if (!/^[0-9a-f]{56,}$/i.test(needle)) {
+      throw new NotFoundException(`Cardano token ${id} not found`);
+    }
+
+    try {
+      const bf = this.getMainnetBlockfrost();
+      let unit = needle;
+      if (needle.length === 56) {
+        const assets = await bf.assetsPolicyById(needle, { count: 100, order: 'desc' });
+        const ranked = (assets || [])
+          .map(a => ({ asset: a.asset, quantity: BigInt(a.quantity || '0') }))
+          .filter(a => a.quantity > 0n)
+          .sort((a, b) => (a.quantity < b.quantity ? 1 : a.quantity > b.quantity ? -1 : 0));
+        if (!ranked.length) {
+          throw new NotFoundException(`Cardano token ${id} not found`);
+        }
+        unit = ranked[0].asset;
+      }
+
+      const asset = await bf.assetsById(unit);
+      const policyId = String(asset.policy_id || '').toLowerCase();
+      const assetName = String(asset.asset_name || '').toLowerCase();
+      const meta = (asset.metadata || {}) as Record<string, unknown>;
+      const onchain = (asset.onchain_metadata || {}) as Record<string, unknown>;
+      const decimals = Number(meta.decimals ?? 0) || 0;
+      const rawQty = BigInt(asset.quantity || '0');
+      const divisor = 10n ** BigInt(Math.max(0, decimals));
+      const supply = divisor > 0n ? Number(rawQty) / Number(divisor) : Number(rawQty);
+      const logo = typeof meta.logo === 'string' ? meta.logo : null;
+      const image =
+        logo && /^https?:\/\//i.test(logo)
+          ? logo
+          : logo && logo.length > 32 && logo.length < 20_000
+            ? `data:image/png;base64,${logo}`
+            : null;
+
+      return {
+        id: `${policyId}${assetName}`,
+        policy_id: policyId,
+        asset_name: assetName,
+        symbol: String(meta.ticker || onchain.ticker || '').trim() || null,
+        name: String(meta.name || onchain.name || meta.ticker || '').trim() || null,
+        decimals,
+        supply: Number.isFinite(supply) ? supply : null,
+        circulating_supply: Number.isFinite(supply) ? supply : null,
+        image,
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Mainnet Cardano token lookup failed for ${id}: ${message}`);
+      throw new NotFoundException(`Cardano token ${id} not found`);
+    }
   }
 
   private async enrichCardanoCoins(seed: CardanoSeed[]) {
@@ -245,15 +327,17 @@ export class TokensService {
     });
   }
 
-  /** Cardano Tokens list — DexHunter seed + live DexHunter prices (not CoinGecko). */
+  /** Cardano Tokens list — DexHunter seed + L4VA vault tokens (NAV on testnet, DEX LP on mainnet). */
   async getCardanoMemecoins() {
-    return this.enrichCardanoCoins(this.loadCardanoSeed());
+    const [seed, vaultTokens] = await Promise.all([
+      this.enrichCardanoCoins(this.loadCardanoSeed()),
+      this.marketService.listVaultLpTokens(ChainType.cardano),
+    ]);
+    return [...vaultTokens, ...seed];
   }
 
   async getCardanoMemecoinOhlc(id: string, days = 7) {
-    const seed = this.loadCardanoSeed();
-    const coin = seed.find(c => c.id === id);
-    if (!coin) throw new NotFoundException(`Cardano token ${id} not found`);
+    const coin = await this.resolveCardanoCoin(id);
 
     let interval: '1h' | '1d' | '1w' = '1d';
     let numIntervals = 7;
@@ -443,21 +527,25 @@ export class TokensService {
 
   async getRobinhoodMemecoins() {
     const seed = this.loadRhMemes();
-    return this.enrichRobinhoodTokens(
-      seed.map(t => ({
-        address: t.address,
-        name: t.name,
-        symbol: t.symbol,
-        image: t.icon_url,
-        holders_count: t.holders_count,
-        seed_price_usd: t.price_usd,
-        seed_volume_24h: t.volume_24h,
-        seed_liquidity_usd: t.liquidity_usd,
-        seed_change_24h: t.price_change_24h,
-        seed_fdv: t.fdv,
-        seed_market_cap: t.market_cap,
-      }))
-    );
+    const [enriched, vaultTokens] = await Promise.all([
+      this.enrichRobinhoodTokens(
+        seed.map(t => ({
+          address: t.address,
+          name: t.name,
+          symbol: t.symbol,
+          image: t.icon_url,
+          holders_count: t.holders_count,
+          seed_price_usd: t.price_usd,
+          seed_volume_24h: t.volume_24h,
+          seed_liquidity_usd: t.liquidity_usd,
+          seed_change_24h: t.price_change_24h,
+          seed_fdv: t.fdv,
+          seed_market_cap: t.market_cap,
+        }))
+      ),
+      this.marketService.listVaultLpTokens(ChainType.robinhood),
+    ]);
+    return [...vaultTokens, ...enriched];
   }
 
   async getRobinhoodRwas() {
@@ -501,14 +589,69 @@ export class TokensService {
 
   async getRobinhoodToken(address: string) {
     const key = address.toLowerCase();
-    const [memes, rwas] = await Promise.all([this.getRobinhoodMemecoins(), this.getRobinhoodRwas()]);
-    const item = [...memes, ...rwas].find(t => t.address === key);
-    if (!item) {
-      const nft = (await this.getRobinhoodNfts()).find(t => t.address === key);
-      if (!nft) throw new NotFoundException(`Robinhood token ${address} not found`);
-      return nft;
+    if (!/^0x[a-f0-9]{40}$/.test(key) || key === '0x0000000000000000000000000000000000000000') {
+      throw new NotFoundException(`Robinhood token ${address} not found`);
     }
-    return item;
+
+    const meme = this.loadRhMemes().find(t => t.address.toLowerCase() === key);
+    if (meme) {
+      const [item] = await this.enrichRobinhoodTokens([
+        {
+          address: meme.address,
+          name: meme.name,
+          symbol: meme.symbol,
+          image: meme.icon_url,
+          holders_count: meme.holders_count,
+          seed_price_usd: meme.price_usd,
+          seed_volume_24h: meme.volume_24h,
+          seed_liquidity_usd: meme.liquidity_usd,
+          seed_change_24h: meme.price_change_24h,
+          seed_fdv: meme.fdv,
+          seed_market_cap: meme.market_cap,
+        },
+      ]);
+      return item;
+    }
+
+    const rwa = this.loadRhRwas().find(t => t.contract?.toLowerCase() === key);
+    if (rwa?.contract) {
+      const [item] = await this.enrichRobinhoodTokens([
+        {
+          address: rwa.contract,
+          name: rwa.name,
+          symbol: rwa.symbol,
+          image: rwa.logo,
+        },
+      ]);
+      return item;
+    }
+
+    const nft = this.loadRhNfts().find(t => t.address.toLowerCase() === key);
+    if (nft) {
+      return {
+        id: nft.address.toLowerCase(),
+        address: nft.address.toLowerCase(),
+        symbol: nft.symbol,
+        name: nft.name,
+        image: nft.logo,
+        holders_count: nft.holders_count ?? null,
+        total_supply: nft.total_supply ?? null,
+        type: nft.type ?? null,
+        price_usd: null,
+        market_cap: null,
+        fdv: null,
+        volume_24h: null,
+        liquidity_usd: null,
+        change_24h: null,
+        high_24h: null,
+        low_24h: null,
+        sparkline: [],
+        source: 'robinhood' as const,
+        asset_class: 'nft' as const,
+      };
+    }
+
+    throw new NotFoundException(`Robinhood token ${address} not found`);
   }
 
   async getRobinhoodTokenOhlc(address: string, days = 7) {
