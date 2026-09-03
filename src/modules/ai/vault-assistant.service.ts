@@ -14,7 +14,7 @@ import { sanitizeVaultDraft } from './spec/sanitize-draft';
 import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork } from './spec/spec.types';
 import { buildVaultDraftJsonSchema } from './spec/vault-draft.schema';
 import { VaultAiToolRegistry } from './tools/vault-ai-tool.registry';
-import { VaultAiToolContext } from './tools/vault-ai-tool.types';
+import { ResolvedVaultAsset, VaultAiToolContext } from './tools/vault-ai-tool.types';
 
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PresetsService } from '@/modules/presets/presets.service';
@@ -85,6 +85,7 @@ export class VaultAssistantService {
     const context = await this.buildTurnContext(userId, request);
     const messages = [...context.messages];
     let action: VaultAssistantAction | undefined;
+    const resolvedAssets: ResolvedVaultAsset[] = [];
 
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -92,11 +93,13 @@ export class VaultAssistantService {
         const turn = await this.openAiClient.createChatTurn(this.turnParams(context, messages, isLastRound));
 
         if (turn.toolCalls.length && !isLastRound) {
-          action = (await this.runToolRound(context, messages, turn)) ?? action;
+          const roundOutcome = await this.runToolRound(context, messages, turn);
+          action = roundOutcome.action ?? action;
+          resolvedAssets.push(...roundOutcome.resolvedAssets);
           continue;
         }
 
-        return this.toResponse(this.parseCompletion(turn.content), context.spec, action);
+        return this.toResponse(this.parseCompletion(turn.content), context.spec, action, resolvedAssets);
       }
     } catch (error) {
       this.logger.error(`Vault assistant completion failed: ${(error as Error).message}`);
@@ -111,6 +114,7 @@ export class VaultAssistantService {
     const context = await this.buildTurnContext(userId, request);
     const messages = [...context.messages];
     let action: VaultAssistantAction | undefined;
+    const resolvedAssets: ResolvedVaultAsset[] = [];
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const isLastRound = round === MAX_TOOL_ROUNDS - 1;
@@ -145,13 +149,19 @@ export class VaultAssistantService {
         }
       } catch (error) {
         this.logger.error(`Vault assistant stream failed: ${(error as Error).message}`);
-        yield { type: 'error', message: 'The assistant could not answer right now. Please try again.' };
+        yield {
+          type: 'error',
+          message: 'The assistant could not answer right now. Please try again.',
+        };
         return;
       }
 
       if (!turn) {
         this.logger.error('Vault assistant stream ended without a completed turn');
-        yield { type: 'error', message: 'The assistant could not answer right now. Please try again.' };
+        yield {
+          type: 'error',
+          message: 'The assistant could not answer right now. Please try again.',
+        };
         return;
       }
 
@@ -164,10 +174,15 @@ export class VaultAssistantService {
           );
         } else {
           try {
-            action = (await this.runToolRound(context, messages, turn)) ?? action;
+            const roundOutcome = await this.runToolRound(context, messages, turn);
+            action = roundOutcome.action ?? action;
+            resolvedAssets.push(...roundOutcome.resolvedAssets);
           } catch (error) {
             this.logger.error(`Vault assistant tool round failed: ${(error as Error).message}`);
-            yield { type: 'error', message: 'The assistant could not answer right now. Please try again.' };
+            yield {
+              type: 'error',
+              message: 'The assistant could not answer right now. Please try again.',
+            };
             return;
           }
           continue;
@@ -179,13 +194,19 @@ export class VaultAssistantService {
         completion = this.parseCompletion(raw || turn.content);
       } catch (error) {
         this.logger.error(`Vault assistant stream parse failed: ${(error as Error).message}`);
-        yield { type: 'error', message: 'The assistant could not answer right now. Please try again.' };
+        yield {
+          type: 'error',
+          message: 'The assistant could not answer right now. Please try again.',
+        };
         return;
       }
 
-      const response = this.toResponse(completion, context.spec, action);
+      const response = this.toResponse(completion, context.spec, action, resolvedAssets);
       if (response.message.startsWith(streamedMessage) && response.message.length > streamedMessage.length) {
-        yield { type: 'delta', text: response.message.slice(streamedMessage.length) };
+        yield {
+          type: 'delta',
+          text: response.message.slice(streamedMessage.length),
+        };
       } else if (!streamedMessage && response.message) {
         yield { type: 'delta', text: response.message };
       }
@@ -223,13 +244,16 @@ export class VaultAssistantService {
 
   /**
    * Executes every tool the model requested, appends the results to `messages` so the next round can
-   * see them, and returns the UI action a tool produced (if any).
+   * see them, and returns the UI action / resolved assets a tool produced (if any).
    */
   private async runToolRound(
     context: AssistantTurnContext,
     messages: ChatMessage[],
     turn: ChatTurn
-  ): Promise<VaultAssistantAction | undefined> {
+  ): Promise<{
+    action?: VaultAssistantAction;
+    resolvedAssets: ResolvedVaultAsset[];
+  }> {
     messages.push({
       role: 'assistant',
       content: turn.content,
@@ -241,15 +265,23 @@ export class VaultAssistantService {
     });
 
     let action: VaultAssistantAction | undefined;
+    const resolvedAssets: ResolvedVaultAsset[] = [];
     for (const call of turn.toolCalls) {
       const outcome = await this.toolRegistry.execute(call.name, context.toolContext, call.arguments);
       if (outcome.action) {
         action = outcome.action;
       }
-      messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(outcome.result) });
+      if (outcome.resolvedAssets?.length) {
+        resolvedAssets.push(...outcome.resolvedAssets);
+      }
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: JSON.stringify(outcome.result),
+      });
     }
 
-    return action;
+    return { action, resolvedAssets };
   }
 
   private parseCompletion(content: string | null): AssistantCompletion {
@@ -288,9 +320,14 @@ export class VaultAssistantService {
       spec,
       messages: [
         { role: 'system', content: systemPrompt },
-        ...request.messages.map(message => ({ role: message.role, content: message.content })),
+        ...request.messages.map(message => ({
+          role: message.role,
+          content: message.content,
+        })),
       ],
-      schema: buildVaultDraftJsonSchema(spec, { presetIds: presetContext.map(preset => preset.id) }),
+      schema: buildVaultDraftJsonSchema(spec, {
+        presetIds: presetContext.map(preset => preset.id),
+      }),
       toolContext: {
         userId,
         chain: request.chain as SpecChain,
@@ -306,7 +343,8 @@ export class VaultAssistantService {
   private toResponse(
     completion: AssistantCompletion,
     spec: ResolvedVaultCreationSpec,
-    action?: VaultAssistantAction
+    action?: VaultAssistantAction,
+    resolvedAssets: ResolvedVaultAsset[] = []
   ): VaultAssistantMessageRes {
     const { draft, rejected } = sanitizeVaultDraft(completion.vaultDraft, spec);
     if (rejected.length) {
@@ -330,6 +368,17 @@ export class VaultAssistantService {
       // An action only exists because a tool produced it after server-side validation — the model
       // cannot put one here by claiming the vault is ready.
       action: action ?? null,
+      resolvedAssets: dedupeResolvedAssets(resolvedAssets),
     };
   }
+}
+
+function dedupeResolvedAssets(assets: ResolvedVaultAsset[]): ResolvedVaultAsset[] {
+  const seen = new Set<string>();
+  return assets.filter(asset => {
+    const key = asset.policyId.toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

@@ -13,7 +13,9 @@ export class VaultAssistantMessageRes {
   @Expose()
   status: 'gathering' | 'ready';
 
-  @ApiProperty({ description: 'Sanitized partial vault draft to merge into the form state' })
+  @ApiProperty({
+    description: 'Sanitized partial vault draft to merge into the form state',
+  })
   @Expose()
   vaultDraft: Record<string, unknown>;
 
@@ -31,11 +33,17 @@ export class VaultAssistantMessageRes {
   @Expose()
   options: VaultAssistantOption[];
 
-  @ApiProperty({ type: [String], description: 'Required fields that still have no value' })
+  @ApiProperty({
+    type: [String],
+    description: 'Required fields that still have no value',
+  })
   @Expose()
   missingFields: string[];
 
-  @ApiProperty({ type: [String], description: 'Values the assistant proposed that were rejected by the server' })
+  @ApiProperty({
+    type: [String],
+    description: 'Values the assistant proposed that were rejected by the server',
+  })
   @Expose()
   rejected: string[];
 
@@ -51,4 +59,17 @@ export class VaultAssistantMessageRes {
   @Type(() => VaultAssistantAction)
   @Expose()
   action: VaultAssistantAction | null;
+
+  @ApiProperty({
+    description: 'Verified catalog assets resolved this turn, merged into the vault whitelist by the client',
+    required: false,
+  })
+  @Expose()
+  resolvedAssets: Array<{
+    policyId: string;
+    name: string;
+    symbol: string;
+    image: string | null;
+    assetClass: string;
+  }>;
 }

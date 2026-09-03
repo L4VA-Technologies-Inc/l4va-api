@@ -53,6 +53,25 @@ type RhNftSeed = {
   total_supply?: string | null;
 };
 
+export type RhCatalogAssetClass = 'memecoin' | 'rwa' | 'nft';
+
+/** A Robinhood catalog hit the vault assistant can whitelist without inventing an address. */
+export type RhCatalogAsset = {
+  policyId: string;
+  name: string;
+  symbol: string;
+  image: string | null;
+  assetClass: RhCatalogAssetClass;
+};
+
+export type RhCatalogSearchHit = {
+  query: string;
+  matches: RhCatalogAsset[];
+};
+
+const MAX_CATALOG_QUERIES = 10;
+const MAX_MATCHES_PER_QUERY = 5;
+
 @Injectable()
 export class TokensService {
   private readonly logger = new Logger(TokensService.name);
@@ -499,6 +518,83 @@ export class TokensService {
     }));
   }
 
+  /**
+   * Local seed search used by the vault assistant. No live price calls — tickers must resolve
+   * in the same turn the user names them.
+   */
+  searchRobinhoodCatalog(queries: string[]): RhCatalogSearchHit[] {
+    const catalog = this.loadRobinhoodCatalog();
+    const seen = new Set<string>();
+
+    return queries.slice(0, MAX_CATALOG_QUERIES).map(raw => {
+      const query = typeof raw === 'string' ? raw.trim() : '';
+      if (!query) return { query, matches: [] as RhCatalogAsset[] };
+
+      const ranked = catalog
+        .map(entry => ({
+          entry,
+          score: this.catalogEntryScore(entry, query),
+        }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score);
+
+      const matches: RhCatalogAsset[] = [];
+      for (const { entry } of ranked) {
+        if (seen.has(entry.policyId)) continue;
+        seen.add(entry.policyId);
+        matches.push(entry);
+        if (matches.length >= MAX_MATCHES_PER_QUERY) break;
+      }
+
+      return { query, matches };
+    });
+  }
+
+  private loadRobinhoodCatalog(): RhCatalogAsset[] {
+    const memes = this.loadRhMemes().map(t => ({
+      policyId: t.address.toLowerCase(),
+      name: t.name || t.symbol || t.address,
+      symbol: t.symbol || '',
+      image: t.icon_url ?? null,
+      assetClass: 'memecoin' as const,
+    }));
+    const rwas = this.loadRhRwas()
+      .filter(t => !!t.contract)
+      .map(t => ({
+        policyId: t.contract!.toLowerCase(),
+        name: t.name || t.symbol || t.contract!,
+        symbol: t.symbol || '',
+        image: t.logo ?? null,
+        assetClass: 'rwa' as const,
+      }));
+    const nfts = this.loadRhNfts().map(t => ({
+      policyId: t.address.toLowerCase(),
+      name: t.name || t.symbol || t.address,
+      symbol: t.symbol || '',
+      image: t.logo ?? null,
+      assetClass: 'nft' as const,
+    }));
+    return [...memes, ...rwas, ...nfts];
+  }
+
+  private catalogEntryScore(entry: RhCatalogAsset, query: string): number {
+    const q = query.toLowerCase();
+    const symbol = entry.symbol.toLowerCase();
+    const name = entry.name.toLowerCase();
+    const address = entry.policyId.toLowerCase();
+    const addressNoPrefix = address.replace(/^0x/, '');
+    const queryNoPrefix = q.replace(/^0x/, '');
+
+    if (address === q || (q.startsWith('0x') && addressNoPrefix === queryNoPrefix)) return 100;
+    if (symbol === q) return 90;
+    if (name === q) return 80;
+    if (symbol.startsWith(q)) return 70;
+    if (name.startsWith(q)) return 60;
+    if (q.length >= 2 && symbol.includes(q)) return 40;
+    if (q.length >= 3 && name.includes(q)) return 30;
+    return 0;
+  }
+
   async getRobinhoodToken(address: string) {
     const key = address.toLowerCase();
     const [memes, rwas] = await Promise.all([this.getRobinhoodMemecoins(), this.getRobinhoodRwas()]);
@@ -550,10 +646,20 @@ export class TokensService {
         aggregate,
         limit,
       });
-      return { id: address.toLowerCase(), days, ohlcv, pair_address: pairAddress };
+      return {
+        id: address.toLowerCase(),
+        days,
+        ohlcv,
+        pair_address: pairAddress,
+      };
     } catch (error) {
       this.logger.error(`GeckoTerminal OHLC failed for ${address}: ${error.message}`);
-      return { id: address.toLowerCase(), days, ohlcv: [], pair_address: pairAddress };
+      return {
+        id: address.toLowerCase(),
+        days,
+        ohlcv: [],
+        pair_address: pairAddress,
+      };
     }
   }
 
@@ -569,7 +675,11 @@ export class TokensService {
       return { id: address.toLowerCase(), pair_address: pairAddress, trades };
     } catch (error) {
       this.logger.error(`GeckoTerminal trades failed for ${address}: ${error.message}`);
-      return { id: address.toLowerCase(), pair_address: pairAddress, trades: [] };
+      return {
+        id: address.toLowerCase(),
+        pair_address: pairAddress,
+        trades: [],
+      };
     }
   }
 }

@@ -18,7 +18,6 @@ import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { VaultsService } from '../vaults/vaults.service';
 
 import { ChatService } from './chat.service';
-import { AddMembersReq } from './dto/add-members.req';
 import { AddMembersRes } from './dto/add-members.res';
 import { CreateUserReq } from './dto/create-user.req';
 import { CreateUserRes } from './dto/create-user.res';
@@ -35,18 +34,12 @@ export class ChatController {
     private readonly vaultsService: VaultsService
   ) {}
 
-  @Get('token/:userId')
+  @Get('token')
   @ApiOperation({ summary: 'Generate Stream Chat token for the authenticated user' })
-  @ApiParam({ name: 'userId', description: 'Must match the authenticated user ID' })
   @ApiResponse({ status: 200, description: 'Token generated successfully', type: GenerateTokenRes })
-  async generateToken(
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Request() req: AuthRequest
-  ): Promise<GenerateTokenRes> {
-    this.assertSelf(userId, req.user.sub);
-
+  async generateToken(@Request() req: AuthRequest): Promise<GenerateTokenRes> {
     try {
-      const token = this.chatService.generateUserToken(userId);
+      const token = this.chatService.generateUserToken(req.user.sub);
       return { token };
     } catch (error) {
       if (error instanceof HttpException) {
@@ -81,19 +74,12 @@ export class ChatController {
     }
   }
 
-  @Post('user/:userId')
+  @Post('user')
   @ApiOperation({ summary: 'Create or update the authenticated user in Stream Chat' })
-  @ApiParam({ name: 'userId', description: 'Must match the authenticated user ID' })
   @ApiResponse({ status: 200, description: 'User created/updated successfully', type: CreateUserRes })
-  async createUser(
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() userData: CreateUserReq,
-    @Request() req: AuthRequest
-  ): Promise<CreateUserRes> {
-    this.assertSelf(userId, req.user.sub);
-
+  async createUser(@Body() userData: CreateUserReq, @Request() req: AuthRequest): Promise<CreateUserRes> {
     try {
-      const user = await this.chatService.createOrUpdateUser(userId, userData);
+      const user = await this.chatService.createOrUpdateUser(req.user.sub, userData);
       return { user, success: true };
     } catch (error) {
       if (error instanceof HttpException) {
@@ -109,13 +95,8 @@ export class ChatController {
   @ApiResponse({ status: 200, description: 'Members added successfully', type: AddMembersRes })
   async addMembersToVault(
     @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Body() body: AddMembersReq,
     @Request() req: AuthRequest
   ): Promise<AddMembersRes> {
-    if (body.userIds.some(id => id !== req.user.sub)) {
-      throw new ForbiddenException('You can only add yourself to a vault channel');
-    }
-
     await this.assertVaultChatAccess(req.user.sub, vaultId);
 
     try {
@@ -126,12 +107,6 @@ export class ChatController {
         throw error;
       }
       throw new HttpException('Failed to add members to vault channel', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  private assertSelf(requestedUserId: string, authenticatedUserId: string): void {
-    if (requestedUserId !== authenticatedUserId) {
-      throw new ForbiddenException('You can only access chat identity for your own account');
     }
   }
 

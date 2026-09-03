@@ -43,7 +43,7 @@ export const VAULT_TAGS = [
  * feeds the errors back for correction, so a stale spec costs an extra turn, not a bad vault.
  */
 export const VAULT_CREATION_SPEC: VaultCreationSpec = {
-  version: '1.2.0',
+  version: '1.3.0',
 
   rules: [
     'Percentages are whole-number percents (0-100), not basis points.',
@@ -400,12 +400,12 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
 
   networkOverrides: {
     preprod: {
-      contributionDuration: { min: 300_000, default: 300_000 },
-      acquireWindowDuration: { min: 300_000, default: 300_000 },
+      contributionDuration: { min: 300_000, default: 7 * DAY_MS },
+      acquireWindowDuration: { min: 300_000, default: 7 * DAY_MS },
     },
     mainnet: {
-      contributionDuration: { min: 5 * DAY_MS, default: 5 * DAY_MS },
-      acquireWindowDuration: { min: 5 * DAY_MS, default: 5 * DAY_MS },
+      contributionDuration: { min: 5 * DAY_MS, default: 7 * DAY_MS },
+      acquireWindowDuration: { min: 5 * DAY_MS, default: 7 * DAY_MS },
     },
   },
 

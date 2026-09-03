@@ -13,11 +13,22 @@ export interface VaultAiToolContext {
   spec: ResolvedVaultCreationSpec;
 }
 
+/** A catalog asset the lookup tool verified — the frontend merges these into the whitelist. */
+export interface ResolvedVaultAsset {
+  policyId: string;
+  name: string;
+  symbol: string;
+  image: string | null;
+  assetClass: 'memecoin' | 'rwa' | 'nft';
+}
+
 export interface VaultAiToolOutcome {
   /** JSON-safe payload handed back to the model as the tool result. */
   result: Record<string, unknown>;
   /** UI action surfaced to the frontend. Only set when the tool succeeded. */
   action?: VaultAssistantAction;
+  /** Verified assets to drop into the vault whitelist. Never invented by the model. */
+  resolvedAssets?: ResolvedVaultAsset[];
 }
 
 /**
