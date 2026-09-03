@@ -50,6 +50,7 @@ import { RewardEventProducer } from '@/modules/rewards/services/reward-event-pro
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
+import { ProtocolFeeConfigService } from '@/modules/vaults/processing-tx/onchain/protocol-fee-config.service';
 import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -138,6 +139,7 @@ export class GovernanceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
+    private readonly protocolFeeConfigService: ProtocolFeeConfigService,
     private readonly governanceFeeService: GovernanceFeeService,
     private readonly transactionsService: TransactionsService,
     private readonly governanceRefundService: GovernanceRefundService,
@@ -2278,6 +2280,10 @@ export class GovernanceService {
           vault_status: true,
           termination_type: true,
           termination_metadata: true,
+          // Needed to read the live L4VA trade fee off the vault's
+          // ProtocolFeeConfig for governance swap previews.
+          chain_type: true,
+          contract_address: true,
         },
       },
     });
@@ -2605,10 +2611,23 @@ export class GovernanceService {
         : undefined,
     };
 
+    // Live L4VA trade fee (FeeType.Trade) applied to this vault's governance
+    // swaps, so the UI can show gross → fee → net. Read from chain rather than
+    // configured locally; 0 (or null off-chain) means no fee is charged.
+    let tradeFeeBps: number | null = null;
+    if (proposal.vault?.chain_type === ChainType.robinhood && proposal.vault?.contract_address) {
+      try {
+        tradeFeeBps = await this.protocolFeeConfigService.tradeFeeBps(proposal.vault.contract_address as `0x${string}`);
+      } catch (error) {
+        this.logger.warn(`Could not read trade fee for vault ${proposal.vault.id}: ${error.message}`);
+      }
+    }
+
     const response = {
       proposal: proposalDto,
       votes,
       totals,
+      tradeFeeBps,
       canVote,
       selectedVote,
       proposer,

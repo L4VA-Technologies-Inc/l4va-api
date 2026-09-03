@@ -13,6 +13,7 @@ import {
   type ClosePositionParams,
 } from '../../processing-tx/onchain/evm-position.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
+import { ProtocolFeeConfigService } from '../../processing-tx/onchain/protocol-fee-config.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
 import { EvmExternalPosition, EvmPositionStatus } from '@/database/evm-external-position.entity';
@@ -50,6 +51,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly terminationService: EvmTerminationService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
     private readonly uniswapQuoteService: UniswapQuoteService,
+    private readonly protocolFeeConfigService: ProtocolFeeConfigService,
     private readonly evmOpenCycleService: EvmOpenCycleService,
     configService: ConfigService
   ) {
@@ -276,6 +278,12 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           this.swapSlippageBps
         );
 
+        // The vault enforces `minExpectedOutput` against the NET output it
+        // retains after the L4VA trade fee, so the floor has to absorb DEX
+        // slippage AND the fee. Quoting only slippage would revert every swap.
+        const feeBps = await this.tradeFeeBps(vault.id);
+        const minExpectedOutput = ProtocolFeeConfigService.applyFee(quote.minAmountOut, feeBps);
+
         const operationId = buildOperationId(vault.id, proposal.id, i);
 
         await this.positionService.openPosition(vault.id, {
@@ -285,14 +293,14 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           inputAsset: tokenIn,
           maxInputAmount: inputAmountRaw,
           expectedPositionAsset: tokenOut,
-          minExpectedOutput: quote.minAmountOut,
+          minExpectedOutput,
           deadline: 0n,
           protocolParams: quote.protocolParams,
         });
 
         this.logger.log(
           `Proposal ${proposal.id} action[${i}]: Uniswap V3 swap ${tokenIn}→${tokenOut} ` +
-            `fee=${quote.fee} minOut=${quote.minAmountOut} — ok`
+            `fee=${quote.fee} tradeFeeBps=${feeBps} minNetOut=${minExpectedOutput} — ok`
         );
       } catch (err) {
         this.logger.error(`Proposal ${proposal.id} action[${i}]: Uniswap swap failed — ${(err as Error).message}`);
@@ -301,6 +309,24 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     }
 
     return true;
+  }
+
+  /**
+   * Live L4VA trade fee (`FeeType.Trade`) for this vault, in basis points.
+   *
+   * Read from the chain rather than an env var: `Vault.openPosition` /
+   * `closePosition` charge whatever `ProtocolFeeConfig` says at execution
+   * time and enforce the caller's minimum against the NET result. A stale
+   * local copy of the rate would make every governance swap revert with
+   * `PositionMinOutputNotMet` the moment the rate changed.
+   */
+  private async tradeFeeBps(vaultId: string): Promise<number> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'contract_address'],
+    });
+    if (!vault?.contract_address) return 0;
+    return this.protocolFeeConfigService.tradeFeeBps(vault.contract_address as Address);
   }
 
   private async executeClosePosition(
@@ -335,9 +361,13 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
         action.feeTier
       );
 
+      // Same NET semantics as openPosition — see `tradeFeeBps`.
+      const feeBps = await this.tradeFeeBps(vault.id);
+      const minUnderlyingReturned = ProtocolFeeConfigService.applyFee(quote.minAmountOut, feeBps);
+
       const closeParams: ClosePositionParams = {
         positionId,
-        minUnderlyingReturned: quote.minAmountOut,
+        minUnderlyingReturned,
         deadline: 0n,
         protocolParams: quote.protocolParams,
       };
@@ -346,7 +376,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
       this.logger.log(
         `Proposal ${proposal.id} action[${actionIndex}]: closePosition id=${positionId} ` +
-          `${positionAsset}→${underlyingAsset} minReturn=${quote.minAmountOut} — ok`
+          `${positionAsset}→${underlyingAsset} tradeFeeBps=${feeBps} minNetReturn=${minUnderlyingReturned} — ok`
       );
       return true;
     } catch (err) {

@@ -467,6 +467,16 @@ export class GetProposalDetailRes {
   totals: VoteTotalsDto;
 
   @Expose()
+  @ApiPropertyOptional({
+    description:
+      'Live L4VA trade fee in basis points applied to governance swaps for this vault, ' +
+      'read from the on-chain ProtocolFeeConfig. Null for non-EVM vaults or if the read failed.',
+    example: 25,
+    nullable: true,
+  })
+  tradeFeeBps: number | null;
+
+  @Expose()
   @ApiProperty({ description: 'Whether the user can vote', example: true })
   canVote: boolean;
 
