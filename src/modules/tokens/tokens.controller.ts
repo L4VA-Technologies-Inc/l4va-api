@@ -143,4 +143,40 @@ export class TokensController {
     const safeDays = [1, 7, 14, 30, 90, 180, 365].includes(parsed) ? parsed : 7;
     return this.tokensService.getMemecoinOhlc(id, safeDays);
   }
+
+  @Get(':id/ohlc')
+  @ApiDoc({
+    summary: 'Get OHLC candles for any token (vault, Robinhood, Cardano, CoinGecko)',
+    description:
+      'Detects token kind from the id and returns USD candles ready for VaultChart. interval: 1h, 1d, 1w, 1m, 3m, 1y',
+    status: 200,
+  })
+  async getTokenOhlc(@Param('id') id: string, @Query('interval') interval?: string) {
+    return this.tokensService.getTokenOhlc(id, interval);
+  }
+
+  @Get(':id/trades')
+  @ApiDoc({
+    summary: 'Get recent trades for a token detail page',
+    description: 'Live DEX trades for Robinhood tokens; empty list for vault/Cardano/CoinGecko',
+    status: 200,
+  })
+  async getTokenTrades(@Param('id') id: string, @Query('limit') limit?: string) {
+    const parsed = Number(limit);
+    const safeLimit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 100) : 40;
+    return this.tokensService.getTokenTrades(id, safeLimit);
+  }
+
+  @Get(':id')
+  @ApiDoc({
+    summary: 'Get a normalized token detail payload',
+    description:
+      'Single page-ready payload for TokenDetailPage: prices, copy value, explorer, swap config, overview fields. Accepts vault UUID, Robinhood address, Cardano unit, or CoinGecko id.',
+    status: 200,
+  })
+  @ApiResponse({ status: 200, description: 'Normalized token detail' })
+  @ApiResponse({ status: 404, description: 'Token not found' })
+  async getTokenDetail(@Param('id') id: string) {
+    return this.tokensService.getTokenDetail(id);
+  }
 }

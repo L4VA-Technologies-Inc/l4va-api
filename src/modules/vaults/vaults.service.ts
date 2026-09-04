@@ -1499,7 +1499,20 @@ export class VaultsService {
       vaultStatsFdvAda = additionalData.fdv ?? null;
       vaultStatsFdvUsd = additionalData.fdvUsd ?? null;
       vaultStatsFdvTvl = additionalData.fdvTvl ?? null;
+    } else {
+      // No DexHunter index (typical on testnet). Price/FDV come from vault NAV, not a DEX.
+      const fdvFromVault = vault.fdv != null ? Number(vault.fdv) : null;
+      vaultStatsFdvAda = fdvFromVault && fdvFromVault > 0 ? fdvFromVault : vaultStatsTvlAda ?? null;
+      vaultStatsFdvUsd =
+        vaultStatsFdvAda != null && adaPrice > 0 ? vaultStatsFdvAda * adaPrice : vaultStatsTvlUsd ?? null;
+      vaultStatsFdvTvl =
+        vaultStatsFdvAda != null && vaultStatsTvlAda > 0 ? Number(vaultStatsFdvAda) / Number(vaultStatsTvlAda) : null;
     }
+    const supplyNum = vault.ft_token_supply != null ? Number(vault.ft_token_supply) : 0;
+    const navPriceAda =
+      supplyNum > 0 && vaultStatsTvlAda > 0 ? Number(vaultStatsTvlAda) / supplyNum : null;
+    const listedPriceAda = vault.vt_price != null && Number(vault.vt_price) > 0 ? Number(vault.vt_price) : null;
+    const vtPriceAda = hasActiveLp ? (listedPriceAda ?? navPriceAda) : navPriceAda;
     additionalData['vaultStats'] = {
       tvlAda: vaultStatsTvlAda ?? null,
       tvlUsd: vaultStatsTvlUsd ?? null,
@@ -1508,8 +1521,8 @@ export class VaultsService {
       fdvTvl: vaultStatsFdvTvl,
       ftGainsAda: hasActiveLp ? (vault.gains_ada != null ? Number(vault.gains_ada) : null) : null,
       ftGainsUsd: hasActiveLp ? (vault.gains_usd != null ? Number(vault.gains_usd) : null) : null,
-      vtPriceAda: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) : null) : null,
-      vtPriceUsd: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) * adaPrice : null) : null,
+      vtPriceAda,
+      vtPriceUsd: vtPriceAda != null && adaPrice > 0 ? vtPriceAda * adaPrice : null,
     };
 
     // First transform the vault to plain object with class-transformer

@@ -4,6 +4,8 @@ import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 import { PaginationDto } from '../../vaults/dto/pagination.dto';
 
+import { MarketType } from '@/types/market.types';
+
 export enum Currency {
   ADA = 'ada',
   USD = 'usd',
@@ -193,4 +195,14 @@ export class GetMarketsDto extends PaginationDto {
   })
   @Expose()
   currency?: Currency = Currency.ADA;
+
+  @IsEnum(MarketType)
+  @IsOptional()
+  @ApiProperty({
+    enum: MarketType,
+    required: false,
+    description: 'Filter by market type. Defaults to vault tokens with an active LP.',
+  })
+  @Expose()
+  type?: MarketType;
 }

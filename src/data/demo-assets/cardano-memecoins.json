@@ -1,5 +1,18 @@
 [
   {
+    "id": "328a18bac517630826a106bff1a55caf455de84cdba98416f8e093b27393c37310950f58596be5013b942d52accb931c2800cf132db36fb5fd7d71c4",
+    "policy_id": "328a18bac517630826a106bff1a55caf455de84cdba98416f8e093b2",
+    "asset_name": "7393c37310950f58596be5013b942d52accb931c2800cf132db36fb5fd7d71c4",
+    "symbol": "ORACLE",
+    "name": "The Oracle",
+    "decimals": 3,
+    "supply": 999999.989,
+    "circulating_supply": 999999.989,
+    "image": null,
+    "is_verified": true,
+    "source": "dexhunter"
+  },
+  {
     "id": "dfedc609867005a0fdae96a54d138d13a300b1ef19188d2ed590bc3543617264616e6f204167656e7420",
     "policy_id": "dfedc609867005a0fdae96a54d138d13a300b1ef19188d2ed590bc35",
     "asset_name": "43617264616e6f204167656e7420",
