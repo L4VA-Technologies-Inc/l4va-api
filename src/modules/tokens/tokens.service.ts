@@ -5,6 +5,16 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import {
+  TOKEN_CHART_INTERVALS,
+  TokenChartInterval,
+  TokenDetail,
+  TokenOhlcvPoint,
+  TokenOverviewField,
+  TokenSource,
+  TokenSwap,
+} from './dto/token-detail.dto';
+
 import { MarketService } from '@/modules/market/market.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
@@ -715,4 +725,304 @@ export class TokensService {
       return { id: address.toLowerCase(), pair_address: pairAddress, trades: [] };
     }
   }
+
+  /**
+   * Unified token detail for TokenDetailPage.
+   * Detects vault / Robinhood / Cardano / CoinGecko and returns one page-ready payload.
+   */
+  async getTokenDetail(id: string): Promise<TokenDetail> {
+    const kind = this.detectTokenKind(id);
+
+    if (kind === 'vault') {
+      return this.toVaultTokenDetail(await this.marketService.getVaultTokenById(id));
+    }
+
+    if (kind === 'robinhood') {
+      try {
+        return this.toMarketTokenDetail(await this.getRobinhoodToken(id), 'robinhood', id);
+      } catch (error) {
+        if (error instanceof NotFoundException) {
+          try {
+            return this.toVaultTokenDetail(await this.marketService.getVaultTokenById(id));
+          } catch {
+            throw error;
+          }
+        }
+        throw error;
+      }
+    }
+
+    if (kind === 'cardano') {
+      return this.toMarketTokenDetail(await this.getCardanoMemecoin(id), 'cardano', id);
+    }
+
+    return this.toMarketTokenDetail(await this.getMemecoin(id), 'coingecko', id);
+  }
+
+  async getTokenOhlc(
+    id: string,
+    interval: string = '1d'
+  ): Promise<{ id: string; interval: string; ohlcv: TokenOhlcvPoint[] }> {
+    const safeInterval = this.parseChartInterval(interval);
+    const kind = this.detectTokenKind(id);
+    const days = INTERVAL_TO_DAYS[safeInterval];
+
+    if (kind === 'vault') {
+      return this.getVaultTokenOhlcUsd(id, safeInterval);
+    }
+
+    if (kind === 'robinhood') {
+      try {
+        const result = await this.getRobinhoodTokenOhlc(id, days);
+        return { id: result.id, interval: safeInterval, ohlcv: result.ohlcv || [] };
+      } catch (error) {
+        if (error instanceof NotFoundException) {
+          try {
+            return this.getVaultTokenOhlcUsd(id, safeInterval);
+          } catch {
+            throw error;
+          }
+        }
+        throw error;
+      }
+    }
+
+    if (kind === 'cardano') {
+      const result = await this.getCardanoMemecoinOhlc(id, days);
+      return { id: result.id, interval: safeInterval, ohlcv: result.ohlcv || [] };
+    }
+
+    const result = await this.getMemecoinOhlc(id, days);
+    return { id: result.id, interval: safeInterval, ohlcv: result.ohlcv || [] };
+  }
+
+  async getTokenTrades(id: string, limit = 40) {
+    const kind = this.detectTokenKind(id);
+    if (kind !== 'robinhood') {
+      return { id, trades: [] as Array<Record<string, unknown>> };
+    }
+
+    try {
+      const result = await this.getRobinhoodTokenTrades(id, limit);
+      return {
+        id: result.id,
+        pair_address: (result as { pair_address?: string }).pair_address ?? null,
+        trades: (result.trades || []).map(trade => ({
+          ...trade,
+          tx_url: trade.tx_hash ? `https://robinhoodchain.blockscout.com/tx/${trade.tx_hash}` : null,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return { id, trades: [] };
+      }
+      throw error;
+    }
+  }
+
+  private async getVaultTokenOhlcUsd(id: string, interval: TokenChartInterval) {
+    const vaultInterval = VAULT_OHLCV_INTERVAL[interval];
+    const market = await this.marketService.getMarketByIdWithOHLCV(id, vaultInterval);
+    const adaPrice = Number(market.adaPrice) || 0;
+    const series = Array.isArray(market.ohlcv) ? market.ohlcv : [];
+    const ohlcv = series.map(point => {
+      const toUsd = (value: number) => (adaPrice > 0 ? value * adaPrice : value);
+      return {
+        time: point.time,
+        open: toUsd(point.open),
+        high: toUsd(point.high),
+        low: toUsd(point.low),
+        close: toUsd(point.close),
+        volume: point.volume,
+      };
+    });
+    return { id: market.vault_id || id, interval, ohlcv };
+  }
+
+  private detectTokenKind(id: string): TokenSource {
+    const value = String(id || '').trim();
+    if (UUID_RE.test(value)) return 'vault';
+    if (/^0x[a-fA-F0-9]{40}$/.test(value)) return 'robinhood';
+    if (/^[a-fA-F0-9]{56,}$/i.test(value)) return 'cardano';
+    return 'coingecko';
+  }
+
+  private parseChartInterval(interval?: string): TokenChartInterval {
+    const value = String(interval || '1d').toLowerCase();
+    return TOKEN_CHART_INTERVALS.includes(value as TokenChartInterval) ? (value as TokenChartInterval) : '1d';
+  }
+
+  private toVaultTokenDetail(row: Awaited<ReturnType<MarketService['getVaultTokenById']>>): TokenDetail {
+    const copyValue = this.buildVaultCopyValue(row);
+    const swap = this.buildVaultSwap(row, copyValue);
+    return {
+      id: row.vault_id || row.id,
+      source: 'vault',
+      name: row.name ?? null,
+      symbol: row.symbol ?? null,
+      image: row.image ?? null,
+      price_usd: row.price_usd ?? null,
+      price_eth: row.price_eth ?? null,
+      price_ada: row.price_ada ?? null,
+      market_cap: row.market_cap ?? null,
+      market_cap_eth: row.market_cap_eth ?? null,
+      market_cap_ada: row.market_cap_ada ?? null,
+      fdv: row.fdv ?? null,
+      fdv_eth: row.fdv_eth ?? null,
+      fdv_ada: row.fdv_ada ?? null,
+      volume_24h: row.volume_24h ?? null,
+      volume_24h_eth: row.volume_24h_eth ?? null,
+      volume_24h_ada: row.volume_24h_ada ?? null,
+      liquidity_usd: row.liquidity_usd ?? null,
+      liquidity_eth: row.liquidity_eth ?? null,
+      liquidity_ada: row.liquidity_ada ?? null,
+      change_24h: row.change_24h ?? null,
+      high_24h: row.high_24h ?? null,
+      high_24h_eth: row.high_24h_eth ?? null,
+      high_24h_ada: row.high_24h_ada ?? null,
+      low_24h: row.low_24h ?? null,
+      low_24h_eth: row.low_24h_eth ?? null,
+      low_24h_ada: row.low_24h_ada ?? null,
+      holders_count: null,
+      chain_type: row.chain_type ?? null,
+      vault_id: row.vault_id ?? row.id,
+      contract_address: row.contract_address ?? null,
+      copy_value: copyValue,
+      explorer_url: null,
+      has_live_trades: false,
+      chart_kind: 'nav',
+      overview_fields: ['fdv', 'liquidity', 'mcap'],
+      swap,
+    };
+  }
+
+  private toMarketTokenDetail(
+    item: Record<string, any>,
+    source: Exclude<TokenSource, 'vault'>,
+    fallbackId: string
+  ): TokenDetail {
+    const id = String(item.id || item.address || fallbackId);
+    const copyValue = source === 'cardano' ? id : String(item.address || id);
+    const swap = this.buildMarketSwap(source, copyValue);
+    return {
+      id,
+      source,
+      name: item.name ?? null,
+      symbol: item.symbol ?? null,
+      image: item.image ?? item.icon_url ?? null,
+      price_usd: item.price_usd ?? null,
+      price_eth: item.price_eth ?? null,
+      price_ada: item.price_ada ?? null,
+      market_cap: item.market_cap ?? null,
+      market_cap_eth: item.market_cap_eth ?? null,
+      market_cap_ada: item.market_cap_ada ?? null,
+      fdv: item.fdv ?? null,
+      fdv_eth: item.fdv_eth ?? null,
+      fdv_ada: item.fdv_ada ?? null,
+      volume_24h: item.volume_24h ?? null,
+      volume_24h_eth: item.volume_24h_eth ?? null,
+      volume_24h_ada: item.volume_24h_ada ?? null,
+      liquidity_usd: item.liquidity_usd ?? null,
+      liquidity_eth: item.liquidity_eth ?? null,
+      liquidity_ada: item.liquidity_ada ?? null,
+      change_24h: item.change_24h ?? null,
+      high_24h: item.high_24h ?? null,
+      high_24h_eth: item.high_24h_eth ?? null,
+      high_24h_ada: item.high_24h_ada ?? null,
+      low_24h: item.low_24h ?? null,
+      low_24h_eth: item.low_24h_eth ?? null,
+      low_24h_ada: item.low_24h_ada ?? null,
+      holders_count: item.holders_count ?? null,
+      chain_type: source === 'robinhood' ? 'robinhood' : source === 'cardano' ? 'cardano' : null,
+      vault_id: null,
+      contract_address: item.address ?? item.contract_address ?? null,
+      copy_value: copyValue,
+      explorer_url: this.buildExplorerUrl(source, copyValue),
+      has_live_trades: source === 'robinhood',
+      chart_kind: 'usd',
+      overview_fields: this.overviewFieldsFor(source),
+      swap,
+    };
+  }
+
+  private overviewFieldsFor(source: Exclude<TokenSource, 'vault'>): TokenOverviewField[] {
+    if (source === 'robinhood') {
+      return ['mcap', 'fdv', 'liquidity', 'holders', 'volume'];
+    }
+    return ['mcap', 'fdv', 'high', 'low', 'volume'];
+  }
+
+  private buildExplorerUrl(source: Exclude<TokenSource, 'vault'>, id: string): string | null {
+    if (!id) return null;
+    if (source === 'robinhood') return `https://dexscreener.com/robinhood/${id}`;
+    if (source === 'cardano') return `https://cardanoscan.io/token/${id}`;
+    return `https://www.coingecko.com/en/coins/${id}`;
+  }
+
+  private buildMarketSwap(source: Exclude<TokenSource, 'vault'>, copyValue: string): TokenSwap | null {
+    if (!copyValue) return null;
+    if (source === 'robinhood') {
+      return { kind: 'uniswap', token: copyValue };
+    }
+    if (source === 'cardano') {
+      return { kind: 'dexhunter', token: copyValue };
+    }
+    return null;
+  }
+
+  private buildVaultCopyValue(row: {
+    chain_type?: string | null;
+    contract_address?: string | null;
+    script_hash?: string | null;
+    asset_vault_name?: string | null;
+    vault_id?: string | null;
+    id?: string | null;
+  }): string {
+    const fallback = row.vault_id || row.id || '';
+    if (row.chain_type === 'robinhood') {
+      return row.contract_address || fallback;
+    }
+    const policyId = row.script_hash || '';
+    const assetName = row.asset_vault_name || '';
+    if (!policyId && !assetName) return fallback;
+    if (assetName && policyId && assetName.startsWith(policyId)) return assetName;
+    return `${policyId}${assetName}`;
+  }
+
+  private buildVaultSwap(
+    row: {
+      chain_type?: string | null;
+      contract_address?: string | null;
+      has_active_lp?: boolean;
+    },
+    copyValue: string
+  ): TokenSwap | null {
+    if (row.chain_type === 'robinhood' && row.contract_address) {
+      return { kind: 'uniswap', token: row.contract_address };
+    }
+    if (row.chain_type === 'cardano' && row.has_active_lp && copyValue) {
+      return { kind: 'dexhunter', token: copyValue };
+    }
+    return null;
+  }
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const INTERVAL_TO_DAYS: Record<TokenChartInterval, number> = {
+  '1h': 1,
+  '1d': 1,
+  '1w': 7,
+  '1m': 30,
+  '3m': 90,
+  '1y': 365,
+};
+
+const VAULT_OHLCV_INTERVAL: Record<TokenChartInterval, string> = {
+  '1h': '1h',
+  '1d': '1d',
+  '1w': '1w',
+  '1m': '1d',
+  '3m': '1d',
+  '1y': '1w',
+};

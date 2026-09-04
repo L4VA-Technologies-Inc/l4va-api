@@ -95,6 +95,13 @@ export class MarketService implements OnModuleInit {
     });
   }
 
+  /** Single vault token in the same shape as the Tokens table, including swap/copy identity. */
+  async getVaultTokenById(id: string) {
+    const rawItem = await this.getRawMarketByVaultIdWithRelations(id);
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
+    return this.mapVaultMarketToTokenRow(rawItem, adaPrice, ethPrice);
+  }
+
   async getMarkets(query: GetMarketsDto): Promise<GetMarketsResponse> {
     const { page = 1, limit = 10 } = query;
     const adaPrice = await this.priceService.getAdaPrice();
@@ -509,6 +516,9 @@ export class MarketService implements OnModuleInit {
       asset_class: 'vault_token' as const,
       chain_type: mapped.chain_type,
       contract_address: mapped.contract_address,
+      script_hash: mapped.script_hash ?? null,
+      asset_vault_name: mapped.asset_vault_name ?? null,
+      has_active_lp: Boolean(item.vault?.has_active_lp),
     };
   }
 
