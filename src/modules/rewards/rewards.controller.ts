@@ -329,6 +329,25 @@ export class RewardsController {
     return { cancelled: result.success, message: result.message };
   }
 
+  /**
+   * POST /rewards/me/claims/evm
+   * Robinhood Chain claim. Fully server-side: reserve + treasury ERC-20 transfer.
+   * Unlike Cardano, the user does not sign a transaction.
+   */
+  @UseGuards(AuthGuard)
+  @Post('me/claims/evm')
+  async claimEvmRewards(
+    @Request() req: AuthRequest,
+    @Body()
+    body: {
+      epochIds?: string[];
+      claimImmediate?: boolean;
+      claimVested?: boolean;
+    }
+  ): Promise<SubmitClaimResponseDto> {
+    return this.rewardClaimProxy.claimEvm(req.user.address, body);
+  }
+
   // ============================================================================
   // Vesting Endpoints (proxied to l4va-rewards)
   // ============================================================================

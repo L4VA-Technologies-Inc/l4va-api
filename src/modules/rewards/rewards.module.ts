@@ -19,6 +19,7 @@ import { Vault } from '@/database/vault.entity';
  * - RewardClaimProxy: proxies operations to l4va-rewards
  *   - prepareClaim: single call to l4va-rewards /prepare (reserve + build tx)
  *   - submitClaim: single call to l4va-rewards /submit (assemble + submit + confirm)
+ *   - claimEvm: single call to l4va-rewards /claim-evm (reserve + treasury ERC-20 transfer)
  *
  * Cardano tx building now lives entirely in l4va-rewards (ClaimTxBuilderService).
  */
