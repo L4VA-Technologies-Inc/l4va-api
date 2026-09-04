@@ -84,7 +84,7 @@ export class L4vaRewardsService {
     // L4VA Token Config
     this.L4VA_POLICY_ID = this.configService.get<string>('L4VA_POLICY_ID');
     this.L4VA_ASSET_NAME = this.configService.get<string>('L4VA_ASSET_NAME');
-    this.L4VA_DECIMALS = this.configService.get<number>('L4VA_DECIMALS') || 3;
+    this.L4VA_DECIMALS = this.configService.get<number>('L4VA_DECIMALS') || 6;
     this.L4VA_MONTHLY_BUDGET = this.configService.get<number>('L4VA_MONTHLY_BUDGET');
 
     // Admin Config (L4VA tokens distributed from admin wallet)

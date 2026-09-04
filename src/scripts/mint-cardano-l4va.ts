@@ -18,6 +18,15 @@
 import * as readline from 'readline';
 
 import type { Assets, Native, PolicyId, Script } from '@lucid-evolution/core-types';
+// L4VA token spec (Cardano):
+//   Token Name        : L4VA
+//   Symbol / Ticker   : L4VA
+//   Short Description  : The protocol token powering programmable capital markets.
+//   Decimals          : 6
+//   Category          : Protocol / Capital Markets Infrastructure
+//   Website           : https://l4va.com
+//   App               : https://app.l4va.org
+//   Max Supply        : 100,000,000 L4VA
 import { fromText } from '@lucid-evolution/core-utils';
 import { Lucid, Blockfrost } from '@lucid-evolution/lucid';
 import { getAddressDetails, mintingPolicyToId, scriptFromNative } from '@lucid-evolution/utils';
@@ -44,8 +53,13 @@ if (!BLOCKFROST_PROJECT_ID) throw new Error('BLOCKFROST_PROJECT_ID not set');
 if (!ADMIN_ADDRESS) throw new Error('ADMIN_ADDRESS not set');
 
 const TOKEN_NAME = 'L4VA';
-// 100,000,000 tokens × 10^3 (3 decimals) = 100_000_000_000 base units
-const TOTAL_SUPPLY = 100_000_000_000n;
+const TICKER = 'L4VA';
+const DESCRIPTION = 'The protocol token powering programmable capital markets.';
+const DECIMALS = 6;
+const WEBSITE = 'https://l4va.com';
+const MAX_SUPPLY_TOKENS = 100_000_000n;
+// 100,000,000 tokens × 10^6 (6 decimals) base units
+const TOTAL_SUPPLY = MAX_SUPPLY_TOKENS * 10n ** BigInt(DECIMALS);
 
 async function main() {
   const adminSKey = process.env.ADMIN_S_KEY || (await promptSecret('ADMIN_S_KEY: '));
@@ -78,6 +92,7 @@ async function main() {
   console.log('\n--- Policy info ---');
   console.log('Policy ID :', policyId);
   console.log('Asset ID  :', assetId);
+  console.log('Decimals  :', DECIMALS);
   console.log('Supply    :', TOTAL_SUPPLY.toString(), 'base units (= 100,000,000 L4VA)');
 
   const assets: Assets = { [assetId]: TOTAL_SUPPLY };
@@ -102,6 +117,23 @@ async function main() {
   console.log('Lock slot :', '(none — sig-only policy, burn always possible)');
   console.log('\nSave policyId + tokenNameHex — they identify L4VA on Cardano forever.');
   console.log('Move ADMIN_S_KEY to cold storage now. Burns remain possible via burn-cardano-l4va.ts.');
+
+  // CIP-26 Cardano Token Registry entry — submit as a PR to
+  // https://github.com/cardano-foundation/cardano-token-registry
+  // (fields requiring signatures — name/description/ticker/decimals — must be
+  // signed with the policy key via the `token-metadata-creator` tool).
+  const registryEntry = {
+    subject: assetId,
+    policy: policy.script,
+    name: { value: TOKEN_NAME },
+    description: { value: DESCRIPTION },
+    ticker: { value: TICKER },
+    decimals: { value: DECIMALS },
+    url: { value: WEBSITE },
+    logo: { value: '<base64-encoded square transparent PNG of the official L4VA mark>' },
+  };
+  console.log('\n--- CIP-26 token registry entry (draft) ---');
+  console.log(JSON.stringify(registryEntry, null, 2));
 }
 
 main().catch(err => {

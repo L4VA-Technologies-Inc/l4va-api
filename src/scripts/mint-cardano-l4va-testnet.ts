@@ -23,7 +23,9 @@ if (!ADMIN_ADDRESS) throw new Error('ADMIN_ADDRESS not set');
 if (!ADMIN_S_KEY) throw new Error('ADMIN_S_KEY not set');
 
 const TOKEN_NAME = 'L4VA';
-const TOTAL_SUPPLY = 100_000_000_000n;
+const DECIMALS = 6;
+// 100,000,000 tokens × 10^6 (6 decimals) base units
+const TOTAL_SUPPLY = 100_000_000n * 10n ** BigInt(DECIMALS);
 
 async function main() {
   const lucid = await Lucid(new Blockfrost(BLOCKFROST_URL, BLOCKFROST_PROJECT_ID), 'Preprod');
@@ -54,6 +56,7 @@ async function main() {
   console.log('\n--- Policy info ---');
   console.log('Policy ID :', policyId);
   console.log('Asset ID  :', assetId);
+  console.log('Decimals  :', DECIMALS);
   console.log('Supply    :', TOTAL_SUPPLY.toString(), 'base units (= 100,000,000 L4VA)');
 
   const assets: Assets = { [assetId]: TOTAL_SUPPLY };

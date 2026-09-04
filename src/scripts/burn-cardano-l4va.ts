@@ -73,7 +73,7 @@ async function main() {
     throw new Error(`Requested ${amountToBurn} but wallet only has ${totalL4va} base units`);
   }
 
-  const humanAmount = Number(amountToBurn) / 1_000; // 3 decimals
+  const humanAmount = Number(amountToBurn) / 1e6; // 6 decimals
   console.log(`\nL4VA in wallet : ${totalL4va} base units`);
   console.log(`Burning (true) : ${amountToBurn} base units (= ${humanAmount.toLocaleString()} L4VA)`);
 
