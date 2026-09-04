@@ -1,23 +1,31 @@
 /**
  * One-time script: mint 100,000,000 L4VA on Cardano mainnet.
  *
- * Policy: sig-only native script — only the ADMIN key can mint or burn.
- * Supply is fixed at 100 M by organizational commitment; the key goes into cold
- * storage after minting. Burns remain possible forever via burn-cardano-l4va.ts.
+ * Policy: TIME-LOCKED native script — `all [sig <admin>, before <lockSlot>]`.
+ * The admin key can mint until `lockSlot`; after it the script can never
+ * validate again, so supply is fixed by the ledger rather than by promise.
+ * See src/scripts/cardano-l4va-policy.ts for the full rationale.
+ *
+ * Decided 04.09.2026 (Rob: "Ok then prob fixed supply on cardano").
+ *
+ * NOTE: locking prevents burning too — Cardano native scripts cannot tell a
+ * burn from a mint. burn-cardano-l4va.ts only works BEFORE the lock passes.
  *
  * Usage:
  *   BLOCKFROST_PROJECT_ID=mainnetXXX \
  *   ADMIN_ADDRESS=addr1... \
+ *   L4VA_POLICY_LOCK_HOURS=24 \   # optional, default 24
  *   npx ts-node src/scripts/mint-cardano-l4va.ts
  *
  * ADMIN_S_KEY will be prompted securely (no echo) if not set in the environment.
  *
- * ONLY MINT ONCE. Move key to cold storage immediately after.
+ * ONLY MINT ONCE. Record the printed lock slot — the policy ID depends on it,
+ * so every later script must use the same value or it derives a different asset.
  */
 
 import * as readline from 'readline';
 
-import type { Assets, Native, PolicyId, Script } from '@lucid-evolution/core-types';
+import type { Assets } from '@lucid-evolution/core-types';
 // L4VA token spec (Cardano):
 //   Token Name        : L4VA
 //   Symbol / Ticker   : L4VA
@@ -27,9 +35,18 @@ import type { Assets, Native, PolicyId, Script } from '@lucid-evolution/core-typ
 //   Website           : https://l4va.com
 //   App               : https://app.l4va.org
 //   Max Supply        : 100,000,000 L4VA
-import { fromText } from '@lucid-evolution/core-utils';
 import { Lucid, Blockfrost } from '@lucid-evolution/lucid';
-import { getAddressDetails, mintingPolicyToId, scriptFromNative } from '@lucid-evolution/utils';
+import { unixTimeToSlot } from '@lucid-evolution/utils';
+
+import {
+  DECIMALS,
+  MAX_SUPPLY_TOKENS,
+  TICKER,
+  TOKEN_NAME,
+  TOTAL_SUPPLY,
+  assertSupplyFitsLedger,
+  buildL4VAPolicy,
+} from './cardano-l4va-policy';
 
 function promptSecret(prompt: string): Promise<string> {
   return new Promise(resolve => {
@@ -52,14 +69,11 @@ const ADMIN_ADDRESS = process.env.ADMIN_ADDRESS;
 if (!BLOCKFROST_PROJECT_ID) throw new Error('BLOCKFROST_PROJECT_ID not set');
 if (!ADMIN_ADDRESS) throw new Error('ADMIN_ADDRESS not set');
 
-const TOKEN_NAME = 'L4VA';
-const TICKER = 'L4VA';
 const DESCRIPTION = 'The protocol token powering programmable capital markets.';
-const DECIMALS = 6;
 const WEBSITE = 'https://l4va.com';
-const MAX_SUPPLY_TOKENS = 100_000_000n;
-// 100,000,000 tokens × 10^6 (6 decimals) base units
-const TOTAL_SUPPLY = MAX_SUPPLY_TOKENS * 10n ** BigInt(DECIMALS);
+
+/** Window in which the mint must complete; the policy locks forever after it. */
+const LOCK_HOURS = Number(process.env.L4VA_POLICY_LOCK_HOURS ?? 24);
 
 async function main() {
   const adminSKey = process.env.ADMIN_S_KEY || (await promptSecret('ADMIN_S_KEY: '));
@@ -75,33 +89,41 @@ async function main() {
   console.log('UTXOs:', utxos.length);
   if (utxos.length === 0) throw new Error('Wallet has no UTXOs — fund it with ADA first');
 
-  const { paymentCredential } = getAddressDetails(address);
-  if (!paymentCredential) throw new Error('Cannot derive payment credential from address');
+  if (!Number.isFinite(LOCK_HOURS) || LOCK_HOURS <= 0) {
+    throw new Error(`L4VA_POLICY_LOCK_HOURS must be positive (got ${LOCK_HOURS})`);
+  }
 
-  // Sig-only: only this key can mint or burn. Move key to cold storage after minting.
-  const nativeScript: Native = {
-    type: 'sig',
-    keyHash: paymentCredential.hash,
-  };
+  // The policy locks at this slot. Baked into the script, so it fixes the
+  // policy ID — record the printed value.
+  const lockUnixTime = Date.now() + LOCK_HOURS * 60 * 60 * 1000;
+  const lockSlot = unixTimeToSlot('Mainnet', lockUnixTime);
 
-  const policy: Script = scriptFromNative(nativeScript);
-  const policyId: PolicyId = mintingPolicyToId(policy);
-  const tokenNameHex = fromText(TOKEN_NAME);
-  const assetId = `${policyId}${tokenNameHex}`;
+  const { policy, policyId, assetId } = buildL4VAPolicy(address, lockSlot);
+
+  // Guard against ever re-introducing the int64 overflow that 18 decimals caused.
+  assertSupplyFitsLedger(TOTAL_SUPPLY);
 
   console.log('\n--- Policy info ---');
   console.log('Policy ID :', policyId);
   console.log('Asset ID  :', assetId);
   console.log('Decimals  :', DECIMALS);
-  console.log('Supply    :', TOTAL_SUPPLY.toString(), 'base units (= 100,000,000 L4VA)');
+  console.log('Supply    :', TOTAL_SUPPLY.toString(), `base units (= ${MAX_SUPPLY_TOKENS} L4VA)`);
+  console.log('Lock slot :', lockSlot, `(${new Date(lockUnixTime).toISOString()})`);
+  console.log('           after this slot the policy can NEVER mint or burn again');
 
   const assets: Assets = { [assetId]: TOTAL_SUPPLY };
+
+  // A time-locked script requires an explicit validity upper bound, and it must
+  // end before lockSlot or the transaction cannot satisfy the policy.
+  const validTo = Date.now() + 30 * 60 * 1000; // 30 minutes
+  if (validTo >= lockUnixTime) throw new Error('Lock window too short to submit the mint');
 
   const txSignBuilder = await lucid
     .newTx()
     .mintAssets(assets)
     .attach.MintingPolicy(policy)
     .addSigner(address)
+    .validTo(validTo)
     .complete();
 
   console.log('\nSigning...');
@@ -114,9 +136,13 @@ async function main() {
   console.log('TX hash   :', txHash);
   console.log('Policy ID :', policyId);
   console.log('Asset ID  :', assetId);
-  console.log('Lock slot :', '(none — sig-only policy, burn always possible)');
+  console.log('Lock slot :', lockSlot);
   console.log('\nSave policyId + tokenNameHex — they identify L4VA on Cardano forever.');
-  console.log('Move ADMIN_S_KEY to cold storage now. Burns remain possible via burn-cardano-l4va.ts.');
+  console.log(`Save the lock slot too: export L4VA_POLICY_LOCK_SLOT=${lockSlot}`);
+  console.log('The policy ID is derived from it; without it later scripts derive a DIFFERENT asset.');
+  console.log('');
+  console.log(`Supply becomes permanently fixed at ${new Date(lockUnixTime).toISOString()}.`);
+  console.log('Until then the admin key can still mint or burn — move it to cold storage now.');
 
   // CIP-26 Cardano Token Registry entry — submit as a PR to
   // https://github.com/cardano-foundation/cardano-token-registry

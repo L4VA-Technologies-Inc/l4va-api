@@ -1,22 +1,34 @@
 /**
  * True burn of L4VA tokens on Cardano — mints a negative quantity, permanently
- * reducing on-chain supply. Requires the ADMIN_S_KEY that controls the sig-only
- * minting policy used during initial mint.
+ * reducing on-chain supply.
+ *
+ * ⚠️  ONLY WORKS BEFORE THE POLICY LOCK SLOT.
+ *
+ * The policy is `all [sig <admin>, before <lockSlot>]`. Cardano native scripts
+ * cannot distinguish a burn from a mint — a burn is a negative mint — so the
+ * time-lock that fixes supply also ends burning. After `lockSlot` this script
+ * can never succeed again, by design.
+ *
+ * Requires L4VA_POLICY_LOCK_SLOT: the lock slot is part of the script, so the
+ * policy ID depends on it. Use the exact value the mint script printed.
  *
  * Usage:
  *   BLOCKFROST_PROJECT_ID=mainnetXXX \
  *   ADMIN_ADDRESS=addr1... \
  *   ADMIN_S_KEY=ed25519e_sk1... \
  *   L4VA_ASSET_ID=<policyId><tokenNameHex> \
+ *   L4VA_POLICY_LOCK_SLOT=<slot printed by the mint script> \
  *   BURN_AMOUNT=1000000000 \       # base units (optional — omit to burn all)
  *   npx ts-node src/scripts/burn-cardano-l4va.ts
  *
  * For preprod set NETWORK=Preprod and use preprod Blockfrost project ID.
  */
 
-import type { Native, Script, UTxO } from '@lucid-evolution/core-types';
+import type { UTxO } from '@lucid-evolution/core-types';
 import { Lucid, Blockfrost } from '@lucid-evolution/lucid';
-import { getAddressDetails, mintingPolicyToId, scriptFromNative } from '@lucid-evolution/utils';
+import { slotToUnixTime } from '@lucid-evolution/utils';
+
+import { buildL4VAPolicy, requireLockSlot } from './cardano-l4va-policy';
 
 const NETWORK = (process.env.NETWORK ?? 'Mainnet') as 'Mainnet' | 'Preprod';
 const BLOCKFROST_URL =
@@ -48,13 +60,20 @@ async function main() {
   console.log(`UTXOs   : ${utxos.length}`);
   if (utxos.length === 0) throw new Error('Wallet has no UTXOs');
 
-  // Reconstruct the sig-only policy from the minting address
-  const { paymentCredential } = getAddressDetails(ADMIN_ADDRESS);
-  if (!paymentCredential) throw new Error('Cannot derive payment credential from address');
+  // Reconstruct the identical time-locked policy. The lock slot is part of the
+  // script, so a wrong value silently derives a different (wrong) policy ID.
+  const lockSlot = requireLockSlot();
+  const { policy, policyId } = buildL4VAPolicy(ADMIN_ADDRESS, lockSlot);
 
-  const nativeScript: Native = { type: 'sig', keyHash: paymentCredential.hash };
-  const policy: Script = scriptFromNative(nativeScript);
-  const policyId = mintingPolicyToId(policy);
+  const lockUnixTime = slotToUnixTime(NETWORK, lockSlot);
+  if (Date.now() >= lockUnixTime) {
+    throw new Error(
+      `Policy locked at slot ${lockSlot} (${new Date(lockUnixTime).toISOString()}). ` +
+        'Supply is now permanently fixed — burning is no longer possible, by design. ' +
+        'See src/scripts/cardano-l4va-policy.ts.'
+    );
+  }
+  console.log(`Lock slot: ${lockSlot} — burns possible until ${new Date(lockUnixTime).toISOString()}`);
 
   // Sanity check: the derived policyId must match the L4VA_ASSET_ID prefix
   if (!L4VA_ASSET_ID.startsWith(policyId)) {
@@ -77,12 +96,17 @@ async function main() {
   console.log(`\nL4VA in wallet : ${totalL4va} base units`);
   console.log(`Burning (true) : ${amountToBurn} base units (= ${humanAmount.toLocaleString()} L4VA)`);
 
+  // The time-locked policy requires a validity bound ending before the lock.
+  const validTo = Math.min(Date.now() + 30 * 60 * 1000, lockUnixTime - 60 * 1000);
+  if (validTo <= Date.now()) throw new Error('Too close to the lock slot to submit a burn');
+
   // Negative mint = true on-chain burn, permanently reduces totalSupply
   const txSignBuilder = await lucid
     .newTx()
     .mintAssets({ [L4VA_ASSET_ID]: -amountToBurn })
     .attach.MintingPolicy(policy)
     .addSigner(ADMIN_ADDRESS)
+    .validTo(validTo)
     .complete();
 
   console.log('\nSigning...');
