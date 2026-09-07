@@ -252,7 +252,6 @@ export class TapToolsClient {
       if (cachedRaw) {
         try {
           const parsed = JSON.parse(cachedRaw);
-          this.logger.debug(`Redis cache hit for pools: ${tokenUnit.slice(0, 10)}...`);
           return parsed;
         } catch (error) {
           // Invalid JSON in cache - delete it and treat as cache miss

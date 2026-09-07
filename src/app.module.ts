@@ -41,6 +41,7 @@ import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
+import { PresaleModule } from '@/modules/presale/presale.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { StakeModule } from '@/modules/stake/stake.module';
@@ -118,6 +119,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     WayUpModule,
     EventEmitterModule.forRoot(),
     PresetsModule,
+    PresaleModule,
     OgModule,
     RewardsModule,
     StakeModule,
