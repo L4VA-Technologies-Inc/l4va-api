@@ -358,6 +358,7 @@ export class GovernanceExecutionService {
       address: proposal.creator?.address,
       vaultId: proposal.vaultId,
       vaultName: proposal.vault?.name,
+      proposalId: proposal.id,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
       tokenHolderIds,
@@ -420,6 +421,11 @@ export class GovernanceExecutionService {
         totalVotingPower > BigInt(0) ? totalVotingPower : undefined
       );
       const isSuccessful = voteResult.isSuccessful;
+      const isTied =
+        !isSuccessful &&
+        voteResult.yesVotes === BigInt(0) &&
+        voteResult.noVotes === BigInt(0) &&
+        voteResult.abstainVotes > BigInt(0);
 
       const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
         proposal.snapshot?.addressBalances
@@ -438,14 +444,17 @@ export class GovernanceExecutionService {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
+          proposalId: proposal.id,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
           tokenHolderIds,
         });
 
-        const rejectionReason = !voteResult.meetsParticipationThreshold
-          ? `participation ${voteResult.participationPercent.toFixed(2)}% < required ${participationThreshold}%`
-          : `yes votes ${voteResult.yesVotePercent.toFixed(2)}% < threshold ${executionThreshold}%`;
+        const rejectionReason = isTied
+          ? 'all votes abstained (tie)'
+          : !voteResult.meetsParticipationThreshold
+            ? `participation ${voteResult.participationPercent.toFixed(2)}% < required ${participationThreshold}%`
+            : `yes votes ${voteResult.yesVotePercent.toFixed(2)}% < threshold ${executionThreshold}%`;
 
         this.logger.log(`Proposal ${proposal.id}: REJECTED (${rejectionReason})`);
         return;
@@ -541,6 +550,7 @@ export class GovernanceExecutionService {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
+          proposalId: proposal.id,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
           tokenHolderIds,
@@ -1576,6 +1586,7 @@ export class GovernanceExecutionService {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
+          proposalId: proposal.id,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
           tokenHolderIds: [],
@@ -2238,6 +2249,7 @@ export class GovernanceExecutionService {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
+          proposalId: proposal.id,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
           tokenHolderIds,
@@ -2669,6 +2681,7 @@ export class GovernanceExecutionService {
       address: proposal.vault?.owner?.address || null,
       vaultId: proposal.vaultId,
       vaultName: proposal.vault?.name || null,
+      proposalId: proposal.id,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
       tokenHolderIds: [],

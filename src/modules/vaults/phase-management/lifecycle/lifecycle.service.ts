@@ -2591,6 +2591,7 @@ export class LifecycleService {
         .andWhere(`contribution_phase_start + (contribution_duration * interval '1 millisecond') <= :now`, { now })
         .andWhere('evm_root_committed_at IS NULL')
         .andWhere('evm_cancel_cycle_tx_hash IS NULL')
+        .andWhere('CAST(tokens_for_acquires AS numeric) > 0')
         .execute();
       if (result.affected && result.affected > 0) {
         this.logger.log(`EVM label flip: ${result.affected} vault(s) contribution → acquire`);
