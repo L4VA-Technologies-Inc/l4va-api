@@ -96,20 +96,11 @@ export class MetadataRegistryApiService {
     for (const pr of pendingPRs) {
       const updatedPR = await this.checkPRStatus(pr);
 
-      // If PR was rejected or failed, automatically retry
+      // A rejected PR is a deliberate decision by the registry maintainers - do not
+      // automatically re-submit it, otherwise we spam the registry with new PRs that
+      // get rejected again on every cron run.
       if (updatedPR.status === TokenRegistryStatus.REJECTED) {
-        this.logger.log(`PR #${updatedPR.pr_number} is ${updatedPR.status}, attempting retry...`);
-
-        // Wait a bit before retrying to avoid rate limits
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        const retryResult = await this.retryFailedPR(updatedPR);
-
-        if (retryResult.success) {
-          this.logger.log(`Successfully retried PR #${updatedPR.pr_number}. New PR: ${retryResult.prUrl}`);
-        } else {
-          this.logger.warn(`Failed to retry PR #${updatedPR.pr_number}: ${retryResult.message}`);
-        }
+        this.logger.log(`PR #${updatedPR.pr_number} for vault ${updatedPR.vault_id} was rejected - not retrying`);
       }
     }
   }
