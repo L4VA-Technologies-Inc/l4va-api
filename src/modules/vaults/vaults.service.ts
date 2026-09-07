@@ -452,6 +452,12 @@ export class VaultsService {
       // ========================================================================
       let evmVaultId: `0x${string}` | undefined;
 
+      const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
+      const contributionDuration = data.isAcquireOnly ? null : data.contributionDuration;
+      const acquireWindowDuration = skipsAcquirePhase ? null : data.acquireWindowDuration;
+      const acquireOpenWindowTimeForDb = skipsAcquirePhase ? null : acquireOpenWindowTime;
+      const contributionOpenWindowTimeForDb = data.isAcquireOnly ? null : contributionOpenWindowTime;
+
       if (data.chainType === ChainType.robinhood) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
         evmVaultId = keccak256(
@@ -464,10 +470,10 @@ export class VaultsService {
           ftTokenDecimals: 18,
           minAcquireThreshold: minAcquireThresholdForDb,
           owner,
-          contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
-          acquireWindowDuration: data.acquireWindowDuration,
-          acquireOpenWindowTime,
-          contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
+          contributionDuration,
+          acquireWindowDuration,
+          acquireOpenWindowTime: acquireOpenWindowTimeForDb,
+          contributionOpenWindowTime: contributionOpenWindowTimeForDb,
           timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
           vaultStatus: VaultStatus.draft,
           chainType: ChainType.robinhood,
@@ -489,10 +495,10 @@ export class VaultsService {
           ...data,
           minAcquireThreshold: minAcquireThresholdForDb,
           owner,
-          contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
-          acquireWindowDuration: data.acquireWindowDuration,
-          acquireOpenWindowTime,
-          contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
+          contributionDuration,
+          acquireWindowDuration,
+          acquireOpenWindowTime: acquireOpenWindowTimeForDb,
+          contributionOpenWindowTime: contributionOpenWindowTimeForDb,
           timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
           vaultStatus: VaultStatus.created,
           vaultImage: vaultImg,
@@ -740,43 +746,47 @@ export class VaultsService {
           end: startTime + Number(finalVault.contribution_duration),
         };
 
-        // Calculate acquire window start time
-        let acquireStartTime: number;
-        if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-          acquireStartTime = assetWindow.end;
-        } else if (
-          finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
-          finalVault.acquire_open_window_time
-        ) {
-          // acquire_open_window_time is already in milliseconds due to @Transform in entity
-          const customTime = Number(finalVault.acquire_open_window_time);
-          const currentTime = new Date().getTime();
-          const timeDifference = customTime - currentTime;
+        if (Number(finalVault.tokens_for_acquires) === 0) {
+          acquireWindow = { start: assetWindow.end, end: assetWindow.end };
+        } else {
+          // Calculate acquire window start time
+          let acquireStartTime: number;
+          if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+            acquireStartTime = assetWindow.end;
+          } else if (
+            finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
+            finalVault.acquire_open_window_time
+          ) {
+            // acquire_open_window_time is already in milliseconds due to @Transform in entity
+            const customTime = Number(finalVault.acquire_open_window_time);
+            const currentTime = new Date().getTime();
+            const timeDifference = customTime - currentTime;
 
-          let adjustmentAmount = 1800000; // 30 minutes in milliseconds
+            let adjustmentAmount = 1800000; // 30 minutes in milliseconds
 
-          // If custom time is less than 30 minutes in the future, adjust the buffer
-          if (timeDifference < 1800000) {
-            if (timeDifference > 60000) {
-              // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
-              adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
-            } else if (timeDifference > 0) {
-              // Less than 1 minute - use minimal 10 second buffer
-              adjustmentAmount = 10000;
-            } else {
-              adjustmentAmount = 0;
+            // If custom time is less than 30 minutes in the future, adjust the buffer
+            if (timeDifference < 1800000) {
+              if (timeDifference > 60000) {
+                // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
+                adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+              } else if (timeDifference > 0) {
+                // Less than 1 minute - use minimal 10 second buffer
+                adjustmentAmount = 10000;
+              } else {
+                adjustmentAmount = 0;
+              }
             }
+
+            acquireStartTime = customTime - adjustmentAmount;
+          } else {
+            throw new BadRequestException('Invalid acquire window configuration');
           }
 
-          acquireStartTime = customTime - adjustmentAmount;
-        } else {
-          throw new BadRequestException('Invalid acquire window configuration');
+          acquireWindow = {
+            start: acquireStartTime,
+            end: acquireStartTime + Number(finalVault.acquire_window_duration),
+          };
         }
-
-        acquireWindow = {
-          start: acquireStartTime,
-          end: acquireStartTime + Number(finalVault.acquire_window_duration),
-        };
       }
 
       const { presignedTx, contractAddress, vaultAssetName, scriptHash, applyParamsResult, transactionId } =

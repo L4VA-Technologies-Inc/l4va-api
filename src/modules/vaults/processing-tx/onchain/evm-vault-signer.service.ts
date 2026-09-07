@@ -299,11 +299,15 @@ export class EvmVaultSignerService {
       ? now + BigInt(Math.floor(Number(data.contributionDuration) / 1000))
       : now + oneDay * 7n;
 
-    // Acquire window — default 7 days from now if not specified
-    const acquireWindowStart = now;
-    const acquireWindowEnd = data.acquireWindowDuration
-      ? now + BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000))
-      : now + oneDay * 7n;
+    // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
+    // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
+    const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
+    const acquireWindowStart = skipsAcquirePhase ? 0n : now;
+    const acquireWindowEnd = skipsAcquirePhase
+      ? 0n
+      : data.acquireWindowDuration
+        ? now + BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000))
+        : now + oneDay * 7n;
 
     return {
       vaultId: evmVaultId,
