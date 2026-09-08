@@ -2,10 +2,15 @@ import { MarketOhlcvSeries } from './market-ohlcv.dto';
 
 import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { MarketTokenKind, MarketType } from '@/types/market.types';
 
 export interface MarketItem {
   id: string;
-  vault_id: string;
+  vault_id: string | null;
+  type: MarketType;
+  token_kind: MarketTokenKind | null;
+  name: string | null;
+  contract_address: string | null;
   supply?: number;
   circSupply?: number;
   mcap?: number;
@@ -26,6 +31,9 @@ export interface MarketItem {
   fdv_usd: number | null;
   tvl_ada: number | null;
   tvl_usd: number | null;
+  chain_type?: string | null;
+  script_hash?: string | null;
+  asset_vault_name?: string | null;
   vault_image: string | null;
   token_image: string | null;
   social_links: LinkEntity[];
@@ -46,7 +54,15 @@ export interface GetMarketsResponse {
  */
 export interface MarketItemWithOHLCV {
   id: string;
-  vault_id: string;
+  vault_id: string | null;
+  type: MarketType;
+  name?: string | null;
+  ticker?: string | null;
+  token_image?: string | null;
+  chain_type?: string | null;
+  contract_address?: string | null;
+  script_hash?: string | null;
+  asset_vault_name?: string | null;
   supply?: number;
   mcap?: number;
 

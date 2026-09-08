@@ -27,12 +27,10 @@
     "migration:show": "npm run typeorm migration:show -- -d src/config/typeorm.config.ts",
     "docs:generate": "npx @compodoc/compodoc -p tsconfig.json -d documentation",
     "docs:serve": "npx @compodoc/compodoc -p tsconfig.json -d documentation -s",
-    "generate-demo-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-demo-assets.ts",
-    "generate-robinhood-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-robinhood-assets.ts"
+    "generate-demo-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-demo-assets.ts"
   },
   "bin": {
-    "generate-demo-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-demo-assets.ts",
-    "generate-robinhood-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-robinhood-assets.ts"
+    "generate-demo-assets": "ts-node -r tsconfig-paths/register src/scripts/generate-demo-assets.ts"
   },
   "dependencies": {
     "@blaze-cardano/uplc": "^0.5.1",
