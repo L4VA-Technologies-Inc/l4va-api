@@ -15,9 +15,11 @@ import {
   TokenSwap,
 } from './dto/token-detail.dto';
 
+import { Market } from '@/database/market.entity';
 import { MarketService } from '@/modules/market/market.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
+import { MarketTokenKind } from '@/types/market.types';
 import { ChainType } from '@/types/vault.types';
 
 type SeedCoin = { id: string; symbol: string; name: string; image: string };
@@ -35,45 +37,10 @@ type CardanoSeed = {
   is_verified?: boolean;
 };
 
-type RhMemeSeed = {
-  address: string;
-  name: string | null;
-  symbol: string | null;
-  holders_count?: number;
-  icon_url?: string | null;
-  price_usd?: number | null;
-  volume_24h?: number | null;
-  liquidity_usd?: number | null;
-  price_change_24h?: number | null;
-  fdv?: number | null;
-  market_cap?: number | null;
-};
-
-type RhRwaSeed = {
-  id: string | null;
-  symbol: string | null;
-  name: string | null;
-  logo: string | null;
-  contract: string | null;
-};
-
-type RhNftSeed = {
-  address: string;
-  name: string | null;
-  symbol: string | null;
-  type?: string | null;
-  logo?: string | null;
-  holders_count?: number;
-  total_supply?: string | null;
-};
-
 @Injectable()
 export class TokensService {
   private readonly logger = new Logger(TokensService.name);
   private seed: SeedCoin[] | null = null;
-  private rhMemes: RhMemeSeed[] | null = null;
-  private rhRwas: RhRwaSeed[] | null = null;
-  private rhNfts: RhNftSeed[] | null = null;
   private mainnetBlockfrost: BlockFrostAPI | null = null;
 
   constructor(
@@ -123,24 +90,6 @@ export class TokensService {
   private loadCardanoSeed(): CardanoSeed[] {
     // Always re-read — seed is small and may be refreshed with images/metadata
     return this.loadJson<CardanoSeed[]>('cardano-memecoins.json');
-  }
-
-  private loadRhMemes(): RhMemeSeed[] {
-    if (this.rhMemes) return this.rhMemes;
-    this.rhMemes = this.loadJson<RhMemeSeed[]>('robinhood-memecoins.json');
-    return this.rhMemes;
-  }
-
-  private loadRhRwas(): RhRwaSeed[] {
-    if (this.rhRwas) return this.rhRwas;
-    this.rhRwas = this.loadJson<RhRwaSeed[]>('robinhood-rwas.json');
-    return this.rhRwas;
-  }
-
-  private loadRhNfts(): RhNftSeed[] {
-    if (this.rhNfts) return this.rhNfts;
-    this.rhNfts = this.loadJson<RhNftSeed[]>('robinhood-nfts.json');
-    return this.rhNfts;
   }
 
   private async getFxRates() {
@@ -535,54 +484,38 @@ export class TokensService {
     });
   }
 
-  async getRobinhoodMemecoins() {
-    const seed = this.loadRhMemes();
-    const [enriched, vaultTokens] = await Promise.all([
-      this.enrichRobinhoodTokens(
-        seed.map(t => ({
-          address: t.address,
-          name: t.name,
-          symbol: t.symbol,
-          image: t.icon_url,
-          holders_count: t.holders_count,
-          seed_price_usd: t.price_usd,
-          seed_volume_24h: t.volume_24h,
-          seed_liquidity_usd: t.liquidity_usd,
-          seed_change_24h: t.price_change_24h,
-          seed_fdv: t.fdv,
-          seed_market_cap: t.market_cap,
-        }))
-      ),
-      this.marketService.listVaultLpTokens(ChainType.robinhood),
-    ]);
-    return [...vaultTokens, ...enriched];
+  private marketToTokenSeed(market: Market) {
+    const toNum = (value: unknown): number | null => {
+      if (value == null || value === '') return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    return {
+      address: market.contract_address!,
+      name: market.name,
+      symbol: market.symbol,
+      image: market.image_url,
+      holders_count: market.holders_count ?? undefined,
+      seed_price_usd: toNum(market.price_usd),
+      seed_volume_24h: toNum(market.volume_24h),
+      seed_liquidity_usd: toNum(market.liquidity_usd),
+      seed_change_24h: toNum(market.price_change_24h),
+      seed_fdv: toNum(market.fdv),
+      seed_market_cap: toNum(market.mcap),
+    };
   }
 
-  async getRobinhoodRwas() {
-    const seed = this.loadRhRwas();
-    return this.enrichRobinhoodTokens(
-      seed
-        .filter(t => !!t.contract)
-        .map(t => ({
-          address: t.contract!,
-          name: t.name,
-          symbol: t.symbol,
-          image: t.logo,
-        }))
-    );
-  }
-
-  async getRobinhoodNfts() {
-    // NFTs: no DexScreener price — return seed as-is
-    return this.loadRhNfts().map(t => ({
-      id: t.address.toLowerCase(),
-      address: t.address.toLowerCase(),
-      symbol: t.symbol,
-      name: t.name,
-      image: t.logo,
-      holders_count: t.holders_count ?? null,
-      total_supply: t.total_supply ?? null,
-      type: t.type ?? null,
+  private mapRobinhoodNft(market: Market) {
+    return {
+      id: market.contract_address!.toLowerCase(),
+      address: market.contract_address!.toLowerCase(),
+      symbol: market.symbol,
+      name: market.name,
+      image: market.image_url,
+      holders_count: market.holders_count ?? null,
+      total_supply: market.totalSupply != null ? String(market.totalSupply) : null,
+      type: null,
       price_usd: null,
       market_cap: null,
       fdv: null,
@@ -594,7 +527,26 @@ export class TokensService {
       sparkline: [],
       source: 'robinhood' as const,
       asset_class: 'nft' as const,
-    }));
+    };
+  }
+
+  async getRobinhoodMemecoins() {
+    const seed = await this.marketService.listRobinhoodTokens(MarketTokenKind.memecoin);
+    const [enriched, vaultTokens] = await Promise.all([
+      this.enrichRobinhoodTokens(seed.filter(t => !!t.contract_address).map(t => this.marketToTokenSeed(t))),
+      this.marketService.listVaultLpTokens(ChainType.robinhood),
+    ]);
+    return [...vaultTokens, ...enriched];
+  }
+
+  async getRobinhoodRwas() {
+    const seed = await this.marketService.listRobinhoodTokens(MarketTokenKind.rwa);
+    return this.enrichRobinhoodTokens(seed.filter(t => !!t.contract_address).map(t => this.marketToTokenSeed(t)));
+  }
+
+  async getRobinhoodNfts() {
+    const seed = await this.marketService.listRobinhoodTokens(MarketTokenKind.nft);
+    return seed.filter(t => !!t.contract_address).map(t => this.mapRobinhoodNft(t));
   }
 
   async getRobinhoodToken(address: string) {
@@ -603,65 +555,17 @@ export class TokensService {
       throw new NotFoundException(`Robinhood token ${address} not found`);
     }
 
-    const meme = this.loadRhMemes().find(t => t.address.toLowerCase() === key);
-    if (meme) {
-      const [item] = await this.enrichRobinhoodTokens([
-        {
-          address: meme.address,
-          name: meme.name,
-          symbol: meme.symbol,
-          image: meme.icon_url,
-          holders_count: meme.holders_count,
-          seed_price_usd: meme.price_usd,
-          seed_volume_24h: meme.volume_24h,
-          seed_liquidity_usd: meme.liquidity_usd,
-          seed_change_24h: meme.price_change_24h,
-          seed_fdv: meme.fdv,
-          seed_market_cap: meme.market_cap,
-        },
-      ]);
-      return item;
+    const market = await this.marketService.findRobinhoodTokenByContract(key);
+    if (!market?.contract_address) {
+      throw new NotFoundException(`Robinhood token ${address} not found`);
     }
 
-    const rwa = this.loadRhRwas().find(t => t.contract?.toLowerCase() === key);
-    if (rwa?.contract) {
-      const [item] = await this.enrichRobinhoodTokens([
-        {
-          address: rwa.contract,
-          name: rwa.name,
-          symbol: rwa.symbol,
-          image: rwa.logo,
-        },
-      ]);
-      return item;
+    if (market.token_kind === MarketTokenKind.nft) {
+      return this.mapRobinhoodNft(market);
     }
 
-    const nft = this.loadRhNfts().find(t => t.address.toLowerCase() === key);
-    if (nft) {
-      return {
-        id: nft.address.toLowerCase(),
-        address: nft.address.toLowerCase(),
-        symbol: nft.symbol,
-        name: nft.name,
-        image: nft.logo,
-        holders_count: nft.holders_count ?? null,
-        total_supply: nft.total_supply ?? null,
-        type: nft.type ?? null,
-        price_usd: null,
-        market_cap: null,
-        fdv: null,
-        volume_24h: null,
-        liquidity_usd: null,
-        change_24h: null,
-        high_24h: null,
-        low_24h: null,
-        sparkline: [],
-        source: 'robinhood' as const,
-        asset_class: 'nft' as const,
-      };
-    }
-
-    throw new NotFoundException(`Robinhood token ${address} not found`);
+    const [item] = await this.enrichRobinhoodTokens([this.marketToTokenSeed(market)]);
+    return item;
   }
 
   async getRobinhoodTokenOhlc(address: string, days = 7) {

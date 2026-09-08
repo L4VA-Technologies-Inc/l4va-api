@@ -6,8 +6,8 @@ import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { transformImageToUrl } from '../../helpers';
 
 import { GetMarketsResponse, MarketItem, MarketItemWithOHLCV } from './dto/get-markets-response.dto';
-import { MarketOhlcvSeries } from './dto/market-ohlcv.dto';
 import { Currency, GetMarketsDto, MarketSortField, SortOrder } from './dto/get-markets.dto';
+import { MarketOhlcvSeries } from './dto/market-ohlcv.dto';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
@@ -15,7 +15,7 @@ import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.cl
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
-import { MarketType } from '@/types/market.types';
+import { MarketTokenKind, MarketType } from '@/types/market.types';
 import { ChainType, VAULT_STATUSES_WITH_VT_TOKENS } from '@/types/vault.types';
 
 @Injectable()
@@ -37,6 +37,25 @@ export class MarketService implements OnModuleInit {
 
   onModuleInit(): void {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
+
+  async listRobinhoodTokens(tokenKind: MarketTokenKind): Promise<Market[]> {
+    return this.marketRepository.find({
+      where: {
+        type: MarketType.robinhood_token,
+        token_kind: tokenKind,
+      },
+      order: { score: 'DESC' },
+    });
+  }
+
+  async findRobinhoodTokenByContract(address: string): Promise<Market | null> {
+    return this.marketRepository.findOne({
+      where: {
+        type: MarketType.robinhood_token,
+        contract_address: address.toLowerCase(),
+      },
+    });
   }
 
   /** Vault tokens for the public Tokens table. Mainnet requires a DEX LP; testnet uses our NAV. */
@@ -183,7 +202,8 @@ export class MarketService implements OnModuleInit {
     } = baseMarketData;
 
     const vault = rawMarket.vault;
-    const supplyValue = supply != null ? Number(supply) : vault?.ft_token_supply != null ? Number(vault.ft_token_supply) : null;
+    const supplyValue =
+      supply != null ? Number(supply) : vault?.ft_token_supply != null ? Number(vault.ft_token_supply) : null;
     const derivedPriceAda = this.deriveNavPriceAda(
       price_ada != null ? Number(price_ada) : null,
       fdv_ada,
@@ -196,8 +216,7 @@ export class MarketService implements OnModuleInit {
     }
 
     const resolvedPriceAda = derivedPriceAda ?? price_ada;
-    const resolvedPriceUsd =
-      resolvedPriceAda != null && adaPrice > 0 ? resolvedPriceAda * adaPrice : price_usd;
+    const resolvedPriceUsd = resolvedPriceAda != null && adaPrice > 0 ? resolvedPriceAda * adaPrice : price_usd;
 
     return {
       id,
@@ -439,7 +458,7 @@ export class MarketService implements OnModuleInit {
     // otherwise Postgres infers uuid and throws `function lower(uuid) does not exist` (HTTP 500).
     const item = await queryBuilder
       .where(
-        '(market.vault_id = :id OR market.id = :id OR LOWER(COALESCE(market.contract_address, \'\')) = LOWER(:contractId))',
+        "(market.vault_id = :id OR market.id = :id OR LOWER(COALESCE(market.contract_address, '')) = LOWER(:contractId))",
         { id, contractId: id }
       )
       .getOne();
