@@ -43,6 +43,17 @@ export interface SystemSettingsData {
   price_max_deviation_percent_ft: number;
   price_min_absolute_move_ada: number;
   price_min_asset_price_for_deviation_check_ada: number;
+  // EVM termination preflight (Robinhood). Operational policy only — contract
+  // solvency does not depend on these; see EvmTerminationPreflightService.
+  evm_termination_max_pool_vt_bps: number;
+  evm_termination_pool_data_max_age_seconds: number;
+  evm_termination_sweep_delay_days: number;
+  /**
+   * Waivers let the authority exclude an asset from the distribution and route
+   * it to the treasury at the deadline. The on-chain cap bounds the COUNT, not
+   * the VALUE, so this stays off until a dust/approval policy is defined.
+   */
+  evm_termination_allow_waivers: boolean;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -81,6 +92,13 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   price_min_absolute_move_ada: 0,
   // Keep this low so deviation checks apply to typical FT price feeds by default
   price_min_asset_price_for_deviation_check_ada: 0.1,
+  // 5% of VT supply sitting in pools. Above this, holders would be handed LP
+  // tokens whose VT side is dying, because LP removal is not implemented yet.
+  evm_termination_max_pool_vt_bps: 500,
+  evm_termination_pool_data_max_age_seconds: 300,
+  // Mirrors the contract's MIN_SWEEP_DELAY floor; the contract rejects less.
+  evm_termination_sweep_delay_days: 90,
+  evm_termination_allow_waivers: false,
   hidden_mainnet_vault_ids: ['00000000-0000-0000-0000-000000000000'],
   vault_creator_whitelist: [
     'addr1q9j4eqs7v5pz08fddkfng2kvj762jhkhnpen4shr5jtht3evu56kfxkaqdjl4he2d6nguzl489fsvwsnx5554fe4lsjqe0ygg5',
@@ -171,6 +189,22 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.protocol_enabled
       ? (this.settings.protocol_fee_per_asset ?? DEFAULT_SETTINGS.protocol_fee_per_asset)
       : 0;
+  }
+
+  get evmTerminationMaxPoolVtBps(): number {
+    return this.settings.evm_termination_max_pool_vt_bps;
+  }
+
+  get evmTerminationPoolDataMaxAgeSeconds(): number {
+    return this.settings.evm_termination_pool_data_max_age_seconds;
+  }
+
+  get evmTerminationSweepDelayDays(): number {
+    return this.settings.evm_termination_sweep_delay_days;
+  }
+
+  get evmTerminationAllowWaivers(): boolean {
+    return this.settings.evm_termination_allow_waivers;
   }
 
   get lpRecommendedMinLiquidity(): number {

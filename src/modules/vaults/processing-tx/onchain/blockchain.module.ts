@@ -23,6 +23,7 @@ import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
 import { EvmPositionService } from './evm-position.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
+import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
 import { EvmTerminationService } from './evm-termination.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
@@ -96,6 +97,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmOpenCycleService,
     EvmFeeWithdrawService,
     EvmPositionService,
+    EvmTerminationPreflightService,
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,
@@ -121,6 +123,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmOpenCycleService,
     EvmFeeWithdrawService,
     EvmPositionService,
+    EvmTerminationPreflightService,
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,

@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { SubmitTransactionDto } from '../../processing-tx/onchain/dto/transaction.dto';
+import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 
 import { TerminationStatusRes } from './dto/termination-claim.dto';
 import { TerminationService } from './termination.service';
@@ -13,7 +14,34 @@ import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
 @ApiTags('Termination')
 @Controller('termination')
 export class TerminationController {
-  constructor(private readonly terminationService: TerminationService) {}
+  constructor(
+    private readonly terminationService: TerminationService,
+    private readonly evmTerminationService: EvmTerminationService
+  ) {}
+
+  /**
+   * Live EVM termination state for a vault, read from the contract.
+   *
+   * `deadline` / `secondsRemaining` are the critical fields: once the claim
+   * window closes a holder can no longer redeem, and anything unclaimed is
+   * swept to the treasury. Clients must surface that prominently rather than
+   * treating it as a detail.
+   */
+  @Get('vaults/:vaultId/evm')
+  @UseGuards(OptionalAuthGuard)
+  @ApiOperation({
+    summary: 'Get EVM vault termination state',
+    description:
+      'On-chain redemption rates, per-asset ledger, and the claim deadline. Pass `holder` to include that ' +
+      "wallet's current payout preview and any deferred entitlement.",
+  })
+  @ApiResponse({ status: 200, description: 'EVM termination state' })
+  async getEvmTerminationState(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query('holder') holder?: string
+  ): Promise<unknown> {
+    return this.evmTerminationService.getEvmTerminationState(vaultId, holder as `0x${string}` | undefined);
+  }
 
   /**
    * Get termination status for a vault

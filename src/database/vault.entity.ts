@@ -916,5 +916,31 @@ export class Vault {
     claimsCreatedAt?: string;
     lastCheckedAt?: string;
     error?: string;
+    /**
+     * EVM (Robinhood) termination state. Separate sub-object because the EVM
+     * flow shares nothing with the Cardano one above: it is rate-based rather
+     * than LP-removal-based, and it has a hard claim deadline after which
+     * holders can no longer redeem.
+     */
+    evm?: {
+      /** claim_window_open → claim_window_closed → swept */
+      phase: string;
+      valuationHash: string;
+      vtSupply: string;
+      /** Unix seconds. Redemption and deferred claims stop here. */
+      terminationDeadline: string;
+      sweepDelaySeconds: string;
+      committedAt: string;
+      assets: Array<{ asset: string; rate: string; implied: string }>;
+      waived: string[];
+      deferredAssets?: string[];
+      sweptAssets?: string[];
+      preflight?: {
+        ok: boolean;
+        outcome: string;
+        poolVtBps: string;
+        blockers: string[];
+      } | null;
+    };
   };
 }

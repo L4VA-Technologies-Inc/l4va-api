@@ -157,6 +157,17 @@ export class EvmVaultEventReconciler {
             recordApplied(log.txHash, decoded.eventName);
             processed++;
             break;
+          case 'TerminationCommitted':
+          case 'Redeemed':
+          case 'RedemptionDeferred':
+          case 'DeferredClaimed':
+          case 'TerminationAssetDeferred':
+          case 'TerminationAssetResumed':
+          case 'TerminationRemainderSwept':
+            await this.handleTerminationEvent(vault, log, decoded.eventName, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
           default:
             skipped++;
         }
@@ -620,6 +631,82 @@ export class EvmVaultEventReconciler {
 
     await this.positionsRepository.save(position);
     this.logger.log(`PositionOpened: vault=${vault.id} positionId=${positionId} adapter=${adapter} tx=${log.txHash}`);
+  }
+
+  /**
+   * Termination-phase bookkeeping.
+   *
+   * These events do not drive any state machine — the contract is the source of
+   * truth and every figure is readable from it — so this only maintains
+   * `vault.termination_metadata.evm` for the UI and for operator visibility.
+   * The one thing worth surfacing loudly is the claim deadline: after it,
+   * holders permanently cannot redeem.
+   */
+  private async handleTerminationEvent(
+    vault: Vault,
+    log: VaultLogInput,
+    eventName: string,
+    args: Record<string, unknown>
+  ): Promise<void> {
+    const current = await this.vaultsRepository.findOne({ where: { id: vault.id } });
+    if (!current) return;
+
+    const meta = current.termination_metadata ?? ({} as NonNullable<Vault['termination_metadata']>);
+    const evm = meta.evm;
+
+    switch (eventName) {
+      case 'TerminationCommitted': {
+        const deadline = String((args.terminationDeadline as bigint) ?? 0n);
+        meta.evm = {
+          ...(evm ?? {
+            phase: 'claim_window_open',
+            valuationHash: String(args.valuationHash ?? ''),
+            vtSupply: String((args.vtSupply as bigint) ?? 0n),
+            terminationDeadline: deadline,
+            sweepDelaySeconds: '0',
+            committedAt: new Date().toISOString(),
+            assets: [],
+            waived: [],
+          }),
+          phase: 'claim_window_open',
+          terminationDeadline: deadline,
+        };
+        this.logger.log(
+          `Vault ${vault.id}: termination committed, claim window closes at ${deadline} (tx=${log.txHash})`
+        );
+        break;
+      }
+      case 'TerminationAssetDeferred': {
+        if (!evm) return;
+        const asset = String(args.asset).toLowerCase();
+        const set = new Set([...(evm.deferredAssets ?? []), asset]);
+        meta.evm = { ...evm, deferredAssets: [...set] };
+        this.logger.warn(`Vault ${vault.id}: termination asset ${asset} deferred — entitlements still accrue`);
+        break;
+      }
+      case 'TerminationAssetResumed': {
+        if (!evm) return;
+        const asset = String(args.asset).toLowerCase();
+        meta.evm = { ...evm, deferredAssets: (evm.deferredAssets ?? []).filter(a => a !== asset) };
+        break;
+      }
+      case 'TerminationRemainderSwept': {
+        if (!evm) return;
+        const asset = String(args.asset).toLowerCase();
+        const set = new Set([...(evm.sweptAssets ?? []), asset]);
+        meta.evm = { ...evm, phase: 'claim_window_closed', sweptAssets: [...set] };
+        break;
+      }
+      // Redeemed / RedemptionDeferred / DeferredClaimed carry no metadata we
+      // need to persist — outstanding supply and per-holder entitlements are
+      // both readable on-chain. Logged so the reconciler records them as
+      // applied rather than repeatedly reprocessing them.
+      default:
+        this.logger.debug?.(`Vault ${vault.id}: ${eventName} (tx=${log.txHash})`);
+        return;
+    }
+
+    await this.vaultsRepository.update({ id: vault.id }, { termination_metadata: meta });
   }
 
   private async handlePositionClosed(vault: Vault, log: VaultLogInput, args: Record<string, unknown>): Promise<void> {
