@@ -5,7 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { User } from '@/database/user.entity';
-import { NotificationService } from '@/modules/notification/notification.service';
+import { GovernanceActionStatus, NotificationService } from '@/modules/notification/notification.service';
 
 @Injectable()
 export class NotificationEventsListener {
@@ -22,6 +22,73 @@ export class NotificationEventsListener {
       this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'
         ? 'https://app.l4va.org'
         : 'https://testnet.l4va.org';
+  }
+
+  private formatEmailTime(date: Date = new Date()): string {
+    return date
+      .toLocaleString('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+      .replace(/\//g, '.');
+  }
+
+  private async sendGovernanceActionEmails(event: {
+    vaultName: string;
+    proposalId: string;
+    proposalName: string;
+    creatorId?: string;
+    tokenHolderIds?: string[];
+    actionStatus: GovernanceActionStatus;
+  }): Promise<void> {
+    if (!event.proposalId) {
+      this.logger.warn('Skipping governance email: missing proposal id');
+      return;
+    }
+
+    const recipientIds = [
+      ...new Set(
+        [...(event.tokenHolderIds || []), event.creatorId].filter(
+          (id): id is string => typeof id === 'string' && id.trim().length > 0
+        )
+      ),
+    ];
+    if (recipientIds.length === 0) {
+      this.logger.debug(`Skipping governance email for proposal ${event.proposalId}: no recipients`);
+      return;
+    }
+
+    const copy =
+      event.actionStatus === 'started'
+        ? {
+            headline: `New vote available for vault "${event.vaultName}"`,
+            statusPhrase: 'started',
+          }
+        : event.actionStatus === 'executed'
+          ? {
+              headline: `The proposal ${event.proposalName} has been executed`,
+              statusPhrase: 'been executed',
+            }
+          : {
+              headline: `The proposal ${event.proposalName} has been rejected`,
+              statusPhrase: 'been rejected',
+            };
+
+    await this.notificationService.sendBulkGovernanceEmailNotification(
+      {
+        vaultName: event.vaultName,
+        vaultUrl: `${this.emailUrl}/proposals/${event.proposalId}`,
+        proposalName: event.proposalName,
+        actionStatus: event.actionStatus,
+        headline: copy.headline,
+        statusPhrase: copy.statusPhrase,
+        timeAt: this.formatEmailTime(),
+      },
+      recipientIds
+    );
   }
 
   @OnEvent('vault.launched')
@@ -56,15 +123,7 @@ export class NotificationEventsListener {
       vaultName: event.vault.name,
       phase: event.vault.vault_status,
       phaseStatus: event.phaseStatus,
-      timeAt: new Date()
-        .toLocaleString('en-GB', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-        .replace(/\//g, '.'),
+      timeAt: this.formatEmailTime(),
     });
   }
 
@@ -81,15 +140,7 @@ export class NotificationEventsListener {
       firstName: user.name,
       vaultUrl: `${this.emailUrl}/vaults/${event.vault.id}`,
       vaultName: event.vault.name,
-      timeAt: new Date()
-        .toLocaleString('en-GB', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-        .replace(/\//g, '.'),
+      timeAt: this.formatEmailTime(),
     });
   }
 
@@ -158,15 +209,7 @@ export class NotificationEventsListener {
       status: event.vault.vault_status,
       vaultTokenTicker: event.vault.vault_token_ticker,
       vaultUrl: `${this.emailUrl}/vaults/${event.vault.id}`,
-      failed_at: new Date()
-        .toLocaleString('en-GB', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-        .replace(/\//g, '.'),
+      failed_at: this.formatEmailTime(),
       vaultName: event.vault.name,
       address: user.address,
     });
@@ -249,6 +292,7 @@ export class NotificationEventsListener {
     address: string;
     vaultId: string;
     vaultName: string;
+    proposalId: string;
     proposalName: string;
     creatorId: string;
     tokenHolderIds: string[];
@@ -263,6 +307,21 @@ export class NotificationEventsListener {
       },
       event.tokenHolderIds
     );
+
+    try {
+      await this.sendGovernanceActionEmails({
+        vaultName: event.vaultName,
+        proposalId: event.proposalId,
+        proposalName: event.proposalName,
+        creatorId: event.creatorId,
+        tokenHolderIds: event.tokenHolderIds,
+        actionStatus: 'started',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send governance started emails for proposal ${event.proposalId}: ${error?.message || error}`
+      );
+    }
   }
 
   @OnEvent('voting.ending_soon') //havent added
@@ -291,6 +350,7 @@ export class NotificationEventsListener {
     address: string;
     vaultId: string;
     vaultName: string;
+    proposalId: string;
     proposalName: string;
     creatorId: string;
     tokenHolderIds: string[];
@@ -305,27 +365,58 @@ export class NotificationEventsListener {
       },
       event.tokenHolderIds
     );
+
+    try {
+      await this.sendGovernanceActionEmails({
+        vaultName: event.vaultName,
+        proposalId: event.proposalId,
+        proposalName: event.proposalName,
+        creatorId: event.creatorId,
+        tokenHolderIds: event.tokenHolderIds,
+        actionStatus: 'executed',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send governance executed emails for proposal ${event.proposalId}: ${error?.message || error}`
+      );
+    }
   }
 
-  @OnEvent('proposal.rejected') //havent added
+  @OnEvent('proposal.rejected')
   async handleProposalRejected(event: {
     address: string;
     vaultId: string;
     vaultName: string;
+    proposalId: string;
     proposalName: string;
     creatorId: string;
     tokenHolderIds: string[];
   }) {
     await this.notificationService.sendBulkNotification(
       {
-        title: `The proposal ${event.proposalName} ending soon`,
-        description: `You have a governance proposal, ${event.proposalName}, for vault ${event.vaultName}, that ending soon`,
+        title: `The proposal ${event.proposalName} has been rejected`,
+        description: `The proposal ${event.proposalName} for vault ${event.vaultName} has been rejected`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
         address: event.address,
       },
       event.tokenHolderIds
     );
+
+    try {
+      await this.sendGovernanceActionEmails({
+        vaultName: event.vaultName,
+        proposalId: event.proposalId,
+        proposalName: event.proposalName,
+        creatorId: event.creatorId,
+        tokenHolderIds: event.tokenHolderIds,
+        actionStatus: 'rejected',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send governance rejected emails for proposal ${event.proposalId}: ${error?.message || error}`
+      );
+    }
   }
 
   @OnEvent('proposal.failed')
