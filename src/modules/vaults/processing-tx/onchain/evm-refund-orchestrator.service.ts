@@ -134,7 +134,16 @@ export class EvmRefundOrchestrator {
       // Only Active cycles are cancellable via cancelCurrentCycle.
       if (cycleView.status !== EvmCycleStatus.Active) continue;
 
-      // Acquire window must have ended.
+      // The contribution (asset) window must have closed before a vault can be
+      // judged failed. `end === 0n` is the "unset" sentinel (see Vault
+      // `_validateWindow`) and must NOT be treated as "ended" — an open-ended
+      // window means contributions are still possible.
+      const contributionEnded = cycleView.assetWindow.end !== 0n && cycleView.assetWindow.end <= nowSec;
+      if (!contributionEnded) continue;
+
+      // If an acquire window has been opened, it must also have ended before we
+      // act on a missed threshold. `end === 0n` here means acquisition never
+      // started, which is itself a failure once the contribution window closed.
       const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
       if (!acquireEnded) continue;
 
@@ -180,7 +189,7 @@ export class EvmRefundOrchestrator {
         let reason: string;
 
         if (emptyVault) {
-          reason = `Empty vault: totalContributions=0 at end of acquire window`;
+          reason = `Empty vault: totalContributions=0 at end of contribution window`;
           failureReason = VaultFailureReason.NO_CONTRIBUTIONS;
           failureDetails = {
             message: 'No contributions received before acquire window closed',

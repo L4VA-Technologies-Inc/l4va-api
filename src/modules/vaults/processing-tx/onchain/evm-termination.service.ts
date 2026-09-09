@@ -15,9 +15,11 @@ import {
 } from './evm-termination.formulas';
 import { EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
+import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { AssetStatus } from '@/types/asset.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
@@ -46,6 +48,7 @@ export class EvmTerminationService {
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
+    @InjectRepository(Asset) private readonly assetsRepository: Repository<Asset>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
@@ -578,6 +581,19 @@ export class EvmTerminationService {
       'VaultStatusChanged',
       VaultStatus.burned
     );
+
+    // The vault is now Terminated on-chain: every committed asset has been paid
+    // out to VT holders via redeem() and every waived asset sent to the
+    // treasury. Nothing is held in custody any more, so no asset row should be
+    // left LOCKED. Mirrors the Cardano termination flow, which moves FTs out of
+    // the LOCKED state as they leave the vault.
+    const flipped = await this.assetsRepository.update(
+      { vault_id: vaultId, status: AssetStatus.LOCKED, deleted: false },
+      { status: AssetStatus.DISTRIBUTED, released_at: new Date() }
+    );
+    if (flipped.affected) {
+      this.logger.log(`finalizeTermination: marked ${flipped.affected} asset(s) DISTRIBUTED for vault=${vaultId}`);
+    }
 
     return result;
   }
