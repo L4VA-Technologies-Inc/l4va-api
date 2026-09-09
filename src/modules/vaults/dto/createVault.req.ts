@@ -199,25 +199,26 @@ export class CreateVaultReq {
   contributionDuration?: number;
 
   @ApiProperty({
-    required: true,
-    description: 'Duration in milliseconds',
+    required: false,
+    description: 'Duration in milliseconds. Not required when tokensForAcquires is 0.',
   })
+  @ValidateIf(o => Number(o.tokensForAcquires) !== 0)
   @IsNotEmpty()
   @IsNumber()
   @Expose()
-  acquireWindowDuration: number;
+  acquireWindowDuration?: number;
 
   @ApiProperty({ required: false, nullable: true, enum: InvestmentWindowType })
-  @ValidateIf((o, v) => v !== null)
+  @ValidateIf(o => Number(o.tokensForAcquires) !== 0 && o.acquireOpenWindowType !== null)
   @IsEnum(InvestmentWindowType)
   @Expose()
-  acquireOpenWindowType: string;
+  acquireOpenWindowType?: string;
 
   @ApiProperty()
-  @ValidateIf(o => o.acquireOpenWindowType === InvestmentWindowType.custom)
+  @ValidateIf(o => Number(o.tokensForAcquires) !== 0 && o.acquireOpenWindowType === InvestmentWindowType.custom)
   @IsNotEmpty()
   @Expose()
-  acquireOpenWindowTime: string;
+  acquireOpenWindowTime?: string;
 
   @ApiProperty({
     description: 'Percentage of assets offered',

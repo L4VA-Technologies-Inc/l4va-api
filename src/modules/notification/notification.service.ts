@@ -27,10 +27,35 @@ export interface IEmailNotificationBody {
   vaultName: string;
 }
 
+export type GovernanceActionStatus = 'started' | 'executed' | 'rejected';
+
+export interface IGovernanceEmailBody {
+  email: string;
+  address: string;
+  firstName: string;
+  vaultName: string;
+  vaultUrl: string;
+  proposalName: string;
+  actionStatus: GovernanceActionStatus;
+  headline: string;
+  statusPhrase: string;
+  timeAt: string;
+}
+
 @Injectable()
 export class NotificationService {
   private readonly novu: Novu;
   private readonly logger = new Logger(NotificationService.name);
+
+  private getEmailFooterPayload(): { currentYear: number; footerCopyright: string; content: string } {
+    const currentYear = new Date().getFullYear();
+    const footerCopyright = `Copyright © ${currentYear}. All Rights Reserved by L4VA`;
+    return {
+      currentYear,
+      footerCopyright,
+      content: footerCopyright,
+    };
+  }
 
   constructor() {
     this.novu = new Novu({
@@ -145,5 +170,70 @@ export class NotificationService {
     } catch (err) {
       return err;
     }
+  }
+
+  async sendGovernanceEmailNotification(body: IGovernanceEmailBody): Promise<EventsControllerTriggerResponse> {
+    try {
+      const footerPayload = this.getEmailFooterPayload();
+      const res = await this.novu.trigger({
+        workflowId: 'governance',
+        to: {
+          subscriberId: body.address,
+          email: body.email,
+        },
+        payload: {
+          firstName: body.firstName,
+          vaultUrl: body.vaultUrl,
+          vaultName: body.vaultName,
+          proposalName: body.proposalName,
+          actionStatus: body.actionStatus,
+          headline: body.headline,
+          statusPhrase: body.statusPhrase,
+          timeAt: body.timeAt,
+          ...footerPayload,
+        },
+      });
+      return res;
+    } catch (err) {
+      this.logger.error(`Failed to send governance email to ${body.email}: ${err?.message || err}`);
+      return err;
+    }
+  }
+
+  async sendBulkGovernanceEmailNotification(
+    body: Omit<IGovernanceEmailBody, 'email' | 'address' | 'firstName'>,
+    recipientIds: string[]
+  ): Promise<void> {
+    if (!recipientIds || !Array.isArray(recipientIds)) {
+      this.logger.warn('Governance email recipients are invalid. No emails will be sent.');
+      return;
+    }
+
+    const uniqueIds = [...new Set(recipientIds.filter(id => typeof id === 'string' && id.trim().length > 0))];
+    if (uniqueIds.length === 0) {
+      this.logger.debug('Governance email skipped: recipient list is empty.');
+      return;
+    }
+
+    const users = await this.userRepository.findBy({ id: In(uniqueIds) });
+    const usersWithEmail = users.filter(user => !!user.email && !!user.address);
+
+    if (usersWithEmail.length === 0) {
+      this.logger.debug(
+        `Governance email skipped: resolved ${users.length} user(s), but none have an email on profile.`
+      );
+      return;
+    }
+
+    await Promise.all(
+      usersWithEmail.map(user =>
+        this.sendGovernanceEmailNotification({
+          ...body,
+          email: user.email,
+          address: user.address,
+          firstName: user.name,
+        })
+      )
+    );
   }
 }
