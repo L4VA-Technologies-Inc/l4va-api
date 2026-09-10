@@ -154,6 +154,9 @@ export class Proposal {
       actualSlippage?: number;
     }>;
 
+    // Vote reminder (non-voters, near end of voting window)
+    voteReminderSentAt?: string; // ISO date string
+
     // Execution retry tracking
     _executionRetry?: {
       count: number;

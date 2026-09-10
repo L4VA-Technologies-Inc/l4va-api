@@ -5,10 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { User } from '@/database/user.entity';
-import {
-  GovernanceActionStatus,
-  NotificationService,
-} from '@/modules/notification/notification.service';
+import { GovernanceActionStatus, NotificationService } from '@/modules/notification/notification.service';
 
 @Injectable()
 export class NotificationEventsListener {
@@ -75,10 +72,15 @@ export class NotificationEventsListener {
               headline: `The proposal ${event.proposalName} has been executed`,
               statusPhrase: 'been executed',
             }
-          : {
-              headline: `The proposal ${event.proposalName} has been rejected`,
-              statusPhrase: 'been rejected',
-            };
+          : event.actionStatus === 'ending_soon'
+            ? {
+                headline: `Time running out to vote on "${event.proposalName}"`,
+                statusPhrase: 'not received your vote yet and is ending soon',
+              }
+            : {
+                headline: `The proposal ${event.proposalName} has been rejected`,
+                statusPhrase: 'been rejected',
+              };
 
     await this.notificationService.sendBulkGovernanceEmailNotification(
       {
@@ -467,10 +469,11 @@ export class NotificationEventsListener {
     );
   }
 
-  @OnEvent('governance.vote_time_running_out') // Haven`t added
+  @OnEvent('governance.vote_time_running_out')
   async handleVoteTimeRunningOut(event: {
     vaultId: string;
     vaultName: string;
+    proposalId: string;
     proposalName: string;
     nonVoterIds: string[];
   }) {
@@ -483,6 +486,20 @@ export class NotificationEventsListener {
       },
       event.nonVoterIds
     );
+
+    try {
+      await this.sendGovernanceActionEmails({
+        vaultName: event.vaultName,
+        proposalId: event.proposalId,
+        proposalName: event.proposalName,
+        tokenHolderIds: event.nonVoterIds,
+        actionStatus: 'ending_soon',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send governance ending-soon emails for proposal ${event.proposalId}: ${error?.message || error}`
+      );
+    }
   }
 
   @OnEvent('distribution.claim_available')

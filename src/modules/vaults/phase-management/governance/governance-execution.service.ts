@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Between, In, Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
@@ -48,6 +48,7 @@ export class GovernanceExecutionService {
   // Retry configuration constants
   private readonly MAX_EXECUTION_RETRIES = 5;
   private readonly RETRY_BACKOFF_MINUTES = 5; // Base backoff time in minutes
+  private readonly VOTE_REMINDER_WINDOW_MS: number;
 
   constructor(
     @InjectRepository(Proposal)
@@ -79,6 +80,7 @@ export class GovernanceExecutionService {
     private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.VOTE_REMINDER_WINDOW_MS = this.isMainnet ? 6 * 60 * 60 * 1000 : 2 * 60 * 1000;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -97,9 +99,20 @@ export class GovernanceExecutionService {
       async (proposalId, endDate) => {
         await this.activateProposal(proposalId);
         this.schedulerService.scheduleExecution(proposalId, endDate, () => this.processProposal(proposalId));
+        this.scheduleVoteReminderJob(proposalId, endDate);
       },
       proposalId => this.processProposal(proposalId)
     );
+
+    const activeProposals = await this.proposalRepository.find({
+      where: { status: ProposalStatus.ACTIVE },
+      select: ['id', 'endDate', 'metadata'],
+    });
+    for (const proposal of activeProposals) {
+      if (!proposal.metadata?.voteReminderSentAt && proposal.endDate) {
+        this.scheduleVoteReminderJob(proposal.id, proposal.endDate);
+      }
+    }
   }
 
   @OnEvent('proposal.created')
@@ -124,6 +137,7 @@ export class GovernanceExecutionService {
       this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
         this.processProposal(payload.proposalId)
       );
+      this.scheduleVoteReminderJob(payload.proposalId, payload.endDate);
 
       const activeProposal = await this.proposalRepository.findOne({
         where: { id: payload.proposalId },
@@ -144,6 +158,7 @@ export class GovernanceExecutionService {
     this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
       this.processProposal(payload.proposalId)
     );
+    this.scheduleVoteReminderJob(payload.proposalId, payload.endDate);
   }
 
   /**
@@ -186,6 +201,97 @@ export class GovernanceExecutionService {
         error.stack
       );
     }
+  }
+
+  /**
+   * Remind snapshot holders who have not voted yet, shortly before voting ends.
+   * Mainnet: last 6 hours. Testnet: last 2 minutes (votes can be as short as 5 minutes).
+   * Cron is a fallback; the primary trigger is a one-shot job at window start.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async notifyVoteTimeRunningOut(): Promise<void> {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + this.VOTE_REMINDER_WINDOW_MS);
+
+    const proposals = await this.proposalRepository.find({
+      where: {
+        status: ProposalStatus.ACTIVE,
+        endDate: Between(now, windowEnd),
+      },
+      relations: ['vault', 'snapshot', 'votes'],
+    });
+
+    for (const proposal of proposals) {
+      if (proposal.metadata?.voteReminderSentAt) {
+        continue;
+      }
+
+      try {
+        await this.emitVoteTimeRunningOut(proposal);
+      } catch (error) {
+        this.logger.error(
+          `Failed to send vote-running-out notifications for proposal ${proposal.id}: ${error.message}`,
+          error.stack
+        );
+      }
+    }
+  }
+
+  private async emitVoteTimeRunningOut(proposal: Proposal): Promise<void> {
+    const holderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+    const votedIds = new Set((proposal.votes || []).map(vote => vote.voterId));
+    const nonVoterIds = holderIds.filter(id => !votedIds.has(id));
+
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          voteReminderSentAt: new Date().toISOString(),
+        },
+      }
+    );
+
+    if (nonVoterIds.length === 0) {
+      this.logger.debug(`Proposal ${proposal.id} vote reminder skipped: all snapshot holders have voted`);
+      return;
+    }
+
+    this.eventEmitter.emit('governance.vote_time_running_out', {
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name || null,
+      proposalId: proposal.id,
+      proposalName: proposal.title,
+      nonVoterIds,
+    });
+
+    this.logger.log(
+      `Sent vote-running-out notifications for proposal ${proposal.id} to ${nonVoterIds.length} non-voter(s)`
+    );
+  }
+
+  private scheduleVoteReminderJob(proposalId: string, endDate?: Date): void {
+    if (!endDate) {
+      return;
+    }
+
+    const remindAt = new Date(endDate.getTime() - this.VOTE_REMINDER_WINDOW_MS);
+    this.schedulerService.scheduleVoteReminder(proposalId, remindAt, endDate, () =>
+      this.sendVoteReminderIfNeeded(proposalId)
+    );
+  }
+
+  private async sendVoteReminderIfNeeded(proposalId: string): Promise<void> {
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId, status: ProposalStatus.ACTIVE },
+      relations: ['vault', 'snapshot', 'votes'],
+    });
+
+    if (!proposal || proposal.metadata?.voteReminderSentAt) {
+      return;
+    }
+
+    await this.emitVoteTimeRunningOut(proposal);
   }
 
   /**
@@ -311,6 +417,7 @@ export class GovernanceExecutionService {
         });
 
         await this.notifyProposalStarted(proposal);
+        this.scheduleVoteReminderJob(proposal.id, proposal.endDate);
 
         // Index reward event for proposal activation
         // Only ACTIVE proposals count toward governance participation rewards

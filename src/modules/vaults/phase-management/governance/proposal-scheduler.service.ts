@@ -33,48 +33,26 @@ export class ProposalSchedulerService {
     onScheduleExecution: () => void
   ): void {
     const jobName = `proposal-activation-${proposalId}`;
+    const start = this.toDate(startDate);
+    const timeUntilStart = start.getTime() - Date.now();
 
-    // Remove existing job if it exists
-    this.cleanupJob(jobName);
-
-    const now = new Date();
-    const timeUntilStart = startDate.getTime() - now.getTime();
-
-    // Only schedule if the proposal hasn't started yet
-    if (timeUntilStart > 0) {
-      const cronPattern = this.createCronPattern(startDate);
-
-      const job = new CronJob(cronPattern, async () => {
-        try {
-          await onActivate();
-
-          // After activation, schedule the execution
-          onScheduleExecution();
-
-          // Clean up the activation job
-          this.cleanupJob(jobName);
-        } catch (error) {
-          this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
-
-          // Retry activation after 1 minute
-          this.scheduleRetry(`proposal-activation-retry-${proposalId}`, 60000, async () => {
-            await onActivate();
-            onScheduleExecution();
-          });
-        }
-      });
-
-      this.schedulerRegistry.addCronJob(jobName, job);
-      job.start();
-
-      this.logger.log(`Scheduled activation for proposal ${proposalId} at ${startDate.toISOString()}`);
-    } else {
-      this.logger.warn(`Proposal ${proposalId} should already be active, activating immediately`);
-      // Activate immediately if start date has passed
-      setTimeout(async () => {
+    this.scheduleOnce(jobName, start, async () => {
+      try {
         await onActivate();
         onScheduleExecution();
-      }, 1000);
+      } catch (error) {
+        this.logger.error(`Error activating proposal ${proposalId}: ${error.message}`, error.stack);
+        this.scheduleRetry(`proposal-activation-retry-${proposalId}`, 60000, async () => {
+          await onActivate();
+          onScheduleExecution();
+        });
+      }
+    });
+
+    if (timeUntilStart > 0) {
+      this.logger.log(`Scheduled activation for proposal ${proposalId} at ${new Date(startDate).toISOString()}`);
+    } else {
+      this.logger.warn(`Proposal ${proposalId} should already be active, activating immediately`);
     }
   }
 
@@ -86,43 +64,42 @@ export class ProposalSchedulerService {
    */
   scheduleExecution(proposalId: string, endDate: Date, onExecute: () => Promise<void>): void {
     const jobName = `proposal-execution-${proposalId}`;
+    const fireAt = new Date(this.toDate(endDate).getTime() + 60000);
 
-    // Remove existing job if it exists
-    this.cleanupJob(jobName);
+    this.scheduleOnce(jobName, fireAt, async () => {
+      try {
+        await onExecute();
+      } catch (error) {
+        this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
+        this.scheduleRetry(`proposal-retry-${proposalId}`, 180000, onExecute);
+      }
+    });
 
-    const now = new Date();
-    const timeUntilEnd = endDate.getTime() - now.getTime();
-
-    // Only schedule if the proposal hasn't ended yet
-    if (timeUntilEnd > 0) {
-      // Create a cron job that runs 1 minute after the proposal ends
-      const executionTime = new Date(endDate.getTime() + 60000); // Add 1 minute buffer
-
-      const cronPattern = this.createCronPattern(executionTime);
-
-      const job = new CronJob(cronPattern, async () => {
-        try {
-          await onExecute();
-
-          // Clean up the job after execution
-          this.cleanupJob(jobName);
-        } catch (error) {
-          this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
-
-          // Retry after 3 minutes on error
-          this.scheduleRetry(`proposal-retry-${proposalId}`, 180000, onExecute);
-        }
-      });
-
-      this.schedulerRegistry.addCronJob(jobName, job);
-      job.start();
-
-      this.logger.log(`Scheduled execution for proposal ${proposalId} at ${executionTime.toISOString()}`);
+    if (fireAt.getTime() > Date.now()) {
+      this.logger.log(`Scheduled execution for proposal ${proposalId} at ${fireAt.toISOString()}`);
     } else {
       this.logger.warn(`Proposal ${proposalId} has already ended, processing immediately`);
-      // Process immediately if already ended
-      setTimeout(() => onExecute(), 1000);
     }
+  }
+
+  /**
+   * Schedule a one-shot reminder for snapshot holders who have not voted yet.
+   * If the remind time is already in the reminder window, run immediately.
+   */
+  scheduleVoteReminder(proposalId: string, remindAt: Date, endDate: Date, onRemind: () => Promise<void>): void {
+    const jobName = `proposal-vote-reminder-${proposalId}`;
+    if (this.toDate(endDate).getTime() <= Date.now()) {
+      return;
+    }
+
+    this.scheduleOnce(jobName, remindAt, async () => {
+      try {
+        await onRemind();
+      } catch (error) {
+        this.logger.error(`Error sending vote reminder for proposal ${proposalId}: ${error.message}`, error.stack);
+      }
+    });
+    this.logger.log(`Scheduled vote reminder for proposal ${proposalId} at ${new Date(remindAt).toISOString()}`);
   }
 
   /**
@@ -263,30 +240,50 @@ export class ProposalSchedulerService {
    * @param onRetry - Callback to execute on retry
    */
   private scheduleRetry(jobName: string, delayMs: number, onRetry: () => Promise<void>): void {
-    const retryTime = new Date(Date.now() + delayMs);
-    const retryPattern = this.createCronPattern(retryTime);
-
-    const retryJob = new CronJob(retryPattern, async () => {
+    this.scheduleOnce(jobName, new Date(Date.now() + delayMs), async () => {
       try {
         await onRetry();
-        this.cleanupJob(jobName);
       } catch (retryError) {
         this.logger.error(`Retry failed for job ${jobName}: ${retryError.message}`);
-        this.cleanupJob(jobName);
       }
     });
+  }
 
-    this.schedulerRegistry.addCronJob(jobName, retryJob);
-    retryJob.start();
+  private toDate(value: Date | string): Date {
+    return value instanceof Date ? value : new Date(value);
   }
 
   /**
-   * Create a cron pattern from a date
-   * @param date - The date to convert to cron pattern
-   * @returns Cron pattern string
+   * One-shot job at an absolute Date. Cron strings are timezone-fragile for this.
    */
-  private createCronPattern(date: Date): string {
-    // Convert Date to cron pattern (second minute hour day month dayOfWeek)
-    return `${date.getSeconds()} ${date.getMinutes()} ${date.getHours()} ${date.getDate()} ${date.getMonth() + 1} *`;
+  private scheduleOnce(jobName: string, when: Date | string, onFire: () => Promise<void>): void {
+    this.cleanupJob(jobName);
+
+    const fireAt = this.toDate(when);
+    if (Number.isNaN(fireAt.getTime())) {
+      this.logger.error(`Cannot schedule ${jobName}: invalid date ${when}`);
+      return;
+    }
+
+    const run = async (): Promise<void> => {
+      try {
+        await onFire();
+      } finally {
+        this.cleanupJob(jobName);
+      }
+    };
+
+    if (fireAt.getTime() <= Date.now()) {
+      setTimeout(() => {
+        void run();
+      }, 1000);
+      return;
+    }
+
+    const job = new CronJob(fireAt, () => {
+      void run();
+    });
+    this.schedulerRegistry.addCronJob(jobName, job);
+    job.start();
   }
 }

@@ -27,7 +27,7 @@ export interface IEmailNotificationBody {
   vaultName: string;
 }
 
-export type GovernanceActionStatus = 'started' | 'executed' | 'rejected';
+export type GovernanceActionStatus = 'started' | 'executed' | 'rejected' | 'ending_soon';
 
 export interface IGovernanceEmailBody {
   email: string;
