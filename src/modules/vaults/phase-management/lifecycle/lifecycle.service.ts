@@ -3208,49 +3208,124 @@ export class LifecycleService {
   }
 
   /**
-   * For vaults in `terminating` status: check if all VT has been redeemed on-chain
-   * (outstandingVt == 0 or totalSupply == 0) and call `finalizeTermination()`.
+   * Drives a terminating EVM vault through the rest of its life:
+   *
+   *   1. every holder has redeemed  → `finalizeTermination()` (status flip only;
+   *      redemption stays open regardless, so this strands nobody)
+   *   2. the claim window has closed → `sweepTerminationRemainder(asset)` per
+   *      committed and waived asset
+   *
+   * The two are independent. Finalizing is cosmetic and can happen at any
+   * point; sweeping is gated on-chain at `terminationDeadline` and there is no
+   * early-sweep path, so this never has to guess.
    */
   private async handleEvmFinalizeTerminating(): Promise<void> {
     if (!this.isEvmCycleAutomationEnabled()) return;
     try {
       const terminatingVaults = await this.vaultRepository.find({
         where: { chain_type: ChainType.robinhood, vault_status: VaultStatus.terminating },
-        select: ['id', 'contract_address'],
+        select: ['id', 'contract_address', 'termination_metadata'],
       });
 
       for (const vault of terminatingVaults) {
         if (!vault.contract_address) continue;
+        const vaultAddress = vault.contract_address as `0x${string}`;
         try {
-          const vtToken = (await this.evmContractReader.publicClient.readContract({
-            address: vault.contract_address as `0x${string}`,
-            abi: VAULT_ABI,
-            functionName: 'vaultToken',
-          })) as `0x${string}`;
-          const totalSupply = (await this.evmContractReader.publicClient.readContract({
-            address: vtToken,
-            abi: [
-              {
-                type: 'function',
-                stateMutability: 'view',
-                name: 'totalSupply',
-                inputs: [],
-                outputs: [{ type: 'uint256' }],
-              },
-            ],
-            functionName: 'totalSupply',
-          })) as bigint;
+          const [onchainStatus, outstanding] = (await Promise.all([
+            this.evmContractReader.publicClient.readContract({
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'status',
+            }),
+            this.evmContractReader.publicClient.readContract({
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'terminationOutstanding',
+            }),
+          ])) as [number, bigint];
 
-          if (totalSupply === 0n) {
+          if (onchainStatus === 6 /* Terminated */) {
+            // Already finalized on-chain but the DB never caught up (crash
+            // between the on-chain confirm and the DB commit). Reconcile
+            // directly — re-sending finalizeTermination would just revert.
+            await this.evmTerminationService.reconcileFinalized(vault.id);
+            await this.handleEvmTerminationSweep(vault.id, vaultAddress);
+            continue;
+          }
+
+          if (outstanding === 0n) {
             await this.evmTerminationService.finalizeTermination(vault.id);
             this.logger.log(`EVM finalizeTermination submitted for vault ${vault.id}`);
           }
+
+          await this.handleEvmTerminationSweep(vault.id, vaultAddress);
         } catch (err) {
-          this.logger.error(`EVM finalizeTermination check failed for vault ${vault.id}: ${(err as Error).message}`);
+          this.logger.error(`EVM terminating upkeep failed for vault ${vault.id}: ${(err as Error).message}`);
         }
       }
     } catch (err) {
       this.logger.error(`EVM finalize terminating sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Sweep every committed and waived asset once the claim window has closed.
+   *
+   * Idempotent by construction: the contract zeroes an asset's rate and reserve
+   * on sweep, so a second call reverts with `AmountZero` and is skipped. Assets
+   * already recorded as swept are not retried.
+   */
+  private async handleEvmTerminationSweep(vaultId: string, vaultAddress: `0x${string}`): Promise<void> {
+    const deadline = (await this.evmContractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'terminationDeadline',
+    })) as bigint;
+
+    if (deadline === 0n) return; // rates never committed
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (now < deadline) return; // holders can still redeem
+
+    const committed = (await this.evmContractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'terminationAssets',
+    })) as `0x${string}`[];
+    const waived = (await this.evmContractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'waivedAssets',
+    })) as `0x${string}`[];
+
+    const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+    const meta = vault?.termination_metadata?.evm;
+    const alreadySwept = new Set((meta?.sweptAssets ?? []).map(a => a.toLowerCase()));
+    const swept: string[] = [...(meta?.sweptAssets ?? [])];
+
+    for (const asset of [...committed, ...waived]) {
+      if (alreadySwept.has(asset.toLowerCase())) continue;
+      try {
+        await this.evmTerminationService.sweepTerminationRemainder(vaultId, asset);
+        swept.push(asset);
+        this.logger.log(`EVM sweepTerminationRemainder ok vault=${vaultId} asset=${asset}`);
+      } catch (err) {
+        // Nothing left for this asset is the common, expected case.
+        this.logger.debug?.(
+          `EVM sweep skipped vault=${vaultId} asset=${asset}: ${(err as Error).message.slice(0, 200)}`
+        );
+      }
+    }
+
+    if (vault && meta && swept.length !== (meta.sweptAssets ?? []).length) {
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          termination_metadata: {
+            ...vault.termination_metadata!,
+            evm: { ...meta, phase: 'claim_window_closed', sweptAssets: swept },
+          },
+        }
+      );
     }
   }
 }

@@ -387,7 +387,7 @@ export const VAULT_ABI = [
     outputs: [{ type: 'uint256' }],
   },
 
-  // --- Termination (Phase 4) -----------------------------------------------
+  // --- Termination (burn-to-redeem against committed rates) ------------------
   {
     type: 'function',
     stateMutability: 'nonpayable',
@@ -399,7 +399,13 @@ export const VAULT_ABI = [
     type: 'function',
     stateMutability: 'nonpayable',
     name: 'beginTermination',
-    inputs: [{ name: 'distributableAssets', type: 'address[]' }],
+    inputs: [
+      { name: 'valuationHash', type: 'bytes32' },
+      { name: 'assets', type: 'address[]' },
+      { name: 'rates', type: 'uint256[]' },
+      { name: 'waived', type: 'address[]' },
+      { name: 'sweepDelay', type: 'uint64' },
+    ],
     outputs: [],
   },
   {
@@ -412,33 +418,194 @@ export const VAULT_ABI = [
   {
     type: 'function',
     stateMutability: 'nonpayable',
-    name: 'redeemForTermination',
-    inputs: [{ name: 'vtAmount', type: 'uint256' }],
-    outputs: [{ name: 'redemptionId', type: 'uint256' }],
+    name: 'redeem',
+    inputs: [{ name: 'recipient', type: 'address' }],
+    outputs: [{ name: 'burned', type: 'uint256' }],
   },
   {
     type: 'function',
     stateMutability: 'nonpayable',
-    name: 'claimTerminationNative',
-    inputs: [{ name: 'redemptionId', type: 'uint256' }],
+    name: 'redeemFor',
+    inputs: [{ name: 'holder', type: 'address' }],
+    outputs: [{ name: 'burned', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'deferTerminationAsset',
+    inputs: [{ name: 'asset', type: 'address' }],
     outputs: [],
   },
   {
     type: 'function',
     stateMutability: 'nonpayable',
-    name: 'claimTerminationAsset',
+    name: 'resumeTerminationAsset',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'claimDeferred',
     inputs: [
-      { name: 'redemptionId', type: 'uint256' },
       { name: 'asset', type: 'address' },
+      { name: 'recipient', type: 'address' },
     ],
+    outputs: [{ name: 'amount', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'sweepTerminationRemainder',
+    inputs: [{ name: 'asset', type: 'address' }],
     outputs: [],
+  },
+
+  // --- Termination views -----------------------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'terminationSupply',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
   },
   {
     type: 'function',
     stateMutability: 'view',
-    name: 'totalRedemptions',
+    name: 'terminationOutstanding',
     inputs: [],
     outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'terminationCommittedAt',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'terminationDeadline',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'terminationValuationHash',
+    inputs: [],
+    outputs: [{ type: 'bytes32' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'terminationAssets',
+    inputs: [],
+    outputs: [{ type: 'address[]' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'waivedAssets',
+    inputs: [],
+    outputs: [{ type: 'address[]' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'terminationAsset',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [
+      { name: 'committed', type: 'bool' },
+      { name: 'deferred', type: 'bool' },
+      { name: 'rate', type: 'uint256' },
+      { name: 'cap', type: 'uint256' },
+      { name: 'reserve', type: 'uint256' },
+      { name: 'paid', type: 'uint256' },
+      { name: 'released', type: 'uint256' },
+      { name: 'deferredOutstanding', type: 'uint256' },
+    ],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'deferredOwed',
+    inputs: [
+      { name: 'holder', type: 'address' },
+      { name: 'asset', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'waivedReserve',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'previewRedeem',
+    inputs: [
+      { name: 'holder', type: 'address' },
+      { name: 'asset', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+
+  // --- Custody registry + free-balance views (termination coverage) ----------
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'custodyTokens',
+    inputs: [],
+    outputs: [{ type: 'address[]' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'availableNativeForOperations',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'availableErc20ForOperations',
+    inputs: [{ name: 'token', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+
+  // --- LP positions (read-only; used by the termination preflight) -----------
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'totalLiquidityPositions',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'getLiquidityPosition',
+    inputs: [{ name: 'id', type: 'uint256' }],
+    outputs: [
+      {
+        type: 'tuple',
+        components: [
+          { name: 'operationId', type: 'bytes32' },
+          { name: 'cycleId', type: 'uint256' },
+          { name: 'adapter', type: 'address' },
+          { name: 'nativeAmount', type: 'uint256' },
+          { name: 'lpVtAmount', type: 'uint256' },
+          { name: 'positionAsset', type: 'address' },
+          { name: 'positionAmount', type: 'uint256' },
+          { name: 'status', type: 'uint8' },
+        ],
+      },
+    ],
   },
 
   // --- Emergency & pause (Phase 5) -----------------------------------------
@@ -648,37 +815,62 @@ export const VAULT_ABI = [
   },
   {
     type: 'event',
-    name: 'TerminationSnapshotTaken',
+    name: 'TerminationCommitted',
     inputs: [
+      { name: 'valuationHash', type: 'bytes32', indexed: false },
       { name: 'vtSupply', type: 'uint256', indexed: false },
-      { name: 'nativeSnapshot', type: 'uint256', indexed: false },
-      { name: 'distributableAssetsCount', type: 'uint256', indexed: false },
+      { name: 'terminationDeadline', type: 'uint256', indexed: false },
+      { name: 'assets', type: 'address[]', indexed: false },
+      { name: 'rates', type: 'uint256[]', indexed: false },
+      { name: 'waived', type: 'address[]', indexed: false },
     ],
   },
   {
     type: 'event',
-    name: 'RedemptionCreated',
+    name: 'Redeemed',
     inputs: [
-      { name: 'redemptionId', type: 'uint256', indexed: true },
       { name: 'holder', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
       { name: 'vtBurned', type: 'uint256', indexed: false },
     ],
   },
   {
     type: 'event',
-    name: 'RedemptionNativeClaimed',
+    name: 'RedemptionDeferred',
     inputs: [
-      { name: 'redemptionId', type: 'uint256', indexed: true },
+      { name: 'holder', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
       { name: 'amount', type: 'uint256', indexed: false },
     ],
   },
   {
     type: 'event',
-    name: 'RedemptionAssetClaimed',
+    name: 'TerminationAssetDeferred',
+    inputs: [{ name: 'asset', type: 'address', indexed: true }],
+  },
+  {
+    type: 'event',
+    name: 'TerminationAssetResumed',
+    inputs: [{ name: 'asset', type: 'address', indexed: true }],
+  },
+  {
+    type: 'event',
+    name: 'DeferredClaimed',
     inputs: [
-      { name: 'redemptionId', type: 'uint256', indexed: true },
+      { name: 'holder', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
       { name: 'asset', type: 'address', indexed: true },
       { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'TerminationRemainderSwept',
+    inputs: [
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'to', type: 'address', indexed: true },
     ],
   },
   {

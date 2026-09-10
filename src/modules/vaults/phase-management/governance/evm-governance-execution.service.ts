@@ -15,7 +15,7 @@ import {
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
-import { EvmExternalPosition, EvmPositionStatus } from '@/database/evm-external-position.entity';
+import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { ProposalType } from '@/types/proposal.types';
@@ -432,25 +432,67 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // Termination → beginTerminationPreparing → beginTermination
   // ---------------------------------------------------------------------------
 
+  /**
+   * A passed TERMINATION proposal drives both on-chain steps.
+   *
+   * Step 1 carries the strict liquidity preflight, because
+   * `TerminationPreparing` is a one-way door: `openCycle` accepts only
+   * Locked/Cancelled and the sole exit is `beginTermination`, so a vault that
+   * enters and then cannot commit is bricked rather than delayed. If step 1
+   * succeeds and step 2 fails, the vault is left in `TerminationPreparing` and
+   * the proposal is NOT marked executed — `retryTermination` resumes from
+   * there once the underlying problem is fixed.
+   *
+   * The distributable set comes from the vault's own `custodyTokens()`
+   * registry, not from `evm_external_positions`. The old position-derived list
+   * was not the set of assets the vault holds — it missed contributed ERC-20s,
+   * returned underlying and LP tokens — and the contract's coverage check now
+   * rejects any commit that leaves a held asset uncovered.
+   */
   private async executeTermination(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
+    let prepared = false;
     try {
-      // Step 1: prepare
       await this.terminationService.beginTerminationPreparing(vault.id);
-      this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted`);
+      prepared = true;
+      this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted (preflight passed)`);
 
-      // Step 2: snapshot + begin
-      // Distributable assets = all unique ERC-20 position tokens currently held by the vault.
-      const activePositions = await this.positionsRepository.find({
-        where: { vault_id: vault.id, status: EvmPositionStatus.active },
-        select: ['position_asset'],
-      });
-      const distributableAssets: Address[] = [...new Set(activePositions.map(p => p.position_asset as Address))];
-      await this.terminationService.beginTermination(vault.id, distributableAssets);
-      this.logger.log(`Proposal ${proposal.id}: beginTermination submitted — vault is now Terminating`);
+      const result = await this.terminationService.beginTermination(vault.id);
+      this.logger.log(
+        `Proposal ${proposal.id}: beginTermination committed — ${result.rows.length} distributable asset(s), ` +
+          `claim window closes at ${result.terminationDeadline}`
+      );
 
       return true;
     } catch (err) {
-      this.logger.error(`Proposal ${proposal.id}: EVM termination failed — ${(err as Error).message}`);
+      const message = (err as Error).message;
+      if (prepared) {
+        this.logger.error(
+          `Proposal ${proposal.id}: vault ${vault.id} is in TerminationPreparing but the rate commit failed — ` +
+            `${message}. The vault cannot open cycles or terminate until beginTermination succeeds; ` +
+            `fix the cause and call retryTermination.`
+        );
+      } else {
+        this.logger.error(`Proposal ${proposal.id}: EVM termination failed before preparing — ${message}`);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Resume a termination that stalled after `beginTerminationPreparing`.
+   * Safe to call repeatedly; it no-ops unless the vault is on-chain
+   * `TerminationPreparing`.
+   */
+  async retryTermination(vaultId: string, waived?: Address[]): Promise<boolean> {
+    try {
+      const result = await this.terminationService.beginTermination(vaultId, { waived });
+      this.logger.log(
+        `Vault ${vaultId}: beginTermination committed on retry — ${result.rows.length} asset(s), ` +
+          `deadline ${result.terminationDeadline}`
+      );
+      return true;
+    } catch (err) {
+      this.logger.error(`Vault ${vaultId}: retryTermination failed — ${(err as Error).message}`);
       return false;
     }
   }

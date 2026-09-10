@@ -55,6 +55,14 @@ export enum TransactionType {
   evmBeginTermination = 'evm-begin-termination',
   /** EVM: admin-signed `finalizeTermination()`. */
   evmFinalizeTermination = 'evm-finalize-termination',
+  /** EVM: admin-signed `redeemFor(holder)` — operator push before the deadline. */
+  evmRedeemFor = 'evm-redeem-for',
+  /** EVM: admin-signed `deferTerminationAsset(asset)`. */
+  evmDeferTerminationAsset = 'evm-defer-termination-asset',
+  /** EVM: admin-signed `resumeTerminationAsset(asset)`. */
+  evmResumeTerminationAsset = 'evm-resume-termination-asset',
+  /** EVM: admin-signed `sweepTerminationRemainder(asset)` after the deadline. */
+  evmSweepTerminationRemainder = 'evm-sweep-termination-remainder',
   /** EVM: admin-signed `withdrawFees(asset)`. */
   evmWithdrawFees = 'evm-withdraw-fees',
   /** EVM: admin-signed `pause()`. */
