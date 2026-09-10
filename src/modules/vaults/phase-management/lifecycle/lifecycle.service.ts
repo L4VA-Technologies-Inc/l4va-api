@@ -3231,11 +3231,27 @@ export class LifecycleService {
         if (!vault.contract_address) continue;
         const vaultAddress = vault.contract_address as `0x${string}`;
         try {
-          const outstanding = (await this.evmContractReader.publicClient.readContract({
-            address: vaultAddress,
-            abi: VAULT_ABI,
-            functionName: 'terminationOutstanding',
-          })) as bigint;
+          const [onchainStatus, outstanding] = (await Promise.all([
+            this.evmContractReader.publicClient.readContract({
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'status',
+            }),
+            this.evmContractReader.publicClient.readContract({
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'terminationOutstanding',
+            }),
+          ])) as [number, bigint];
+
+          if (onchainStatus === 6 /* Terminated */) {
+            // Already finalized on-chain but the DB never caught up (crash
+            // between the on-chain confirm and the DB commit). Reconcile
+            // directly — re-sending finalizeTermination would just revert.
+            await this.evmTerminationService.reconcileFinalized(vault.id);
+            await this.handleEvmTerminationSweep(vault.id, vaultAddress);
+            continue;
+          }
 
           if (outstanding === 0n) {
             await this.evmTerminationService.finalizeTermination(vault.id);

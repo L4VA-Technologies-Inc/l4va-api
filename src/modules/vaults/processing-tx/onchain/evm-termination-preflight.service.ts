@@ -23,6 +23,25 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
  * and `IVaultAdapter` has no removal surface), so a vault with meaningful
  * protocol-owned liquidity distributes LP tokens whose VT side is dying. This
  * blocks that case until LP removal ships.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * OPERATIONAL RULE — do not terminate a vault that has:
+ *   1. any active protocol-owned LP position (`getLiquidityPosition().status`
+ *      == Active), or
+ *   2. more than `evm_termination_max_pool_vt_bps` of its VT supply sitting in
+ *      AMM pairs,
+ * until an LP-removal path exists. Holders would otherwise redeem into LP tokens
+ * whose VT leg is worthless post-termination.
+ *
+ * Enforcement: (1) is a HARD BLOCK in strict mode — i.e. before
+ * `beginTerminationPreparing`, the one point where refusing is safe. (2) is a
+ * hard block whenever pool discovery succeeds; when discovery fails or the chain
+ * is not indexed by the pool source, it degrades to "unknown" and also blocks in
+ * strict mode. Past `beginTerminationPreparing` every check is advisory — the
+ * vault is through a one-way door and blocking would brick it — so the strict
+ * pre-check is the real gate. Treat a strict-mode failure as final: fix the
+ * cause (unwind LP, wait for pooled VT to clear) and retry, never override.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 /** Where the pool exposure figure came from. Only `failed` blocks. */
@@ -216,12 +235,14 @@ export class EvmTerminationPreflightService {
    * Run the full check.
    *
    * @param strict `true` before `beginTerminationPreparing` — a refusal is safe
-   *        there, because the vault has not yet entered the one-way door.
-   *        `false` before `beginTermination`, where the result is advisory:
-   *        `TerminationPreparing` has no exit other than `beginTermination`
-   *        (`openCycle` accepts only Locked/Cancelled), so a hard block at that
-   *        point would brick the vault rather than delay it. Callers must
-   *        surface the blockers and allow an explicit operator override.
+   *        there, because the vault has not yet entered the one-way door. In
+   *        strict mode, an active LP position OR unknown/over-threshold pooled
+   *        VT is a hard blocker (see the OPERATIONAL RULE at the top of this
+   *        file). `false` before `beginTermination`, where the result is
+   *        advisory: `TerminationPreparing` has no exit other than
+   *        `beginTermination` (`openCycle` accepts only Locked/Cancelled), so a
+   *        hard block there would brick the vault rather than delay it. Callers
+   *        must surface the blockers and proceed.
    */
   async check(vaultAddress: Address, strict: boolean): Promise<TerminationPreflightResult> {
     const thresholdBps = BigInt(this.systemSettings.evmTerminationMaxPoolVtBps);
@@ -254,20 +275,24 @@ export class EvmTerminationPreflightService {
     }
 
     if (lp.activeCount > 0) {
-      // Not automatically fatal: an LP token is an ordinary ERC-20 in custody
-      // and IS distributable. It is recorded so the operator sees what holders
-      // will actually receive, and so the asset can never be silently waived.
-      this.logger.warn(
-        `Vault ${vaultAddress} has ${lp.activeCount} active LP position(s); ` +
-          `their position assets must be committed as distributable: ${lp.positionAssets.join(', ')}`
-      );
+      const detail =
+        `Vault ${vaultAddress} has ${lp.activeCount} active protocol-owned LP position(s) ` +
+        `(assets: ${lp.positionAssets.join(', ') || 'n/a'}). LP removal is not implemented, so redeeming holders ` +
+        `would receive LP tokens whose VT leg dies with the vault.`;
+      if (strict) {
+        // Hard block at the one-way door. See the OPERATIONAL RULE above.
+        blockers.push(detail);
+      } else {
+        // Past the door already — advisory only; surfaced so the operator can
+        // see what holders will actually receive.
+        this.logger.warn(`${detail} Committing anyway — the vault is past beginTerminationPreparing.`);
+      }
     }
 
-    const staleAfter = this.systemSettings.evmTerminationPoolDataMaxAgeSeconds;
-    const ageSeconds = (Date.now() - discovery.checkedAt.getTime()) / 1000;
-    if (ageSeconds > staleAfter) {
-      blockers.push(`pool data is ${Math.round(ageSeconds)}s old, older than the ${staleAfter}s limit`);
-    }
+    // NOTE: no pool-data staleness check here. `discovery` is computed fresh on
+    // every call (never cached), so `checkedAt` is always ~now — a staleness
+    // gate would be dead code. `evm_termination_pool_data_max_age_seconds` is
+    // retained in settings for if/when discovery becomes cached.
 
     const ok = blockers.length === 0;
     if (!ok && !strict) {

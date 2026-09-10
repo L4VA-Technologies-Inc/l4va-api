@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { keccak256, toBytes, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
@@ -45,10 +45,18 @@ export interface CustodyPlan {
 export class EvmTerminationService {
   private readonly logger = new Logger(EvmTerminationService.name);
 
+  /**
+   * Short-lived cache for {@link getEvmTerminationState}. The endpoint is public
+   * (OptionalAuth) and fans out to a dozen-plus contract reads, so without this
+   * a page refresh loop would hammer the RPC. 10s is well inside the cadence a
+   * claim-window countdown UI needs.
+   */
+  private readonly stateCache = new Map<string, { at: number; value: unknown }>();
+  private static readonly STATE_CACHE_TTL_MS = 10_000;
+
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
-    @InjectRepository(Asset) private readonly assetsRepository: Repository<Asset>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
@@ -348,6 +356,7 @@ export class EvmTerminationService {
    */
   async redeemFor(vaultId: string, holder: Address): Promise<{ txHash: Hex }> {
     const vault = await this._requireEvmVault(vaultId);
+    await this._requireTerminating(vault.contract_address as Address);
     return this._sendSimple(
       vaultId,
       vault,
@@ -369,6 +378,7 @@ export class EvmTerminationService {
    */
   async deferTerminationAsset(vaultId: string, asset: Address): Promise<{ txHash: Hex }> {
     const vault = await this._requireEvmVault(vaultId);
+    await this._requireTerminating(vault.contract_address as Address);
     return this._sendSimple(
       vaultId,
       vault,
@@ -383,6 +393,7 @@ export class EvmTerminationService {
 
   async resumeTerminationAsset(vaultId: string, asset: Address): Promise<{ txHash: Hex }> {
     const vault = await this._requireEvmVault(vaultId);
+    await this._requireTerminating(vault.contract_address as Address);
     return this._sendSimple(
       vaultId,
       vault,
@@ -464,6 +475,12 @@ export class EvmTerminationService {
     }>;
     waived: Address[];
   }> {
+    const cacheKey = `${vaultId}|${holder?.toLowerCase() ?? ''}`;
+    const cached = this.stateCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < EvmTerminationService.STATE_CACHE_TTL_MS) {
+      return cached.value as Awaited<ReturnType<EvmTerminationService['getEvmTerminationState']>>;
+    }
+
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
     const client = this.contractReader.publicClient;
@@ -489,33 +506,47 @@ export class EvmTerminationService {
     const now = BigInt(Math.floor(Date.now() / 1000));
     const claimWindowOpen = deadline > 0n && now < deadline;
 
-    const rows = [];
-    for (const asset of assets) {
-      const info = (await read<readonly [boolean, boolean, bigint, bigint, bigint, bigint, bigint, bigint]>(
-        'terminationAsset',
-        [asset]
-      )) as unknown as [boolean, boolean, bigint, bigint, bigint, bigint, bigint, bigint];
-      const [, deferred, rate, cap, reserve, paid, released, deferredOutstanding] = info;
+    // One batch of reads per asset, all assets in parallel — up to
+    // MAX_TERMINATION_ASSETS (16) so the fan-out is bounded.
+    const rows = await Promise.all(
+      assets.map(async asset => {
+        const [info, preview, deferredOwed] = await Promise.all([
+          read<readonly [boolean, boolean, bigint, bigint, bigint, bigint, bigint, bigint]>('terminationAsset', [
+            asset,
+          ]),
+          holder ? read<bigint>('previewRedeem', [holder, asset]) : Promise.resolve<bigint | null>(null),
+          holder ? read<bigint>('deferredOwed', [holder, asset]) : Promise.resolve<bigint | null>(null),
+        ]);
+        const [, deferred, rate, cap, reserve, paid, released, deferredOutstanding] = info as unknown as [
+          boolean,
+          boolean,
+          bigint,
+          bigint,
+          bigint,
+          bigint,
+          bigint,
+          bigint,
+        ];
 
-      const row: any = {
-        asset,
-        deferred,
-        rate: rate.toString(),
-        cap: cap.toString(),
-        reserve: reserve.toString(),
-        paid: paid.toString(),
-        released: released.toString(),
-        deferredOutstanding: deferredOutstanding.toString(),
-      };
+        const row: any = {
+          asset,
+          deferred,
+          rate: rate.toString(),
+          cap: cap.toString(),
+          reserve: reserve.toString(),
+          paid: paid.toString(),
+          released: released.toString(),
+          deferredOutstanding: deferredOutstanding.toString(),
+        };
+        if (holder) {
+          row.preview = (preview ?? 0n).toString();
+          row.deferredOwed = (deferredOwed ?? 0n).toString();
+        }
+        return row;
+      })
+    );
 
-      if (holder) {
-        row.preview = (await read<bigint>('previewRedeem', [holder, asset])).toString();
-        row.deferredOwed = (await read<bigint>('deferredOwed', [holder, asset])).toString();
-      }
-      rows.push(row);
-    }
-
-    return {
+    const result = {
       status,
       vtSupply: vtSupply.toString(),
       outstandingVt: outstanding.toString(),
@@ -526,6 +557,29 @@ export class EvmTerminationService {
       assets: rows,
       waived,
     };
+
+    this.stateCache.set(cacheKey, { at: Date.now(), value: result });
+    return result;
+  }
+
+  /**
+   * Guard the operator escape hatches: `redeemFor`, `deferTerminationAsset` and
+   * `resumeTerminationAsset` are only meaningful while the vault is on-chain
+   * `Terminating`. The contract reverts otherwise anyway; this turns that into a
+   * clean 400 instead of a burned admin transaction.
+   */
+  private async _requireTerminating(vaultAddress: Address): Promise<void> {
+    const onchainStatus = (await this.contractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'status',
+    })) as number;
+    if (onchainStatus !== EvmVaultOnchainStatus.Terminating) {
+      throw new BadRequestException(
+        `Vault ${vaultAddress} is ${EvmVaultOnchainStatus[onchainStatus] ?? onchainStatus}; ` +
+          `termination asset operations require it to be Terminating`
+      );
+    }
   }
 
   private _sweepDelaySeconds(): bigint {
@@ -568,34 +622,81 @@ export class EvmTerminationService {
 
   /**
    * Phase 4 step 3 (final): call after all VT is burned (outstandingVt == 0).
-   * Transitions on-chain → Terminated. DB vault → terminated.
+   * Transitions on-chain → Terminated. DB vault → burned, and every asset row
+   * still LOCKED is reconciled in the SAME transaction as the status flip, so a
+   * crash cannot leave `vault=burned` with orphaned `locked` assets.
    */
   async finalizeTermination(vaultId: string): Promise<{ txHash: Hex }> {
-    const result = await this._sendSimple(
+    const vault = await this._requireEvmVault(vaultId);
+    const waived = vault.termination_metadata?.evm?.waived ?? [];
+
+    return this._sendSimple(
       vaultId,
-      await this._requireEvmVault(vaultId),
-      (await this._requireEvmVault(vaultId)).contract_address as Address,
+      vault,
+      vault.contract_address as Address,
       TransactionType.evmFinalizeTermination,
       'finalizeTermination',
       [],
       'VaultStatusChanged',
-      VaultStatus.burned
+      VaultStatus.burned,
+      manager => this._reconcileTerminatedAssets(manager, vaultId, waived)
     );
+  }
 
-    // The vault is now Terminated on-chain: every committed asset has been paid
-    // out to VT holders via redeem() and every waived asset sent to the
-    // treasury. Nothing is held in custody any more, so no asset row should be
-    // left LOCKED. Mirrors the Cardano termination flow, which moves FTs out of
-    // the LOCKED state as they leave the vault.
-    const flipped = await this.assetsRepository.update(
-      { vault_id: vaultId, status: AssetStatus.LOCKED, deleted: false },
-      { status: AssetStatus.DISTRIBUTED, released_at: new Date() }
-    );
-    if (flipped.affected) {
-      this.logger.log(`finalizeTermination: marked ${flipped.affected} asset(s) DISTRIBUTED for vault=${vaultId}`);
+  /**
+   * DB-only reconciliation for a vault that is already `Terminated` on-chain but
+   * whose backend row never caught up — e.g. the process died between the
+   * on-chain confirm and the DB commit inside {@link finalizeTermination}, where
+   * re-calling `finalizeTermination` just reverts (already Terminated) and never
+   * self-heals. Idempotent; safe to call every lifecycle tick.
+   */
+  async reconcileFinalized(vaultId: string): Promise<void> {
+    const vault = await this._requireEvmVault(vaultId);
+    if (vault.vault_status === VaultStatus.burned) return;
+    const waived = vault.termination_metadata?.evm?.waived ?? [];
+
+    await this.dataSource.transaction(async manager => {
+      await manager.update(Vault, { id: vaultId }, { vault_status: VaultStatus.burned });
+      await this._reconcileTerminatedAssets(manager, vaultId, waived);
+    });
+    this.logger.log(`reconcileFinalized: vault=${vaultId} was Terminated on-chain; DB reconciled to burned`);
+  }
+
+  /**
+   * Move every asset row still LOCKED into a terminal state, in the caller's
+   * transaction:
+   *   - waived assets → EXTRACTED  (they were routed to the treasury)
+   *   - everything else → DISTRIBUTED  (paid to VT holders via redeem())
+   * `policy_id` on an EVM asset row holds the token address (`0x…`, native uses
+   * the zero address).
+   */
+  private async _reconcileTerminatedAssets(manager: EntityManager, vaultId: string, waived: string[]): Promise<void> {
+    const waivedLower = [...new Set(waived.map(a => a.toLowerCase()))];
+    const now = new Date();
+
+    if (waivedLower.length > 0) {
+      const ext = await manager
+        .createQueryBuilder()
+        .update(Asset)
+        .set({ status: AssetStatus.EXTRACTED, released_at: now })
+        .where('vault_id = :vaultId', { vaultId })
+        .andWhere('status = :locked', { locked: AssetStatus.LOCKED })
+        .andWhere('deleted = false')
+        .andWhere('LOWER(policy_id) IN (:...waivedLower)', { waivedLower })
+        .execute();
+      if (ext.affected) {
+        this.logger.log(`finalizeTermination: marked ${ext.affected} waived asset(s) EXTRACTED for vault=${vaultId}`);
+      }
     }
 
-    return result;
+    const dist = await manager.update(
+      Asset,
+      { vault_id: vaultId, status: AssetStatus.LOCKED, deleted: false },
+      { status: AssetStatus.DISTRIBUTED, released_at: now }
+    );
+    if (dist.affected) {
+      this.logger.log(`finalizeTermination: marked ${dist.affected} asset(s) DISTRIBUTED for vault=${vaultId}`);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -608,7 +709,13 @@ export class EvmTerminationService {
     fnName: string,
     args: unknown[],
     expectedEvent: string,
-    nextVaultStatus: VaultStatus | null
+    nextVaultStatus: VaultStatus | null,
+    /**
+     * Extra DB work to run atomically with the post-confirm status flip — same
+     * transaction, so it commits together or not at all. Only invoked when
+     * `nextVaultStatus` is set.
+     */
+    afterConfirm?: (manager: EntityManager) => Promise<void>
   ): Promise<{ txHash: Hex }> {
     const adminTx = this.transactionsRepository.create({
       type: txType,
@@ -653,6 +760,7 @@ export class EvmTerminationService {
           }
         );
         await manager.update(Vault, { id: vaultId }, { vault_status: nextVaultStatus });
+        if (afterConfirm) await afterConfirm(manager);
       });
     } else {
       await this.transactionsRepository.update(
