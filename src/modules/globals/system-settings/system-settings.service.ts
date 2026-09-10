@@ -99,16 +99,16 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   governance_fee_proposal_expansion: 10000000, // 10 ADA
   governance_fee_proposal_asset_whitelist_update: 5000000, // 5 ADA
   governance_fee_voting: 0, // No voting fee by default
-  // EVM governance fees (wei, decimal strings). All zero by default: the flow
-  // ships dark and is switched on per proposal type from admin settings.
-  governance_fee_proposal_staking_evm: '0',
-  governance_fee_proposal_distribution_evm: '0',
-  governance_fee_proposal_termination_evm: '0',
-  governance_fee_proposal_burning_evm: '0',
-  governance_fee_proposal_marketplace_action_evm: '0',
-  governance_fee_proposal_expansion_evm: '0',
-  governance_fee_proposal_asset_whitelist_update_evm: '0',
-  governance_fee_voting_evm: '0',
+  // EVM governance fees (wei, decimal strings). Small non-zero test values so the
+  // flow is exercised end-to-end; tune per proposal type from admin settings.
+  governance_fee_proposal_staking_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_distribution_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_termination_evm: '200000000000000', // 0.0002 ETH
+  governance_fee_proposal_burning_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_marketplace_action_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_expansion_evm: '200000000000000', // 0.0002 ETH
+  governance_fee_proposal_asset_whitelist_update_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_voting_evm: '10000000000000', // 0.00001 ETH
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
   max_voting_duration: 259200000, // 3 days in ms
