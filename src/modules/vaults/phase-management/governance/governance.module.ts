@@ -9,6 +9,7 @@ import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { DistributionService } from './distribution.service';
 import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
+import { EvmGovernanceFeeService } from './evm-governance-fee.service';
 import { EvmSnapshotService } from './evm-snapshot.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
@@ -81,6 +82,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
   providers: [
     GovernanceService,
     GovernanceFeeService,
+    EvmGovernanceFeeService,
     GovernanceExecutionService,
     EvmGovernanceExecutionService,
     EvmSnapshotService,
@@ -106,6 +108,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
   exports: [
     GovernanceService,
     GovernanceFeeService,
+    EvmGovernanceFeeService,
     GovernanceExecutionService,
     TerminationService,
     DistributionService,

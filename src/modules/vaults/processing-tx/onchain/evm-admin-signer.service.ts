@@ -185,6 +185,50 @@ export class EvmAdminSigner {
     return { hash, receipt, decodedEvents };
   }
 
+  /**
+   * Send a plain native-value transfer from the admin wallet and wait for the
+   * receipt. Used for governance fee refunds, which pay a user back directly
+   * rather than calling a contract — hence no ABI, no simulation and no event
+   * decoding.
+   *
+   * @param onBroadcast Fired with the hash the moment it is broadcast, BEFORE
+   *   the receipt wait, so the caller can persist it and reconcile a
+   *   crash-in-flight from chain.
+   */
+  async sendNativeAndConfirm(
+    to: Address,
+    value: bigint,
+    opts?: { timeoutMs?: number; onBroadcast?: (hash: Hex) => Promise<void> }
+  ): Promise<{ hash: Hex; receipt: TransactionReceipt }> {
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+
+    const hash = (await this.walletClient.sendTransaction({
+      account: this.account,
+      chain: null,
+      to,
+      value,
+    })) as Hex;
+
+    this.logger.log(`Broadcast native transfer ${value} wei to ${to} tx=${hash}`);
+
+    if (opts?.onBroadcast) {
+      try {
+        await opts.onBroadcast(hash);
+      } catch (persistErr) {
+        this.logger.error(
+          `onBroadcast(${hash}) failed: ${(persistErr as Error).message}. Continuing to wait for receipt.`
+        );
+      }
+    }
+
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: timeoutMs });
+    if (receipt.status !== 'success') {
+      throw new TxRevertedError(hash, receipt);
+    }
+
+    return { hash, receipt };
+  }
+
   /** Public helper for reconciliation paths that only have a hash. */
   async fetchReceiptAndDecode<TAbi extends Abi>(
     hash: Hex,

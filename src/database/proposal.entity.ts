@@ -167,7 +167,23 @@ export class Proposal {
     _pendingPayment?: {
       duration: number; // Voting duration in ms
       originalStartDate: string; // ISO date string
-      feeAmount: number; // Fee amount in lovelace
+      /** Lovelace (Cardano) or wei as a decimal string (EVM). */
+      feeAmount: number | string;
+      /** Absent on legacy rows, which are all Cardano. */
+      chain?: 'cardano' | 'evm';
+      /**
+       * Recipient quoted when the fee was issued (EVM only). Verification
+       * checks against this rather than current settings, so changing the
+       * treasury address cannot invalidate an in-flight payment.
+       */
+      feeRecipient?: string;
+      /**
+       * Hash the user reported that we could not yet see on chain (EVM only).
+       * Recorded so a payment that outran our RPC is retryable and traceable
+       * rather than lost.
+       */
+      submittedTxHash?: string;
+      submittedAt?: string;
     };
 
     // Error tracking

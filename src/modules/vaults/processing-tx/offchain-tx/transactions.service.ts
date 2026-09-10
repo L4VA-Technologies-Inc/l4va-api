@@ -55,7 +55,13 @@ export class TransactionsService {
     vault_id: string;
     type: TransactionType;
     assets: Asset[];
-    amount?: number;
+    /**
+     * Smallest units (lovelace / wei). Accepts a decimal string so wei above
+     * Number.MAX_SAFE_INTEGER is stored exactly in the decimal(30,0) column —
+     * note the entity reads it back via parseFloat, so callers dealing in wei
+     * should treat the metadata copy as authoritative.
+     */
+    amount?: number | string;
     userId?: string;
     fee?: number;
     metadata?: object;
@@ -67,7 +73,7 @@ export class TransactionsService {
       type: data.type,
       status: TransactionStatus.created,
       assets: data.assets,
-      amount: data.amount,
+      amount: data.amount as number,
       user_id: data.userId,
       fee: data.fee,
       metadata: data.metadata,

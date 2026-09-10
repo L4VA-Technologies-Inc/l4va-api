@@ -35,6 +35,22 @@ export interface SystemSettingsData {
   governance_fee_proposal_expansion: number;
   governance_fee_proposal_asset_whitelist_update: number;
   governance_fee_voting: number; // Fee per vote
+  /**
+   * EVM (Robinhood) governance fees, in wei, as decimal strings.
+   *
+   * Deliberately separate from the lovelace keys above rather than converted:
+   * a 5 ADA fee and a 0.001 ETH fee are unrelated numbers, and a converted fee
+   * would drift with price between the quote and the payment. Strings because
+   * wei exceeds Number.MAX_SAFE_INTEGER.
+   */
+  governance_fee_proposal_staking_evm: string;
+  governance_fee_proposal_distribution_evm: string;
+  governance_fee_proposal_termination_evm: string;
+  governance_fee_proposal_burning_evm: string;
+  governance_fee_proposal_marketplace_action_evm: string;
+  governance_fee_proposal_expansion_evm: string;
+  governance_fee_proposal_asset_whitelist_update_evm: string;
+  governance_fee_voting_evm: string; // Fee per vote
   // Voting duration constraints (in milliseconds)
   min_voting_duration: number;
   max_voting_duration: number;
@@ -83,6 +99,16 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   governance_fee_proposal_expansion: 10000000, // 10 ADA
   governance_fee_proposal_asset_whitelist_update: 5000000, // 5 ADA
   governance_fee_voting: 0, // No voting fee by default
+  // EVM governance fees (wei, decimal strings). Small non-zero test values so the
+  // flow is exercised end-to-end; tune per proposal type from admin settings.
+  governance_fee_proposal_staking_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_distribution_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_termination_evm: '200000000000000', // 0.0002 ETH
+  governance_fee_proposal_burning_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_marketplace_action_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_expansion_evm: '200000000000000', // 0.0002 ETH
+  governance_fee_proposal_asset_whitelist_update_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_voting_evm: '10000000000000', // 0.00001 ETH
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
   max_voting_duration: 259200000, // 3 days in ms
@@ -277,6 +303,50 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_fee_voting || 0;
   }
 
+  // EVM governance fee getters (wei, as decimal strings)
+  private evmFee(value: string | number | undefined): string {
+    if (value === undefined || value === null || value === '') return '0';
+    const asString = String(value);
+    // Guard against a malformed settings edit reaching BigInt() downstream.
+    if (!/^\d+$/.test(asString)) {
+      this.logger.warn(`Invalid EVM governance fee value "${asString}" — treating as 0`);
+      return '0';
+    }
+    return asString;
+  }
+
+  get governanceFeeProposalStakingEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_staking_evm);
+  }
+
+  get governanceFeeProposalDistributionEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_distribution_evm);
+  }
+
+  get governanceFeeProposalTerminationEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_termination_evm);
+  }
+
+  get governanceFeeProposalBurningEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_burning_evm);
+  }
+
+  get governanceFeeProposalMarketplaceActionEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_marketplace_action_evm);
+  }
+
+  get governanceFeeProposalExpansionEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_expansion_evm);
+  }
+
+  get governanceFeeProposalAssetWhitelistUpdateEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_asset_whitelist_update_evm);
+  }
+
+  get governanceFeeVotingEvm(): string {
+    return this.evmFee(this.settings.governance_fee_voting_evm);
+  }
+
   get minVotingDuration(): number {
     // Environment-based: 5 min (preprod) / 1 day (mainnet)
     // Always use environment-based value (database setting is ignored for this)
@@ -371,6 +441,38 @@ export class SystemSettingsService implements OnModuleInit {
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;
+    }
+  }
+
+  /**
+   * Get the EVM fee for a specific proposal type.
+   * Mirrors getGovernanceFeeForProposalType, including the buy_sell and
+   * acquire_expansion aliases.
+   * @returns Fee amount in wei, as a decimal string
+   */
+  getGovernanceFeeForProposalTypeEvm(proposalType: string): string {
+    switch (proposalType) {
+      case 'staking':
+        return this.governanceFeeProposalStakingEvm;
+      case 'distribution':
+        return this.governanceFeeProposalDistributionEvm;
+      case 'termination':
+        return this.governanceFeeProposalTerminationEvm;
+      case 'burning':
+        return this.governanceFeeProposalBurningEvm;
+      case 'marketplace_action':
+        return this.governanceFeeProposalMarketplaceActionEvm;
+      case 'buy_sell':
+        return this.governanceFeeProposalMarketplaceActionEvm;
+      case 'expansion':
+        return this.governanceFeeProposalExpansionEvm;
+      case 'acquire_expansion':
+        return this.governanceFeeProposalExpansionEvm;
+      case 'asset_whitelist_update':
+        return this.governanceFeeProposalAssetWhitelistUpdateEvm;
+      default:
+        this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
+        return '0';
     }
   }
 }
