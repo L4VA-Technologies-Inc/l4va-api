@@ -2303,6 +2303,11 @@ export class GovernanceService {
           name: true,
           vault_token_ticker: true,
           vault_status: true,
+          // The client branches on this to pick the chain's fee and payment
+          // path, so it must be selected — without it every vault reads as
+          // Cardano and EVM voting fees can never be paid.
+          chain_type: true,
+          contract_address: true,
           termination_type: true,
           termination_metadata: true,
         },
@@ -2626,6 +2631,8 @@ export class GovernanceService {
             name: proposal.vault.name,
             vault_token_ticker: proposal.vault.vault_token_ticker,
             vault_status: proposal.vault.vault_status,
+            chainType: proposal.vault.chain_type,
+            contractAddress: proposal.vault.contract_address,
             termination_type: proposal.vault.termination_type,
             terminationMetadata: proposal.vault.termination_metadata, // Includes status, txHashes, etc.
           }

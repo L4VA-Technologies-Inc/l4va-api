@@ -112,6 +112,9 @@ export class ProposalDetailDto {
     name: string;
     vault_token_ticker?: string;
     vault_status?: string;
+    /** 'cardano' | 'robinhood' — the client uses this to pick the fee/payment path. */
+    chainType?: string;
+    contractAddress?: string;
     termination_type?: string;
     terminationMetadata?: any; // Includes status, txHashes, etc.
   };
