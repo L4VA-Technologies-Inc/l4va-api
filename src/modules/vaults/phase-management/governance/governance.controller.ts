@@ -19,6 +19,7 @@ import {
 } from './dto/governance-fee.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmGovernanceFeeService, type EvmGovernanceFeePayment } from './evm-governance-fee.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import GovernanceService from './governance.service';
 
@@ -37,7 +38,8 @@ export class GovernanceController {
   constructor(
     private readonly governanceService: GovernanceService,
     private readonly distributionService: DistributionService,
-    private readonly governanceFeeService: GovernanceFeeService
+    private readonly governanceFeeService: GovernanceFeeService,
+    private readonly evmGovernanceFeeService: EvmGovernanceFeeService
   ) {}
 
   @Post('vaults/:vaultId/proposals')
@@ -74,7 +76,11 @@ export class GovernanceController {
     @Param('proposalId', ParseUUIDPipe) proposalId: string,
     @Body() data: SubmitProposalFeePaymentReq
   ): Promise<{ success: boolean; message: string; txHash: string }> {
-    return this.governanceService.submitProposalFeePayment(proposalId, data.transaction, data.signatures, req.user.sub);
+    return this.governanceService.submitProposalFeePayment(
+      proposalId,
+      { transaction: data.transaction, signatures: data.signatures, txHash: data.txHash },
+      req.user.sub
+    );
   }
 
   @Get('vaults/:vaultId/proposals')
@@ -273,6 +279,20 @@ export class GovernanceController {
       proposalFeeExpansion: this.governanceFeeService.getProposalFee('expansion'),
       proposalFeeAssetWhitelistUpdate: this.governanceFeeService.getProposalFee('asset_whitelist_update'),
       votingFee: this.governanceFeeService.getVotingFee(),
+      // EVM fees are wei decimal strings, denominated independently of the
+      // lovelace values above. Clients pick a block based on the vault's chain.
+      evm: {
+        proposalFeeStaking: this.evmGovernanceFeeService.getProposalFeeWei('staking').toString(),
+        proposalFeeDistribution: this.evmGovernanceFeeService.getProposalFeeWei('distribution').toString(),
+        proposalFeeTermination: this.evmGovernanceFeeService.getProposalFeeWei('termination').toString(),
+        proposalFeeBurning: this.evmGovernanceFeeService.getProposalFeeWei('burning').toString(),
+        proposalFeeMarketplaceAction: this.evmGovernanceFeeService.getProposalFeeWei('marketplace_action').toString(),
+        proposalFeeExpansion: this.evmGovernanceFeeService.getProposalFeeWei('expansion').toString(),
+        proposalFeeAssetWhitelistUpdate: this.evmGovernanceFeeService
+          .getProposalFeeWei('asset_whitelist_update')
+          .toString(),
+        votingFee: this.evmGovernanceFeeService.getVotingFeeWei().toString(),
+      },
     };
   }
 
@@ -298,5 +318,19 @@ export class GovernanceController {
       presignedTx: result.presignedTx,
       feeAmount: result.feeAmount,
     };
+  }
+
+  @Post('proposals/:proposalId/vote-fee-payment')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get native voting fee payment parameters for an EVM (Robinhood) vault' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Transfer the wallet must broadcast to pay the voting fee. `payment` is null when no voting fee applies.',
+  })
+  async buildVoteFeePayment(): Promise<{ payment: EvmGovernanceFeePayment | null }> {
+    // A quote, not a mutation — the wallet broadcasts the transfer itself and
+    // passes the resulting hash to the vote endpoint as `feeTxHash`.
+    return { payment: this.evmGovernanceFeeService.buildVotingFeePayment() };
   }
 }

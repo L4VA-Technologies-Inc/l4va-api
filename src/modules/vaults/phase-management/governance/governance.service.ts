@@ -27,6 +27,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmGovernanceFeeService, FeePaymentNotVisibleError } from './evm-governance-fee.service';
 import { EvmSnapshotService } from './evm-snapshot.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
@@ -139,6 +140,7 @@ export class GovernanceService {
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
     private readonly governanceFeeService: GovernanceFeeService,
+    private readonly evmGovernanceFeeService: EvmGovernanceFeeService,
     private readonly transactionsService: TransactionsService,
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly dexHunterPricingService: DexHunterPricingService,
@@ -2099,11 +2101,14 @@ export class GovernanceService {
       }
     }
 
-    // Check if governance fee is required for this proposal type
-    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
-    // EVM vaults use on-chain ETH payments — the Cardano fee builder (Blockfrost/CSL) cannot
-    // handle 0x addresses. Fees for EVM proposals will be collected on-chain in a future release.
-    const requiresPayment = feeAmount > 0 && vault.chain_type !== ChainType.robinhood;
+    // Check if governance fee is required for this proposal type.
+    // Cardano fees are lovelace and built server-side; EVM fees are wei and paid
+    // by the user's own wallet as a native transfer (see EvmGovernanceFeeService).
+    const isEvmVault = vault.chain_type === ChainType.robinhood;
+    const feeAmount = isEvmVault
+      ? this.evmGovernanceFeeService.getProposalFeeWei(createProposalReq.type).toString()
+      : this.governanceFeeService.getProposalFee(createProposalReq.type);
+    const requiresPayment = isEvmVault ? BigInt(feeAmount as string) > 0n : (feeAmount as number) > 0;
 
     // If payment is required, set status to UNPAID and clear dates
     // Store original duration and start date in metadata so we can set correct dates after payment
@@ -2113,6 +2118,8 @@ export class GovernanceService {
         duration: createProposalReq.duration,
         originalStartDate: startDate.toISOString(),
         feeAmount,
+        chain: isEvmVault ? 'evm' : 'cardano',
+        ...(isEvmVault ? { feeRecipient: this.evmGovernanceFeeService.feeRecipient } : {}),
       };
       proposal.startDate = null;
       proposal.endDate = null;
@@ -2124,6 +2131,35 @@ export class GovernanceService {
     // Events will be emitted when user submits payment via submitProposalFeePayment
     if (requiresPayment) {
       try {
+        const createdProposal = {
+          id: proposal.id,
+          vaultId,
+          title: proposal.title,
+          description: proposal.description,
+          creatorId: userId,
+          status: proposal.status,
+          createdAt: proposal.createdAt,
+          endDate: proposal.endDate,
+        };
+
+        // EVM: nothing to pre-build. Hand the wallet the transfer parameters and
+        // let it broadcast; we verify the resulting hash in submitProposalFeePayment.
+        if (isEvmVault) {
+          const evmPayment = this.evmGovernanceFeeService.buildProposalFeePayment(createProposalReq.type);
+          // requiresPayment already established fee > 0, so this is defensive only.
+          if (!evmPayment) {
+            throw new Error('EVM governance fee payment parameters could not be built');
+          }
+          return {
+            success: true,
+            message: 'Proposal created. Please complete payment to activate.',
+            proposal: createdProposal,
+            requiresPayment: true,
+            evmPayment,
+            feeAmount: evmPayment.feeAmount,
+          };
+        }
+
         const feeTransaction = await this.governanceFeeService.buildProposalFeeTransaction({
           userAddress: user.address,
           proposalType: createProposalReq.type,
@@ -2133,16 +2169,7 @@ export class GovernanceService {
         return {
           success: true,
           message: 'Proposal created. Please complete payment to activate.',
-          proposal: {
-            id: proposal.id,
-            vaultId,
-            title: proposal.title,
-            description: proposal.description,
-            creatorId: userId,
-            status: proposal.status,
-            createdAt: proposal.createdAt,
-            endDate: proposal.endDate,
-          },
+          proposal: createdProposal,
           requiresPayment: true,
           presignedTx: feeTransaction.presignedTx,
           feeAmount: feeTransaction.feeAmount,
@@ -2631,6 +2658,7 @@ export class GovernanceService {
 
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
+      relations: ['vault'],
     });
 
     if (!proposal) {
@@ -2661,6 +2689,11 @@ export class GovernanceService {
     }
 
     const voteWeight = await this.getVotingPower(proposal.vaultId, userId, 'vote');
+
+    // Collect the voting fee before the vote is recorded. Nothing linked a vote
+    // to a payment before this: the fee builder existed but vote() never checked
+    // it, so voting was effectively free on both chains.
+    await this.collectVotingFee(proposal, voteReq, userId, normalizedVoterAddress);
 
     const vote = this.voteRepository.create({
       proposalId,
@@ -2710,14 +2743,97 @@ export class GovernanceService {
   }
 
   /**
+   * Charge the voting fee, if one is configured for the proposal's chain.
+   *
+   * Cardano hands us a signed transaction to submit; EVM hands us the hash of a
+   * transfer the wallet already broadcast, which we verify. Either way the
+   * payment is recorded as a `governance_vote_fee` transaction and any failure
+   * throws, so the caller never records a vote that was not paid for.
+   *
+   * No-ops when the fee is zero, which is the default — voting stays free
+   * until an admin sets a fee.
+   */
+  private async collectVotingFee(
+    proposal: Proposal,
+    voteReq: VoteReq,
+    userId: string,
+    voterAddress: string
+  ): Promise<void> {
+    const isEvmVault = proposal.vault?.chain_type === ChainType.robinhood;
+    const feeAmount = isEvmVault
+      ? this.evmGovernanceFeeService.getVotingFeeWei().toString()
+      : this.governanceFeeService.getVotingFee();
+
+    const feeIsZero = isEvmVault ? BigInt(feeAmount as string) === 0n : (feeAmount as number) <= 0;
+    if (feeIsZero) return;
+
+    const paidAt = new Date().toISOString();
+    const metadata = {
+      kind: 'governance_vote_fee',
+      proposalId: proposal.id,
+      voterAddress,
+      paidAt,
+      feeAmount,
+    };
+
+    let txHash: string;
+    if (isEvmVault) {
+      if (!voteReq.feeTxHash) {
+        throw new BadRequestException('feeTxHash is required — this proposal charges a voting fee');
+      }
+      // Verify before writing anything. Unlike proposal creation there is no
+      // row to clean up, so a failure here simply rejects the vote.
+      const verified = await this.evmGovernanceFeeService.verifyFeePayment({
+        txHash: voteReq.feeTxHash,
+        expectedFrom: voterAddress,
+        expectedValue: BigInt(feeAmount as string),
+      });
+      txHash = verified.txHash;
+    } else {
+      if (!voteReq.feeTransaction) {
+        throw new BadRequestException('feeTransaction is required — this proposal charges a voting fee');
+      }
+      const result = await this.blockchainService.submitTransaction({
+        transaction: voteReq.feeTransaction,
+        signatures: voteReq.feeSignatures || [],
+      });
+      if (!result.txHash) {
+        throw new BadRequestException('Failed to submit voting fee transaction: no transaction hash returned');
+      }
+      txHash = result.txHash;
+    }
+
+    const feeTx = await this.transactionsService.createTransaction({
+      vault_id: proposal.vaultId,
+      type: TransactionType.payment,
+      assets: [],
+      amount: feeAmount,
+      userId,
+      metadata,
+    });
+
+    // The payment already succeeded on chain, so a DB hiccup here must not
+    // block the vote — log it and let the row be reconciled later.
+    try {
+      await this.transactionsService.updateTransactionHash(feeTx.id, txHash, { ...metadata, paymentTxHash: txHash });
+    } catch (dbError) {
+      this.logger.error(
+        `Voting fee paid (txHash: ${txHash}) but DB update failed for proposal ${proposal.id}: ${dbError?.message || dbError}`,
+        dbError?.stack
+      );
+    }
+
+    this.logger.log(`Collected voting fee ${txHash} for proposal ${proposal.id} from ${voterAddress}`);
+  }
+
+  /**
    * Submit governance fee payment transaction and activate proposal
    * Takes signed transaction, submits to blockchain, and activates the proposal
    * Only the proposal creator can submit the fee payment
    */
   async submitProposalFeePayment(
     proposalId: string,
-    transaction: string,
-    signatures: string[],
+    payment: { transaction?: string; signatures?: string[]; txHash?: string },
     userId: string
   ): Promise<{ success: boolean; message: string; txHash: string }> {
     // Fetch proposal to validate
@@ -2743,6 +2859,58 @@ export class GovernanceService {
     const pendingPayment = proposal.metadata?._pendingPayment;
     if (!pendingPayment) {
       throw new InternalServerErrorException('Proposal missing pending payment metadata');
+    }
+
+    // Legacy UNPAID rows predate the `chain` marker and are all Cardano.
+    const isEvmPayment = pendingPayment.chain === 'evm' || proposal.vault?.chain_type === ChainType.robinhood;
+
+    // EVM: the user already broadcast the transfer, so verify it up front —
+    // before any state is mutated and before a fee Transaction row exists.
+    // A definitive rejection deletes the UNPAID proposal (mirroring the Cardano
+    // submit-failure branch); a not-yet-visible transaction does NOT, because
+    // the user may have paid and simply be ahead of our RPC.
+    let verifiedEvmTxHash: string | undefined;
+    if (isEvmPayment) {
+      if (!payment.txHash) {
+        throw new BadRequestException('txHash is required to pay the governance fee for an EVM vault');
+      }
+      try {
+        const verified = await this.evmGovernanceFeeService.verifyFeePayment({
+          txHash: payment.txHash,
+          expectedFrom: proposal.creator.address,
+          expectedValue: BigInt(pendingPayment.feeAmount),
+          expectedTo: pendingPayment.feeRecipient,
+        });
+        verifiedEvmTxHash = verified.txHash;
+      } catch (error) {
+        if (error instanceof FeePaymentNotVisibleError) {
+          // Keep the proposal UNPAID so the same hash can be retried, and record
+          // the hash: the user may well have paid, and without this the payment
+          // would be invisible to both a retry and to support.
+          proposal.metadata._pendingPayment = {
+            ...pendingPayment,
+            submittedTxHash: payment.txHash,
+            submittedAt: new Date().toISOString(),
+          };
+          try {
+            await this.proposalRepository.save(proposal);
+          } catch (saveError) {
+            this.logger.error(`Failed to record pending fee hash for proposal ${proposalId}: ${saveError.message}`);
+          }
+          this.logger.warn(`Governance fee for proposal ${proposalId} not yet visible: ${error.message}`);
+          throw new BadRequestException(`${error.message}. Please retry once the transaction is confirmed.`);
+        }
+        this.logger.error(`Governance fee verification failed for proposal ${proposalId}: ${error.message}`);
+        try {
+          await this.proposalRepository.remove(proposal);
+          this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed fee verification`);
+        } catch (deleteError) {
+          this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
+        }
+        throw error;
+      }
+    } else if (!payment.transaction) {
+      throw new BadRequestException('transaction is required to pay the governance fee for a Cardano vault');
     }
 
     // Use originalStartDate from metadata (user's intended start date)
@@ -2777,20 +2945,26 @@ export class GovernanceService {
       },
     });
 
-    // Submit transaction to blockchain
+    // Submit transaction to blockchain (Cardano). EVM payments are already
+    // on chain and were verified above, so there is nothing to submit.
     let txHash: string;
     try {
-      const result = await this.blockchainService.submitTransaction({
-        transaction: transaction,
-        signatures: signatures || [],
-      });
+      if (isEvmPayment) {
+        txHash = verifiedEvmTxHash;
+        this.logger.log(`Verified governance fee transaction: ${txHash} for proposal ${proposalId}`);
+      } else {
+        const result = await this.blockchainService.submitTransaction({
+          transaction: payment.transaction,
+          signatures: payment.signatures || [],
+        });
 
-      if (!result.txHash) {
-        throw new Error('No transaction hash returned from blockchain submission');
+        if (!result.txHash) {
+          throw new Error('No transaction hash returned from blockchain submission');
+        }
+
+        txHash = result.txHash;
+        this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
       }
-
-      txHash = result.txHash;
-      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
     } catch (error) {
       const errorMsg = error?.message || error?.toString() || 'Unknown error';
       this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);

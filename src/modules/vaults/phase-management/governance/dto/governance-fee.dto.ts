@@ -1,6 +1,44 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
-import { IsString, IsNotEmpty, IsArray } from 'class-validator';
+import { Expose, Type } from 'class-transformer';
+import { IsString, IsNotEmpty, IsArray, IsOptional } from 'class-validator';
+
+/**
+ * EVM governance fees, in wei as decimal strings. Denominated independently
+ * of the lovelace fees above — these are not a conversion of them.
+ */
+export class EvmGovernanceFeesDto {
+  @ApiProperty({ description: 'Staking proposal fee (wei)', example: '1000000000000000' })
+  @Expose()
+  proposalFeeStaking: string;
+
+  @ApiProperty({ description: 'Distribution proposal fee (wei)', example: '1000000000000000' })
+  @Expose()
+  proposalFeeDistribution: string;
+
+  @ApiProperty({ description: 'Termination proposal fee (wei)', example: '2000000000000000' })
+  @Expose()
+  proposalFeeTermination: string;
+
+  @ApiProperty({ description: 'Burning proposal fee (wei)', example: '0' })
+  @Expose()
+  proposalFeeBurning: string;
+
+  @ApiProperty({ description: 'Marketplace action proposal fee (wei)', example: '1000000000000000' })
+  @Expose()
+  proposalFeeMarketplaceAction: string;
+
+  @ApiProperty({ description: 'Expansion proposal fee (wei)', example: '2000000000000000' })
+  @Expose()
+  proposalFeeExpansion: string;
+
+  @ApiProperty({ description: 'Asset whitelist update proposal fee (wei)', example: '1000000000000000' })
+  @Expose()
+  proposalFeeAssetWhitelistUpdate: string;
+
+  @ApiProperty({ description: 'Voting fee (wei)', example: '0' })
+  @Expose()
+  votingFee: string;
+}
 
 /**
  * Response DTO for getting governance fees
@@ -61,6 +99,14 @@ export class GetGovernanceFeesRes {
   })
   @Expose()
   votingFee: number;
+
+  @ApiProperty({
+    description: 'EVM (Robinhood) governance fees, in wei. Clients use this block for EVM vaults.',
+    type: EvmGovernanceFeesDto,
+  })
+  @Expose()
+  @Type(() => EvmGovernanceFeesDto)
+  evm: EvmGovernanceFeesDto;
 }
 
 /**
@@ -87,19 +133,34 @@ export class BuildGovernanceFeeTransactionRes {
  */
 export class SubmitProposalFeePaymentReq {
   @ApiProperty({
-    description: 'CBOR encoded transaction',
+    description: 'CBOR encoded transaction (Cardano vaults)',
     example: '84a400...',
+    required: false,
   })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  transaction: string;
+  transaction?: string;
 
   @ApiProperty({
-    description: 'Array of CBOR encoded signatures',
+    description: 'Array of CBOR encoded signatures (Cardano vaults)',
     example: ['84a400...'],
     required: false,
   })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  signatures: string[];
+  signatures?: string[];
+
+  @ApiProperty({
+    description:
+      'Hash of the native fee transfer already broadcast by the wallet (EVM vaults). ' +
+      'Mutually exclusive with `transaction`.',
+    example: '0xabc123...',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  txHash?: string;
 }
