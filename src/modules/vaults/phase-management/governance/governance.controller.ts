@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { AssetMetadataRes } from './dto/asset-metadata.res';
@@ -19,10 +21,13 @@ import {
 } from './dto/governance-fee.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmDistributionService } from './evm-distribution.service';
+import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
 import { EvmGovernanceFeeService, type EvmGovernanceFeePayment } from './evm-governance-fee.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import GovernanceService from './governance.service';
 
+import { Vault } from '@/database/vault.entity';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
@@ -31,6 +36,7 @@ import {
   AssetBuySellDto,
   GetTerminationAssetsDto,
 } from '@/modules/vaults/phase-management/governance/dto/get-assets.dto';
+import { ChainType } from '@/types/vault.types';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -39,7 +45,10 @@ export class GovernanceController {
     private readonly governanceService: GovernanceService,
     private readonly distributionService: DistributionService,
     private readonly governanceFeeService: GovernanceFeeService,
-    private readonly evmGovernanceFeeService: EvmGovernanceFeeService
+    private readonly evmGovernanceFeeService: EvmGovernanceFeeService,
+    private readonly evmDistributionService: EvmDistributionService,
+    private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService,
+    @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>
   ) {}
 
   @Post('vaults/:vaultId/proposals')
@@ -213,8 +222,49 @@ export class GovernanceController {
     description: 'Returns treasury balance, VT holder count, and distribution limits for UI',
   })
   @ApiResponse({ status: 200, description: 'Distribution info', type: GetDistributionInfoRes })
-  async getDistributionInfo(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetDistributionInfoRes> {
+  async getDistributionInfo(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query('asset') asset?: string
+  ): Promise<GetDistributionInfoRes | Awaited<ReturnType<EvmDistributionService['getDistributionInfo']>>> {
+    // EVM vaults have no treasury wallet — the distributable funds sit in the
+    // vault contract. Returning the Cardano shape here reported
+    // `hasTreasuryWallet: false` and made the feature look broken in the UI.
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'chain_type'],
+    });
+    if (vault?.chain_type === ChainType.robinhood) {
+      return this.evmDistributionService.getDistributionInfo(vaultId, asset);
+    }
     return this.distributionService.getDistributionInfo(vaultId);
+  }
+
+  @Get('vaults/:vaultId/distributions/:distributionId/claimable')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: "Get a holder's claimable amount for an EVM distribution",
+    description:
+      'Reads straight from the vault contract. Returns 0 once claimed, or if the holder was excluded at the snapshot timepoint.',
+  })
+  async getDistributionClaimable(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Param('distributionId') distributionId: string,
+    @Query('holder') holder: string
+  ): Promise<{ distributionId: string; holder: string; claimable: string }> {
+    const claimable = await this.evmDistributionService.claimableFor(vaultId, distributionId, holder as `0x${string}`);
+    return { distributionId, holder, claimable };
+  }
+
+  @Post('proposals/:proposalId/distribution/retry')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: 'Retry opening a stalled EVM distribution',
+    description:
+      'Safe to call repeatedly: the on-chain execution key means a submission that already landed is adopted rather than duplicated.',
+  })
+  async retryDistribution(@Param('proposalId', ParseUUIDPipe) proposalId: string): Promise<{ success: boolean }> {
+    const success = await this.evmGovernanceExecutionService.retryDistribution(proposalId);
+    return { success };
   }
 
   @Get('vaults/:vaultId/assets/terminate')

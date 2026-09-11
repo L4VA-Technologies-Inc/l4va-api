@@ -440,6 +440,28 @@ export class CreateProposalReq {
   distributionLovelaceAmount?: number;
 
   @ApiProperty({
+    description:
+      'EVM only. Asset to distribute: the zero address for native, or an ERC-20 address. Defaults to native.',
+    example: '0x0000000000000000000000000000000000000000',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  distributionAsset?: string;
+
+  @ApiProperty({
+    description:
+      'EVM only. Amount to distribute in BASE UNITS as a decimal string (wei for native). A string rather than a number because 18-decimal amounts exceed the safe integer range. Do not use distributionLovelaceAmount for EVM vaults — that field is 6-decimal ADA.',
+    example: '1000000000000000000',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  distributionAmount?: string;
+
+  @ApiProperty({
     description: 'Marketplace actions for marketplace proposals (buy, offer, cancel offer, sell, unlist, update)',
     type: [MarketplaceActionDto],
     required: false,

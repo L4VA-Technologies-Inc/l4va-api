@@ -387,6 +387,101 @@ export const VAULT_ABI = [
     outputs: [{ type: 'uint256' }],
   },
 
+  // --- Pro-rata distribution (no VT burn) ------------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'openDistribution',
+    inputs: [
+      { name: 'executionKey', type: 'bytes32' },
+      { name: 'asset', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'timepoint', type: 'uint48' },
+      { name: 'claimWindow', type: 'uint64' },
+    ],
+    outputs: [{ name: 'distributionId', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'claimDistributionFor',
+    inputs: [
+      { name: 'distributionId', type: 'uint256' },
+      { name: 'holder', type: 'address' },
+    ],
+    outputs: [{ name: 'amount', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'sweepDistributionRemainder',
+    inputs: [{ name: 'distributionId', type: 'uint256' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'distributionIdForExecutionKey',
+    inputs: [{ name: 'executionKey', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'isDistributionClaimed',
+    inputs: [
+      { name: 'distributionId', type: 'uint256' },
+      { name: 'holder', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'distributionClaimable',
+    inputs: [
+      { name: 'distributionId', type: 'uint256' },
+      { name: 'holder', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'getDistribution',
+    inputs: [{ name: 'distributionId', type: 'uint256' }],
+    outputs: [
+      {
+        name: '',
+        type: 'tuple',
+        components: [
+          { name: 'asset', type: 'address' },
+          { name: 'timepoint', type: 'uint48' },
+          { name: 'netPot', type: 'uint256' },
+          { name: 'supply', type: 'uint256' },
+          { name: 'paid', type: 'uint256' },
+          { name: 'released', type: 'uint256' },
+          { name: 'openedAt', type: 'uint64' },
+          { name: 'deadline', type: 'uint64' },
+          { name: 'swept', type: 'bool' },
+        ],
+      },
+    ],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'availableNativeForOperations',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'availableErc20ForOperations',
+    inputs: [{ name: 'token', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
   // --- Termination (burn-to-redeem against committed rates) ------------------
   {
     type: 'function',
@@ -862,6 +957,40 @@ export const VAULT_ABI = [
       { name: 'recipient', type: 'address', indexed: true },
       { name: 'asset', type: 'address', indexed: true },
       { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'DistributionOpened',
+    inputs: [
+      { name: 'distributionId', type: 'uint256', indexed: true },
+      { name: 'executionKey', type: 'bytes32', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'netPot', type: 'uint256', indexed: false },
+      { name: 'timepoint', type: 'uint48', indexed: false },
+      { name: 'supply', type: 'uint256', indexed: false },
+      { name: 'deadline', type: 'uint64', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'DistributionClaimed',
+    inputs: [
+      { name: 'distributionId', type: 'uint256', indexed: true },
+      { name: 'holder', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: false },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'DistributionRemainderSwept',
+    inputs: [
+      { name: 'distributionId', type: 'uint256', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'to', type: 'address', indexed: true },
     ],
   },
   {

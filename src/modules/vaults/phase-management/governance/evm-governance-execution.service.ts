@@ -15,6 +15,8 @@ import {
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
+import { EvmDistributionService } from './evm-distribution.service';
+
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
@@ -48,6 +50,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly positionsRepository: Repository<EvmExternalPosition>,
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
+    private readonly distributionService: EvmDistributionService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
     private readonly uniswapQuoteService: UniswapQuoteService,
     private readonly evmOpenCycleService: EvmOpenCycleService,
@@ -96,10 +99,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
         return this.executeTermination(proposal, vault);
 
       case ProposalType.DISTRIBUTION:
-        // Distributions are already handled by the airdrop orchestrator
-        // (closeCycle → claimAllocations). Mark as executed immediately.
-        this.logger.log(`Proposal ${proposal.id}: DISTRIBUTION — delegated to airdrop pipeline, marking executed`);
-        return true;
+        return this.executeDistribution(proposal);
 
       case ProposalType.BURNING:
         // No VT burn governance equivalent on EVM yet.
@@ -476,6 +476,88 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       }
       return false;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Distribution → openDistribution
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A passed DISTRIBUTION proposal reserves its pot on the vault contract.
+   *
+   * This previously returned `true` on a log line, on the premise that the
+   * airdrop orchestrator handled distributions. It does not — that pipeline
+   * pushes acquire-phase allocation claims and has no concept of a proposal, so
+   * a passed distribution was marked EXECUTED while moving no funds at all.
+   *
+   * Failure returns `false` rather than throwing past the caller so the
+   * proposal stays retryable. That is safe to retry because
+   * `EvmDistributionService` reconciles against the on-chain execution key
+   * first: a submission that landed but lost its receipt is adopted, never
+   * re-opened.
+   */
+  private async executeDistribution(proposal: Proposal): Promise<boolean> {
+    try {
+      const result = await this.distributionService.executeDistribution(proposal);
+
+      await this.proposalRepository.update(
+        { id: proposal.id },
+        {
+          metadata: {
+            ...proposal.metadata,
+            evmDistribution: {
+              distributionId: result.distributionId,
+              asset: result.asset,
+              netPot: result.netPot,
+              supply: result.supply,
+              timepoint: result.timepoint,
+              deadline: result.deadline,
+              txHash: result.txHash,
+              openedAt: new Date().toISOString(),
+            },
+          },
+        }
+      );
+
+      this.logger.log(
+        `Proposal ${proposal.id}: distribution ${result.distributionId} ${result.reconciled ? 'reconciled from chain' : 'opened'} — ` +
+          `asset=${result.asset} netPot=${result.netPot} claims close at ${new Date(Number(result.deadline) * 1000).toISOString()}`
+      );
+      return true;
+    } catch (err) {
+      const message = (err as Error).message;
+      this.logger.error(`Proposal ${proposal.id}: openDistribution failed — ${message}`);
+
+      await this.proposalRepository.update(
+        { id: proposal.id },
+        {
+          metadata: {
+            ...proposal.metadata,
+            executionError: {
+              message,
+              timestamp: new Date().toISOString(),
+              errorCode: 'EVM_DISTRIBUTION_FAILED',
+              userFriendlyMessage:
+                'The distribution could not be opened on-chain. It will be retried automatically; funds have not moved.',
+            },
+          },
+        }
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Operator entry point for a distribution that failed to open. Safe to call
+   * repeatedly — the on-chain execution key makes a duplicate impossible.
+   */
+  async retryDistribution(proposalId: string): Promise<boolean> {
+    const proposal = await this.proposalRepository.findOne({ where: { id: proposalId } });
+    if (!proposal) {
+      this.logger.error(`retryDistribution: proposal ${proposalId} not found`);
+      return false;
+    }
+    return this.executeDistribution(proposal);
   }
 
   /**

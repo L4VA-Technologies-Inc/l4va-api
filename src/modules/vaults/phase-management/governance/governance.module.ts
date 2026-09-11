@@ -8,6 +8,7 @@ import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module'
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { DistributionService } from './distribution.service';
+import { EvmDistributionService } from './evm-distribution.service';
 import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
 import { EvmGovernanceFeeService } from './evm-governance-fee.service';
 import { EvmSnapshotService } from './evm-snapshot.service';
@@ -86,6 +87,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     GovernanceExecutionService,
     EvmGovernanceExecutionService,
     EvmSnapshotService,
+    EvmDistributionService,
     GovernanceRefundService,
     ProposalSchedulerService,
     ExpansionService,
@@ -112,6 +114,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     GovernanceExecutionService,
     TerminationService,
     DistributionService,
+    EvmDistributionService,
     ExpansionService,
   ],
 })
