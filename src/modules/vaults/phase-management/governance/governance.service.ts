@@ -27,6 +27,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { EvmDistributionService } from './evm-distribution.service';
 import { EvmGovernanceFeeService, FeePaymentNotVisibleError } from './evm-governance-fee.service';
 import { EvmSnapshotService } from './evm-snapshot.service';
 import { GovernanceFeeService } from './governance-fee.service';
@@ -87,6 +88,9 @@ import { VoteType } from '@/types/vote.types';
 
 */
 
+/** `address(0)` — native asset sentinel on EVM vaults. */
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
@@ -139,6 +143,7 @@ export class GovernanceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
+    private readonly evmDistributionService: EvmDistributionService,
     private readonly governanceFeeService: GovernanceFeeService,
     private readonly evmGovernanceFeeService: EvmGovernanceFeeService,
     private readonly transactionsService: TransactionsService,
@@ -782,6 +787,39 @@ export class GovernanceService {
         break;
 
       case ProposalType.DISTRIBUTION: {
+        // EVM and Cardano distributions share nothing but the proposal type.
+        // Cardano pays from a backend-held treasury wallet in 6-decimal
+        // lovelace; EVM reserves funds inside the vault contract in 18-decimal
+        // base units and holders claim trustlessly. Routing both through the
+        // Cardano validator is what made this proposal type unusable on RH.
+        if (vault.chain_type === ChainType.robinhood) {
+          const asset = createProposalReq.distributionAsset || ZERO_ADDRESS;
+          const amount = createProposalReq.distributionAmount;
+
+          if (!amount) {
+            throw new BadRequestException(
+              'distributionAmount (base units, as a string) is required for EVM distribution proposals. ' +
+                'distributionLovelaceAmount is Cardano-only.'
+            );
+          }
+
+          const validation = await this.evmDistributionService.validateDistribution(vaultId, asset, amount);
+          if (!validation.valid) {
+            throw new BadRequestException(validation.reason ?? 'Distribution validation failed');
+          }
+
+          proposal.metadata.distributionAsset = asset;
+          proposal.metadata.distributionAmount = amount;
+
+          // Pin the timepoint NOW, from the snapshot this proposal is voted
+          // on, so execution commits exactly the holder set that was voted on
+          // rather than whatever it looks like whenever execution runs.
+          if (validation.timepoint) {
+            proposal.metadata.distributionTimepoint = validation.timepoint;
+          }
+          break;
+        }
+
         const lovelaceAmount = createProposalReq.distributionLovelaceAmount;
 
         if (!lovelaceAmount || lovelaceAmount <= 0) {

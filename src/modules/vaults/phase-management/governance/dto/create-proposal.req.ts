@@ -238,6 +238,83 @@ export class MarketplaceActionDto {
   @IsOptional()
   useMarketPrice?: boolean;
 
+  // ===== EVM NFT SELL fields =====
+  // Every field below is fixed by the proposal and passed straight to
+  // `Vault.sellNft`; nothing is recomputed at execution time. All optional so
+  // Cardano/WayUp proposals are unaffected.
+
+  @ApiProperty({
+    description: 'EVM NFT contract address (ERC-721/ERC-1155 SELL on an EVM vault)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  nftContract?: string;
+
+  @ApiProperty({ description: 'EVM token ID being sold', required: false })
+  @IsOptional()
+  @IsNumberString({}, { message: 'tokenId must be a valid numeric string' })
+  tokenId?: string;
+
+  @ApiProperty({
+    description: 'VaultTypes.AssetKind: 2 = ERC721, 3 = ERC1155. Selects the sellNft path.',
+    required: false,
+    example: 2,
+  })
+  @IsOptional()
+  @IsNumber()
+  assetKind?: number;
+
+  @ApiProperty({
+    description: 'Approved marketplace adapter. Falls back to EVM_NFT_SALE_ADAPTER_ADDRESS.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  adapter?: string;
+
+  @ApiProperty({
+    description: 'Proceeds asset; address(0) for native. Must not be the vault token.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  paymentAsset?: string;
+
+  @ApiProperty({
+    description: 'Floor on proceeds the vault KEEPS, after the protocol trade fee (wei)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumberString({}, { message: 'minNetProceeds must be a valid numeric string' })
+  minNetProceeds?: string;
+
+  @ApiProperty({
+    description: 'Unix seconds. Must be non-zero — the vault rejects a sale with no deadline.',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumberString({}, { message: 'deadline must be a valid numeric string' })
+  deadline?: string;
+
+  @ApiProperty({
+    description: 'ABI-encoded marketplace-specific calldata, opaque to the vault',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  protocolParams?: string;
+
+  @ApiProperty({
+    description:
+      'Contribution record IDs backing this NFT slot. Released before the sale; ' +
+      'a slot that still backs a refundable contribution cannot be sold.',
+    required: false,
+    type: [String],
+  })
+  @IsOptional()
+  contributionIds?: string[];
+
   @ApiProperty({
     description: 'Custom limit price in ADA per token (used when useMarketPrice is false)',
     required: false,
@@ -438,6 +515,28 @@ export class CreateProposalReq {
   @IsNumber()
   @Expose()
   distributionLovelaceAmount?: number;
+
+  @ApiProperty({
+    description:
+      'EVM only. Asset to distribute: the zero address for native, or an ERC-20 address. Defaults to native.',
+    example: '0x0000000000000000000000000000000000000000',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  distributionAsset?: string;
+
+  @ApiProperty({
+    description:
+      'EVM only. Amount to distribute in BASE UNITS as a decimal string (wei for native). A string rather than a number because 18-decimal amounts exceed the safe integer range. Do not use distributionLovelaceAmount for EVM vaults — that field is 6-decimal ADA.',
+    example: '1000000000000000000',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  distributionAmount?: string;
 
   @ApiProperty({
     description: 'Marketplace actions for marketplace proposals (buy, offer, cancel offer, sell, unlist, update)',

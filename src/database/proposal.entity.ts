@@ -6,7 +6,10 @@ import {
   FungibleTokenDto,
   NonFungibleTokenDto,
 } from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
-import { DistributionMetadata } from '../modules/vaults/phase-management/governance/dto/distribution.dto';
+import {
+  DistributionMetadata,
+  EvmDistributionMetadata,
+} from '../modules/vaults/phase-management/governance/dto/distribution.dto';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
 import { Claim } from './claim.entity';
@@ -85,11 +88,31 @@ export class Proposal {
     // Buy/Sell data - each action can include a displayName field (fetched from Blockfrost on-chain metadata)
     marketplaceActions?: MarketplaceActionDto[];
 
-    // Distribution data - total lovelace amount to distribute
+    // Distribution data - total lovelace amount to distribute (CARDANO ONLY)
     distributionLovelaceAmount?: string;
+
+    // Distribution data - EVM. Deliberately separate from the lovelace field
+    // rather than overloading it: lovelace is 6-decimal ADA, EVM native is
+    // 18-decimal wei, and silently reinterpreting one as the other would be a
+    // twelve-order-of-magnitude error in a payout amount.
+    /** `address(0)` for native, else the ERC-20 address. */
+    distributionAsset?: string;
+    /** Base units (wei for native), as a decimal string. */
+    distributionAmount?: string;
+    /**
+     * Chain timestamp the pro-rata shares are computed against — the proposal's
+     * own snapshot, captured at creation so execution commits exactly what was
+     * voted on rather than whatever the holder set looks like days later.
+     */
+    distributionTimepoint?: string;
 
     // Distribution execution tracking (for ADA distributions)
     distribution?: DistributionMetadata;
+
+    // Distribution execution tracking (EVM). Separate key so the Cardano
+    // batch-retry cron, which keys off `distribution.batches`, never picks up
+    // an EVM proposal and runs Cardano retry logic against it.
+    evmDistribution?: EvmDistributionMetadata;
 
     // Burning data
     burnAssets?: string[];

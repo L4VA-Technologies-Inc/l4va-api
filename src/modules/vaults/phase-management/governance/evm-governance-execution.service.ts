@@ -9,16 +9,20 @@ import { EvmOpenCycleService, type EvmOpenCycleConfig } from '../../processing-t
 import {
   buildOperationId,
   encodeMockAdapterParams,
+  EvmAssetKind,
   EvmPositionService,
   type ClosePositionParams,
+  type SellNftParams,
 } from '../../processing-tx/onchain/evm-position.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
+import { EvmDistributionService } from './evm-distribution.service';
+
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
-import { ProposalType } from '@/types/proposal.types';
+import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 
 type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
@@ -38,6 +42,13 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   private readonly isTestnet: boolean;
   private readonly mockAdapterAddress: Address | null;
   private readonly uniswapAdapterAddress: Address | null;
+  /**
+   * Marketplace adapter used for NFT sales when a proposal does not name one.
+   * Null until a real marketplace integration exists — there is no production
+   * NFT marketplace on chain 46630 today, so NFT sale proposals must carry their
+   * own adapter until one is deployed and approved in the AdapterRegistry.
+   */
+  private readonly nftSaleAdapterAddress: Address | null;
   /** Default swap slippage in basis points (0.5%). Configurable via EVM_SWAP_SLIPPAGE_BPS. */
   private readonly swapSlippageBps: number;
 
@@ -48,6 +59,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly positionsRepository: Repository<EvmExternalPosition>,
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
+    private readonly distributionService: EvmDistributionService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
     private readonly uniswapQuoteService: UniswapQuoteService,
     private readonly evmOpenCycleService: EvmOpenCycleService,
@@ -58,6 +70,8 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     this.mockAdapterAddress = raw ? (raw as Address) : null;
     const uniswapRaw = configService.get<string>('EVM_UNISWAP_ADAPTER_ADDRESS');
     this.uniswapAdapterAddress = uniswapRaw ? (uniswapRaw as Address) : null;
+    const nftSaleRaw = configService.get<string>('EVM_NFT_SALE_ADAPTER_ADDRESS');
+    this.nftSaleAdapterAddress = nftSaleRaw ? (nftSaleRaw as Address) : null;
     this.swapSlippageBps = Number(configService.get<string>('EVM_SWAP_SLIPPAGE_BPS') ?? '50');
   }
 
@@ -96,10 +110,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
         return this.executeTermination(proposal, vault);
 
       case ProposalType.DISTRIBUTION:
-        // Distributions are already handled by the airdrop orchestrator
-        // (closeCycle → claimAllocations). Mark as executed immediately.
-        this.logger.log(`Proposal ${proposal.id}: DISTRIBUTION — delegated to airdrop pipeline, marking executed`);
-        return true;
+        return this.executeDistribution(proposal);
 
       case ProposalType.BURNING:
         // No VT burn governance equivalent on EVM yet.
@@ -231,11 +242,118 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       return false;
     }
 
-    if (this.isTestnet) {
-      return this.executeMarketActionMock(proposal, vault, actions);
+    // NFT sells are routed to `Vault.sellNft`, not `openPosition`. The two are
+    // not interchangeable: `openPosition` handles only native and ERC-20 input,
+    // so an NFT sale sent there can never execute. Everything else (token swaps,
+    // position closes) keeps its existing path.
+    const nftSells: { action: any; index: number }[] = [];
+    const rest: { action: any; index: number }[] = [];
+    for (let i = 0; i < actions.length; i++) {
+      (this._isNftSell(actions[i]) ? nftSells : rest).push({ action: actions[i], index: i });
     }
 
-    return this.executeMarketActionUniswap(proposal, vault, actions);
+    if (nftSells.length > 0) {
+      const ok = await this.executeNftSales(proposal, vault, nftSells);
+      if (!ok) return false;
+      if (rest.length === 0) return true;
+    }
+
+    const remaining = rest.map(r => r.action);
+    if (this.isTestnet) {
+      return this.executeMarketActionMock(proposal, vault, remaining);
+    }
+
+    return this.executeMarketActionUniswap(proposal, vault, remaining);
+  }
+
+  /** A SELL whose subject is an on-chain NFT rather than a fungible token. */
+  private _isNftSell(action: any): boolean {
+    const isSell = action?.exec === MarketplaceAction.SELL || action?.action === MarketplaceAction.SELL;
+    if (!isSell) return false;
+    const kind = Number(action?.assetKind ?? action?.kind);
+    return kind === EvmAssetKind.ERC721 || kind === EvmAssetKind.ERC1155;
+  }
+
+  /**
+   * Execute governance-approved NFT sales.
+   *
+   * Termination distributes only native and ERC-20, so a vault holding an NFT
+   * cannot wind down until it is sold. Every parameter comes from the passed
+   * proposal — nothing is recomputed here — and `operationId` is derived from
+   * (vault, proposal, action index), so a retry after a lost receipt reverts
+   * on-chain instead of selling the asset twice.
+   */
+  private async executeNftSales(
+    proposal: Proposal,
+    vault: EvmGovernanceVaultRef,
+    entries: { action: any; index: number }[]
+  ): Promise<boolean> {
+    for (const { action, index } of entries) {
+      const nftContract = action.nftContract as Address | undefined;
+      const adapter = (action.adapter ?? this.nftSaleAdapterAddress) as Address | undefined;
+
+      if (!nftContract || !adapter) {
+        this.logger.error(
+          `Proposal ${proposal.id} action[${index}]: NFT sale needs nftContract and an adapter ` +
+            `(none passed and EVM_NFT_SALE_ADAPTER_ADDRESS is unset)`
+        );
+        return false;
+      }
+
+      const kind = Number(action.assetKind ?? action.kind) as EvmAssetKind.ERC721 | EvmAssetKind.ERC1155;
+      const tokenId = BigInt(action.tokenId ?? 0);
+      const quantity = kind === EvmAssetKind.ERC721 ? 1n : BigInt(action.quantity ?? action.amount ?? 0);
+
+      // The vault refuses to sell a slot that still backs a refundable
+      // contribution. Records in a Locked cycle can never be refunded, so
+      // releasing them is a safe preflight; anything still genuinely refundable
+      // will make the sale revert, which is the intended protection.
+      const contributionIds: bigint[] = (action.contributionIds ?? []).map((c: string | number) => BigInt(c));
+      for (const contributionId of contributionIds) {
+        try {
+          await this.positionService.releaseNftRefundable(vault.id, contributionId);
+        } catch (err) {
+          // Already released is the common case and is not an error.
+          this.logger.debug(
+            `Proposal ${proposal.id} action[${index}]: releaseNftRefundable(${contributionId}) ` +
+              `skipped — ${(err as Error).message}`
+          );
+        }
+      }
+
+      const params: SellNftParams = {
+        operationId: buildOperationId(vault.id, proposal.id, index),
+        adapter,
+        nftContract,
+        tokenId,
+        quantity,
+        kind,
+        paymentAsset: (action.paymentAsset ?? '0x0000000000000000000000000000000000000000') as Address,
+        minNetProceeds: BigInt(action.minNetProceeds ?? 0),
+        deadline: BigInt(action.deadline ?? 0),
+        protocolParams: (action.protocolParams ?? '0x') as `0x${string}`,
+      };
+
+      if (params.deadline === 0n) {
+        this.logger.error(
+          `Proposal ${proposal.id} action[${index}]: NFT sale needs a non-zero deadline — the vault rejects 0`
+        );
+        return false;
+      }
+
+      try {
+        const res = await this.positionService.sellNft(vault.id, params);
+        this.logger.log(
+          `Proposal ${proposal.id} action[${index}]: sold ${nftContract}#${tokenId} ` +
+            `gross=${res.grossProceeds} net=${res.netProceeds} tx=${res.txHash}`
+        );
+      } catch (err) {
+        this.logger.error(`Proposal ${proposal.id} action[${index}]: sellNft failed — ${(err as Error).message}`);
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private async executeMarketActionUniswap(
@@ -476,6 +594,88 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       }
       return false;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Distribution → openDistribution
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A passed DISTRIBUTION proposal reserves its pot on the vault contract.
+   *
+   * This previously returned `true` on a log line, on the premise that the
+   * airdrop orchestrator handled distributions. It does not — that pipeline
+   * pushes acquire-phase allocation claims and has no concept of a proposal, so
+   * a passed distribution was marked EXECUTED while moving no funds at all.
+   *
+   * Failure returns `false` rather than throwing past the caller so the
+   * proposal stays retryable. That is safe to retry because
+   * `EvmDistributionService` reconciles against the on-chain execution key
+   * first: a submission that landed but lost its receipt is adopted, never
+   * re-opened.
+   */
+  private async executeDistribution(proposal: Proposal): Promise<boolean> {
+    try {
+      const result = await this.distributionService.executeDistribution(proposal);
+
+      await this.proposalRepository.update(
+        { id: proposal.id },
+        {
+          metadata: {
+            ...proposal.metadata,
+            evmDistribution: {
+              distributionId: result.distributionId,
+              asset: result.asset,
+              netPot: result.netPot,
+              supply: result.supply,
+              timepoint: result.timepoint,
+              deadline: result.deadline,
+              txHash: result.txHash,
+              openedAt: new Date().toISOString(),
+            },
+          },
+        }
+      );
+
+      this.logger.log(
+        `Proposal ${proposal.id}: distribution ${result.distributionId} ${result.reconciled ? 'reconciled from chain' : 'opened'} — ` +
+          `asset=${result.asset} netPot=${result.netPot} claims close at ${new Date(Number(result.deadline) * 1000).toISOString()}`
+      );
+      return true;
+    } catch (err) {
+      const message = (err as Error).message;
+      this.logger.error(`Proposal ${proposal.id}: openDistribution failed — ${message}`);
+
+      await this.proposalRepository.update(
+        { id: proposal.id },
+        {
+          metadata: {
+            ...proposal.metadata,
+            executionError: {
+              message,
+              timestamp: new Date().toISOString(),
+              errorCode: 'EVM_DISTRIBUTION_FAILED',
+              userFriendlyMessage:
+                'The distribution could not be opened on-chain. It will be retried automatically; funds have not moved.',
+            },
+          },
+        }
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Operator entry point for a distribution that failed to open. Safe to call
+   * repeatedly — the on-chain execution key makes a duplicate impossible.
+   */
+  async retryDistribution(proposalId: string): Promise<boolean> {
+    const proposal = await this.proposalRepository.findOne({ where: { id: proposalId } });
+    if (!proposal) {
+      this.logger.error(`retryDistribution: proposal ${proposalId} not found`);
+      return false;
+    }
+    return this.executeDistribution(proposal);
   }
 
   /**
