@@ -40,6 +40,23 @@ export class User {
   @Column({ nullable: true })
   email: string;
 
+  @Expose({ name: 'emailVerified' })
+  @Column({ name: 'email_verified', type: 'boolean', default: false })
+  email_verified: boolean;
+
+  // sha256 of the token sent in the verification link; the raw token is never stored
+  @Exclude()
+  @Column({ name: 'email_verification_token_hash', type: 'varchar', nullable: true, select: false })
+  email_verification_token_hash: string | null;
+
+  @Exclude()
+  @Column({ name: 'email_verification_expires_at', type: 'timestamptz', nullable: true, select: false })
+  email_verification_expires_at: Date | null;
+
+  @Exclude()
+  @Column({ name: 'email_verification_sent_at', type: 'timestamptz', nullable: true, select: false })
+  email_verification_sent_at: Date | null;
+
   @Expose({ name: 'address' })
   @Column({ unique: true })
   address: string;

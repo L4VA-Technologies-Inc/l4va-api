@@ -27,6 +27,14 @@ export interface IEmailNotificationBody {
   vaultName: string;
 }
 
+export interface IEmailVerificationBody {
+  email: string;
+  address: string;
+  firstName: string;
+  verificationUrl: string;
+  expiresInHours: number;
+}
+
 export type GovernanceActionStatus = 'started' | 'executed' | 'rejected' | 'ending_soon';
 
 export interface IGovernanceEmailBody {
@@ -193,6 +201,42 @@ export class NotificationService {
     } catch (err) {
       return err;
     }
+  }
+
+  /**
+   * Unlike the other senders this one throws, so callers can tell the user the email was not sent.
+   */
+  async sendEmailVerification(body: IEmailVerificationBody): Promise<EventsControllerTriggerResponse> {
+    const footerPayload = this.getEmailFooterPayload();
+    let res: EventsControllerTriggerResponse;
+    try {
+      res = await this.novu.trigger({
+        workflowId: 'email-confrim',
+        to: {
+          subscriberId: body.address,
+          email: body.email,
+        },
+        payload: {
+          firstName: body.firstName,
+          email: body.email,
+          verificationUrl: body.verificationUrl,
+          expiresInHours: body.expiresInHours,
+          ...footerPayload,
+        },
+      });
+    } catch (err) {
+      // SDK wraps unexpected error bodies (e.g. "workflow not found") as "Response validation failed"; surface the raw body
+      const raw = err?.rawValue ?? err?.body;
+      throw new Error(`${err?.message || err}${raw ? `: ${typeof raw === 'string' ? raw : JSON.stringify(raw)}` : ''}`);
+    }
+
+    // Novu answers 201 even when nothing is sent (e.g. workflow missing/inactive), so check the status explicitly
+    if (res.result?.status !== 'processed') {
+      const details = res.result?.error?.join('; ');
+      throw new Error(`Novu trigger status "${res.result?.status}"${details ? `: ${details}` : ''}`);
+    }
+
+    return res;
   }
 
   async sendGovernanceEmailNotification(body: IGovernanceEmailBody): Promise<EventsControllerTriggerResponse> {

@@ -12,6 +12,7 @@ import {
   ParseFilePipe,
   MaxFileSizeValidator,
   FileTypeValidator,
+  HttpCode,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiConsumes } from '@nestjs/swagger';
@@ -26,6 +27,8 @@ import { GetPublicProfileParamDto } from './dto/get-public-profile-param.dto';
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UploadImageRes } from './dto/upload-image.res';
+import { VerifyEmailDto } from './dto/verify-email.dto';
+import { EmailVerificationService } from './email-verification.service';
 import { UsersService } from './users.service';
 
 import { User } from '@/database/user.entity';
@@ -34,7 +37,34 @@ import { ImageType, UploadProfileImageDto } from '@/modules/users/dto/upload-pro
 @ApiTags('users')
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly emailVerificationService: EmailVerificationService
+  ) {}
+
+  @ApiDoc({
+    summary: 'Verify email',
+    description: 'Confirms the email address using the token from the verification link',
+    status: 200,
+  })
+  @Post('email/verify')
+  @HttpCode(200)
+  async verifyEmail(@Body() body: VerifyEmailDto): Promise<{ email: string; emailVerified: boolean }> {
+    return this.emailVerificationService.verify(body.token);
+  }
+
+  @ApiDoc({
+    summary: 'Resend verification email',
+    description: 'Sends a new verification link to the email on the authenticated user profile',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('email/resend-verification')
+  @HttpCode(200)
+  async resendEmailVerification(@Request() req: AuthRequest): Promise<{ success: boolean }> {
+    await this.emailVerificationService.resendVerification(req.user.sub);
+    return { success: true };
+  }
 
   @ApiDoc({
     summary: 'Get user profile',

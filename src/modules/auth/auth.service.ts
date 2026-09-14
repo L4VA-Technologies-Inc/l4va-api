@@ -126,6 +126,7 @@ export class AuthService {
         profileImage: profileImage,
         bannerImage: bannerImage,
         email: user.email,
+        emailVerified: user.email_verified,
       },
     };
   }
@@ -251,6 +252,7 @@ export class AuthService {
           profileImage: profileImage,
           bannerImage: bannerImage,
           email: user.email,
+          emailVerified: user.email_verified,
         },
       };
     } catch (error) {

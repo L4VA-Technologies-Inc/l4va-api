@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { GoogleCloudStorageModule } from '../google_cloud/google_bucket/bucket.module';
+import { NotificationModule } from '../notification/notification.module';
 
+import { EmailVerificationService } from './email-verification.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 
@@ -13,9 +15,13 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, FileEntity, LinkEntity, Vault, Asset]), GoogleCloudStorageModule],
+  imports: [
+    TypeOrmModule.forFeature([User, FileEntity, LinkEntity, Vault, Asset]),
+    GoogleCloudStorageModule,
+    NotificationModule,
+  ],
   controllers: [UsersController],
-  providers: [UsersService],
+  providers: [UsersService, EmailVerificationService],
   exports: [UsersService],
 })
 export class UsersModule {}

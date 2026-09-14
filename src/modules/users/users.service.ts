@@ -10,6 +10,7 @@ import { PriceService } from '../price/price.service';
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ImageType } from './dto/upload-profile-image.dto';
+import { EmailVerificationService } from './email-verification.service';
 
 import { Asset } from '@/database/asset.entity';
 import { FileEntity } from '@/database/file.entity';
@@ -33,7 +34,8 @@ export class UsersService {
     @InjectRepository(LinkEntity)
     private linksRepository: Repository<LinkEntity>,
     private readonly gcsService: GoogleCloudStorageService,
-    private readonly priceService: PriceService
+    private readonly priceService: PriceService,
+    private readonly emailVerificationService: EmailVerificationService
   ) {}
 
   async findByStakeAddress(address: string): Promise<User | undefined> {
@@ -212,8 +214,14 @@ export class UsersService {
       user.name = updateData.name;
     }
 
+    let emailChanged = false;
     if (updateData.email !== undefined) {
-      user.email = updateData.email;
+      const nextEmail = updateData.email?.trim().toLowerCase() || null;
+      if (nextEmail !== (user.email?.toLowerCase() || null)) {
+        user.email = nextEmail;
+        user.email_verified = false;
+        emailChanged = true;
+      }
     }
 
     if (updateData.description !== undefined) {
@@ -263,6 +271,22 @@ export class UsersService {
       });
     }
     const selectedUser = await this.usersRepository.save(user);
+
+    if (emailChanged) {
+      if (selectedUser.email) {
+        // The email is saved even if Novu fails; the user can resend from the profile
+        try {
+          await this.emailVerificationService.sendVerification(selectedUser);
+        } catch (error) {
+          this.logger.error(`Failed to send verification email to user ${userId}: ${error?.message || error}`);
+        }
+      } else {
+        await this.usersRepository.update(
+          { id: userId },
+          { email_verification_token_hash: null, email_verification_expires_at: null, email_verification_sent_at: null }
+        );
+      }
+    }
 
     selectedUser.banner_image = transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
     selectedUser.profile_image = transformImageToUrl(selectedUser.profile_image as FileEntity) as any;
