@@ -1,139 +1,151 @@
 /**
- * One-time script: mint 100,000,000 L4VA on Cardano mainnet.
+ * One-shot mint of 100,000,000 L4VA (6 decimals) under the Aiken policy in l4va-token.
  *
- * Policy: sig-only native script — only the ADMIN key can mint or burn.
- * Supply is fixed at 100 M by organizational commitment; the key goes into cold
- * storage after minting. Burns remain possible forever via burn-cardano-l4va.ts.
+ * The policy is parameterized by SEED_UTXO and TREASURY_ADDRESS: it only validates a mint that
+ * spends the seed and sends the full supply to the treasury, so it can never run twice.
+ * Holders can burn later via burn-cardano-l4va.ts without any admin key.
  *
- * Usage:
- *   BLOCKFROST_PROJECT_ID=mainnetXXX \
- *   ADMIN_ADDRESS=addr1... \
+ * Usage (every variable is required — no defaults):
+ *   NETWORK=Preprod|Mainnet \
+ *   BLOCKFROST_PROJECT_ID=... \
+ *   ADMIN_ADDRESS=addr... \            # wallet that owns SEED_UTXO and pays fees
+ *   SEED_UTXO=<txHash>#<index> \       # a UTxO at ADMIN_ADDRESS, chosen deliberately
+ *   TREASURY_ADDRESS=addr... \         # receives the full supply (enforced on-chain)
+ *   SOURCE_REVISION=<l4va-token commit> \
  *   npx ts-node src/scripts/mint-cardano-l4va.ts
  *
- * ADMIN_S_KEY will be prompted securely (no echo) if not set in the environment.
- *
- * ONLY MINT ONCE. Move key to cold storage immediately after.
+ * ADMIN_S_KEY is prompted without echo if not set in the environment.
+ * A deployment manifest (with the fully applied script) is written to
+ * src/scripts/cardano/deployments/ BEFORE submission. Keep it: burns load the policy from it.
  */
 
-import * as readline from 'readline';
+import * as fs from 'fs';
 
-import type { Assets, Native, PolicyId, Script } from '@lucid-evolution/core-types';
-// L4VA token spec (Cardano):
-//   Token Name        : L4VA
-//   Symbol / Ticker   : L4VA
-//   Short Description  : The protocol token powering programmable capital markets.
-//   Decimals          : 6
-//   Category          : Protocol / Capital Markets Infrastructure
-//   Website           : https://l4va.com
-//   App               : https://app.l4va.org
-//   Max Supply        : 100,000,000 L4VA
-import { fromText } from '@lucid-evolution/core-utils';
-import { Lucid, Blockfrost } from '@lucid-evolution/lucid';
-import { getAddressDetails, mintingPolicyToId, scriptFromNative } from '@lucid-evolution/utils';
+import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
 
-function promptSecret(prompt: string): Promise<string> {
-  return new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    process.stdout.write(prompt);
-    // suppress echoing of typed characters
-    (rl as any)._writeToOutput = () => {};
-    rl.question('', answer => {
-      process.stdout.write('\n');
-      rl.close();
-      resolve(answer);
-    });
-  });
-}
+import {
+  DECIMALS,
+  MAX_SUPPLY,
+  MINT_REDEEMER,
+  TOKEN_NAME,
+  applyL4vaParams,
+  assertAddressNetwork,
+  blockfrostUrl,
+  formatUnits,
+  manifestPath,
+  parseNetwork,
+  parseSeed,
+  promptSecret,
+  readManifest,
+  requireEnv,
+  writeManifest,
+  type L4vaManifest,
+} from './cardano/l4va-policy';
 
-const BLOCKFROST_URL = 'https://cardano-mainnet.blockfrost.io/api/v0';
-const BLOCKFROST_PROJECT_ID = process.env.BLOCKFROST_PROJECT_ID;
-const ADMIN_ADDRESS = process.env.ADMIN_ADDRESS;
-
-if (!BLOCKFROST_PROJECT_ID) throw new Error('BLOCKFROST_PROJECT_ID not set');
-if (!ADMIN_ADDRESS) throw new Error('ADMIN_ADDRESS not set');
-
-const TOKEN_NAME = 'L4VA';
-const TICKER = 'L4VA';
 const DESCRIPTION = 'The protocol token powering programmable capital markets.';
-const DECIMALS = 6;
 const WEBSITE = 'https://l4va.com';
-const MAX_SUPPLY_TOKENS = 100_000_000n;
-// 100,000,000 tokens × 10^6 (6 decimals) base units
-const TOTAL_SUPPLY = MAX_SUPPLY_TOKENS * 10n ** BigInt(DECIMALS);
 
 async function main() {
-  const adminSKey = process.env.ADMIN_S_KEY || (await promptSecret('ADMIN_S_KEY: '));
+  const network = parseNetwork(requireEnv('NETWORK'));
+  const blockfrostProjectId = requireEnv('BLOCKFROST_PROJECT_ID');
+  const adminAddress = requireEnv('ADMIN_ADDRESS');
+  const seed = parseSeed(requireEnv('SEED_UTXO'));
+  const treasuryAddress = requireEnv('TREASURY_ADDRESS');
+  const sourceRevision = requireEnv('SOURCE_REVISION');
+
+  assertAddressNetwork('ADMIN_ADDRESS', adminAddress, network);
+  assertAddressNetwork('TREASURY_ADDRESS', treasuryAddress, network);
+
+  const lucid = await Lucid(new Blockfrost(blockfrostUrl(network), blockfrostProjectId), network);
+  const utxos = await lucid.utxosAt(adminAddress);
+  const seedUtxo = utxos.find(u => u.txHash === seed.txHash && u.outputIndex === seed.outputIndex);
+  if (!seedUtxo) {
+    throw new Error(
+      `SEED_UTXO ${seed.txHash}#${seed.outputIndex} not found at ADMIN_ADDRESS — spent or not owned by admin`
+    );
+  }
+  lucid.selectWallet.fromAddress(adminAddress, utxos);
+
+  const { policy, policyId, assetId, compiler, validatorHash } = applyL4vaParams(seed, treasuryAddress);
+  const file = manifestPath(network, policyId);
+  if (fs.existsSync(file) && readManifest(file).txHash) {
+    throw new Error(`Already minted: ${file} records tx ${readManifest(file).txHash}`);
+  }
+
+  console.log(`Network   : ${network}`);
+  console.log(`Admin     : ${adminAddress}`);
+  console.log(`Seed      : ${seed.txHash}#${seed.outputIndex}`);
+  console.log(`Treasury  : ${treasuryAddress}`);
+  console.log(`Policy ID : ${policyId}`);
+  console.log(`Asset ID  : ${assetId}`);
+  console.log(`Supply    : ${MAX_SUPPLY} base units (= ${formatUnits(MAX_SUPPLY)})`);
+
+  const adminSKey = process.env.ADMIN_S_KEY?.trim() || (await promptSecret('ADMIN_S_KEY: '));
   if (!adminSKey) throw new Error('ADMIN_S_KEY is required');
-
-  const lucid = await Lucid(new Blockfrost(BLOCKFROST_URL, BLOCKFROST_PROJECT_ID), 'Mainnet');
-
-  const utxos = await lucid.utxosAt(ADMIN_ADDRESS);
-  lucid.selectWallet.fromAddress(ADMIN_ADDRESS, utxos);
-
-  const address = ADMIN_ADDRESS;
-  console.log('Wallet address:', address);
-  console.log('UTXOs:', utxos.length);
-  if (utxos.length === 0) throw new Error('Wallet has no UTXOs — fund it with ADA first');
-
-  const { paymentCredential } = getAddressDetails(address);
-  if (!paymentCredential) throw new Error('Cannot derive payment credential from address');
-
-  // Sig-only: only this key can mint or burn. Move key to cold storage after minting.
-  const nativeScript: Native = {
-    type: 'sig',
-    keyHash: paymentCredential.hash,
-  };
-
-  const policy: Script = scriptFromNative(nativeScript);
-  const policyId: PolicyId = mintingPolicyToId(policy);
-  const tokenNameHex = fromText(TOKEN_NAME);
-  const assetId = `${policyId}${tokenNameHex}`;
-
-  console.log('\n--- Policy info ---');
-  console.log('Policy ID :', policyId);
-  console.log('Asset ID  :', assetId);
-  console.log('Decimals  :', DECIMALS);
-  console.log('Supply    :', TOTAL_SUPPLY.toString(), 'base units (= 100,000,000 L4VA)');
-
-  const assets: Assets = { [assetId]: TOTAL_SUPPLY };
 
   const txSignBuilder = await lucid
     .newTx()
-    .mintAssets(assets)
+    .collectFrom([seedUtxo])
+    .mintAssets({ [assetId]: MAX_SUPPLY }, MINT_REDEEMER)
     .attach.MintingPolicy(policy)
-    .addSigner(address)
+    .pay.ToAddress(treasuryAddress, { [assetId]: MAX_SUPPLY })
+    .addSigner(adminAddress)
     .complete();
-
-  console.log('\nSigning...');
   const signedTx = await txSignBuilder.sign.withPrivateKey(adminSKey).complete();
+
+  const manifest: L4vaManifest = {
+    network,
+    status: 'pending',
+    seed,
+    treasury: treasuryAddress,
+    policyId,
+    assetId,
+    tokenName: TOKEN_NAME,
+    decimals: DECIMALS,
+    maxSupply: MAX_SUPPLY.toString(),
+    script: policy.script,
+    compiler,
+    validatorHash,
+    sourceRevision,
+    createdAt: new Date().toISOString(),
+  };
+  writeManifest(manifest);
+  console.log(`\nManifest written (pending): ${file}`);
 
   console.log('Submitting...');
   const txHash = await signedTx.submit();
+  writeManifest({
+    ...manifest,
+    status: 'submitted',
+    txHash,
+    submittedAt: new Date().toISOString(),
+  });
 
-  console.log('\n=== MINT SUCCESSFUL ===');
-  console.log('TX hash   :', txHash);
-  console.log('Policy ID :', policyId);
-  console.log('Asset ID  :', assetId);
-  console.log('Lock slot :', '(none — sig-only policy, burn always possible)');
-  console.log('\nSave policyId + tokenNameHex — they identify L4VA on Cardano forever.');
-  console.log('Move ADMIN_S_KEY to cold storage now. Burns remain possible via burn-cardano-l4va.ts.');
+  console.log('\n=== MINT SUBMITTED ===');
+  console.log(`TX hash   : ${txHash}`);
+  console.log(`Manifest  : ${file}  (commit it — burns need it)`);
+  const explorer = network === 'Preprod' ? 'https://preprod.cardanoscan.io' : 'https://cardanoscan.io';
+  console.log(`Verify    : ${explorer}/transaction/${txHash}`);
 
-  // CIP-26 Cardano Token Registry entry — submit as a PR to
-  // https://github.com/cardano-foundation/cardano-token-registry
-  // (fields requiring signatures — name/description/ticker/decimals — must be
-  // signed with the policy key via the `token-metadata-creator` tool).
+  // CIP-26 draft only. Plutus policies can't prove ownership the way native-script entries do:
+  // acceptance follows the cardano-token-registry trusted-key and human-verification process.
   const registryEntry = {
     subject: assetId,
-    policy: policy.script,
     name: { value: TOKEN_NAME },
     description: { value: DESCRIPTION },
-    ticker: { value: TICKER },
+    ticker: { value: TOKEN_NAME },
     decimals: { value: DECIMALS },
     url: { value: WEBSITE },
-    logo: { value: '<base64-encoded square transparent PNG of the official L4VA mark>' },
+    logo: {
+      value: '<base64-encoded square transparent PNG of the official L4VA mark>',
+    },
   };
-  console.log('\n--- CIP-26 token registry entry (draft) ---');
+  console.log('\n--- CIP-26 token registry entry (draft, no `policy` field for Plutus assets) ---');
   console.log(JSON.stringify(registryEntry, null, 2));
+  console.log(
+    'Sign with your chosen registry key and open the PR manually. Ownership is not verified automatically;' +
+      ' follow https://github.com/cardano-foundation/cardano-token-registry#semantic-content-of-registry-entries'
+  );
 }
 
 main().catch(err => {
