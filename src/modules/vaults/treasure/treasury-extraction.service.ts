@@ -50,6 +50,15 @@ interface UtxoGroup {
     assetName: { name: string; format: 'hex' };
     quantity: number;
   }>;
+  /** Everything left in the script UTXO after the selected assets are taken out.
+   * Spending the UTXO takes all of its value, so this MUST be paid out explicitly —
+   * otherwise it silently ends up in the admin change output. It goes to the treasury too.
+   */
+  remainderAssets: Array<{
+    policyId: string;
+    assetName: { name: string; format: 'hex' };
+    quantity: number;
+  }>;
 }
 
 /**
@@ -296,12 +305,45 @@ export class TreasuryExtractionService {
         continue;
       }
 
+      // Spending the script UTXO takes ALL of its value. Whatever is not in the selection still
+      // has to be paid out explicitly, or it leaks into the admin change address.
+      const extractedByUnit = new Map<string, number>(
+        assetsToExtract.map(a => [`${a.policyId}${a.assetName.name}`, a.quantity])
+      );
+
+      const remainderAssets = contributionOutput.amount
+        .filter((a: any) => a.unit !== 'lovelace')
+        .map((a: any) => ({
+          unit: a.unit,
+          quantity: parseInt(a.quantity) - (extractedByUnit.get(a.unit) || 0),
+        }))
+        .filter(a => a.quantity > 0)
+        .map(a => ({
+          policyId: a.unit.slice(0, 56),
+          assetName: {
+            name: a.unit.slice(56),
+            format: 'hex' as const,
+          },
+          quantity: a.quantity,
+        }));
+
+      if (remainderAssets.length > 0) {
+        this.logger.warn(
+          `UTXO ${txHash}#${contributionOutput.output_index}: ${remainderAssets.length} token unit(s) were not part of the ` +
+            `selection but live in the same UTXO. Spending it takes them too, so they are sent to the treasury ` +
+            `instead of leaking into the admin change output: ${remainderAssets
+              .map(a => `${a.policyId}${a.assetName.name} x${a.quantity}`)
+              .join(', ')}`
+        );
+      }
+
       utxoGroups.push({
         txHash,
         outputIndex: contributionOutput.output_index,
         assets: groupAssets,
         lovelace,
         assetsToExtract,
+        remainderAssets,
       });
 
       // Track all extracted assets
@@ -319,6 +361,56 @@ export class TreasuryExtractionService {
       throw new BadRequestException('No extractable UTXOs found');
     }
 
+    // 5b. Resolve co-located remainder tokens back to their DB Asset rows.
+    // Spending the UTXO moves them to the treasury on-chain even though they weren't
+    // explicitly selected, so their DB status must be updated too or DB and chain diverge.
+    const remainderUnits = new Set(
+      utxoGroups.flatMap(group => group.remainderAssets.map(a => `${a.policyId}${a.assetName.name}`))
+    );
+
+    const remainderUnitToAsset = new Map<string, Asset>();
+    if (remainderUnits.size > 0) {
+      const vaultLockedAssets = await this.assetsRepository.find({
+        where: { vault: { id: config.vaultId }, status: AssetStatus.LOCKED },
+      });
+      for (const asset of vaultLockedAssets) {
+        const unit = `${asset.policy_id}${asset.asset_id}`;
+        if (remainderUnits.has(unit)) {
+          remainderUnitToAsset.set(unit, asset);
+        }
+      }
+
+      const unmatchedUnits = [...remainderUnits].filter(unit => !remainderUnitToAsset.has(unit));
+      if (unmatchedUnits.length > 0) {
+        this.logger.warn(
+          `Remainder token unit(s) with no matching DB asset row (likely receipt/dust, not tracked): ${unmatchedUnits.join(', ')}`
+        );
+      }
+    }
+
+    const remainderDbAssets = [...remainderUnitToAsset.values()];
+    if (remainderDbAssets.length > 0) {
+      this.logger.warn(
+        `${remainderDbAssets.length} co-located asset(s) not explicitly selected will also move to treasury ` +
+          `and be marked EXTRACTED: ${remainderDbAssets.map(a => a.id).join(', ')}`
+      );
+    }
+
+    for (const group of utxoGroups) {
+      for (const remainder of group.remainderAssets) {
+        const unit = `${remainder.policyId}${remainder.assetName.name}`;
+        const asset = remainderUnitToAsset.get(unit);
+        if (asset) {
+          allExtractedAssets.push({
+            assetId: asset.id,
+            policyId: asset.policy_id,
+            assetName: asset.asset_id,
+            contributionTxHash: group.txHash,
+          });
+        }
+      }
+    }
+
     // 6. Build transaction with multiple script interactions
     const treasuryAddress = config.treasuryAddress || this.adminAddress;
 
@@ -326,25 +418,41 @@ export class TreasuryExtractionService {
     // Build aggregated quantities per token type
     const aggregatedQuantities: Record<string, { tokenUnit: string; quantity: number; tokenName: string }> = {};
     for (const group of utxoGroups) {
-      for (const assetToExtract of group.assetsToExtract) {
+      for (const assetToExtract of [...group.assetsToExtract, ...group.remainderAssets]) {
         const tokenUnit = `${assetToExtract.policyId}${assetToExtract.assetName.name}`;
         if (!aggregatedQuantities[tokenUnit]) {
-          aggregatedQuantities[tokenUnit] = { tokenUnit, quantity: 0, tokenName: assetToExtract.assetName.name };
+          aggregatedQuantities[tokenUnit] = {
+            tokenUnit,
+            quantity: 0,
+            tokenName: assetToExtract.assetName.name,
+          };
         }
         aggregatedQuantities[tokenUnit].quantity += assetToExtract.quantity;
       }
     }
 
     // Build per-asset extraction details
-    const assetExtractionDetails = utxoGroups.flatMap(group =>
-      group.assets.map(asset => ({
+    const assetExtractionDetails = [
+      ...utxoGroups.flatMap(group =>
+        group.assets.map(asset => ({
+          assetId: asset.id,
+          policyId: asset.policy_id,
+          assetName: asset.asset_id,
+          quantity: parseFloat(String(asset.quantity)),
+          sourceUtxo: group.txHash,
+        }))
+      ),
+      ...remainderDbAssets.map(asset => ({
         assetId: asset.id,
         policyId: asset.policy_id,
         assetName: asset.asset_id,
         quantity: parseFloat(String(asset.quantity)),
-        sourceUtxo: group.txHash,
-      }))
-    );
+        sourceUtxo:
+          utxoGroups.find(g =>
+            g.remainderAssets.some(r => `${r.policyId}${r.assetName.name}` === `${asset.policy_id}${asset.asset_id}`)
+          )?.txHash || '',
+      })),
+    ];
 
     this.logger.log('=== EXTRACTION SUMMARY ===');
     this.logger.log(`Total assets to extract: ${assetExtractionDetails.length}`);
@@ -392,9 +500,36 @@ export class TreasuryExtractionService {
       },
     }));
 
-    // Combine all assets to extract into a single output
-    const allAssetsToExtract = utxoGroups.flatMap(g => g.assetsToExtract);
+    // The whole content of every spent script UTXO goes to the treasury: the selected assets plus
+    // anything else that shared the UTXO. Nothing may fall through to the admin change address.
+    const allTokensByUnit = new Map<
+      string,
+      {
+        policyId: string;
+        assetName: { name: string; format: 'hex' };
+        quantity: number;
+      }
+    >();
+    for (const group of utxoGroups) {
+      for (const a of [...group.assetsToExtract, ...group.remainderAssets]) {
+        const unit = `${a.policyId}${a.assetName.name}`;
+        const existing = allTokensByUnit.get(unit);
+        if (existing) {
+          existing.quantity += a.quantity;
+        } else {
+          allTokensByUnit.set(unit, { ...a });
+        }
+      }
+    }
+    const allAssetsToExtract = Array.from(allTokensByUnit.values());
     const totalLovelace = utxoGroups.reduce((sum, g) => sum + BigInt(g.lovelace), BigInt(0)).toString();
+
+    const selectedCount = utxoGroups.flatMap(g => g.assetsToExtract).length;
+    const remainderCount = utxoGroups.flatMap(g => g.remainderAssets).length;
+    this.logger.log(
+      `Sending ${allAssetsToExtract.length} token unit(s) to treasury ` +
+        `(${selectedCount} selected + ${remainderCount} co-located in the same UTXOs)`
+    );
 
     // Get admin UTXOs for transaction fees
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
@@ -445,8 +580,11 @@ export class TreasuryExtractionService {
 
     await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
 
-    // Update all assets to EXTRACTED status
-    const allAssetIds = utxoGroups.flatMap(g => g.assets.map(a => a.id));
+    // Update all assets to EXTRACTED status, including co-located remainder assets that
+    // were moved to the treasury along with the explicitly selected ones.
+    const allAssetIds = [
+      ...new Set([...utxoGroups.flatMap(g => g.assets.map(a => a.id)), ...remainderDbAssets.map(a => a.id)]),
+    ];
     await this.assetsRepository.update({ id: In(allAssetIds) }, { status: AssetStatus.EXTRACTED });
 
     this.logger.log(`Successfully extracted ${allAssetIds.length} assets in transaction ${response.txHash}`);
