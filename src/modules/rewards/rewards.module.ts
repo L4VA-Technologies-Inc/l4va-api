@@ -4,9 +4,11 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { RewardAdminController } from './reward-admin.controller';
+import { RewardEstimateAdminController } from './reward-estimate-admin.controller';
 import { RewardsController } from './rewards.controller';
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEpochConfigProxy } from './services/reward-epoch-config-proxy.service';
+import { RewardEstimateProxy } from './services/reward-estimate-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
@@ -25,8 +27,8 @@ import { Vault } from '@/database/vault.entity';
  */
 @Module({
   imports: [HttpModule, ConfigModule, TypeOrmModule.forFeature([RewardEventOutbox, Vault])],
-  controllers: [RewardsController, RewardAdminController],
-  providers: [RewardEventProducer, RewardClaimProxy, RewardEpochConfigProxy],
+  controllers: [RewardsController, RewardAdminController, RewardEstimateAdminController],
+  providers: [RewardEventProducer, RewardClaimProxy, RewardEpochConfigProxy, RewardEstimateProxy],
   exports: [RewardEventProducer],
 })
 export class RewardsModule {}
