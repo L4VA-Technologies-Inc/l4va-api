@@ -19,6 +19,7 @@ import { firstValueFrom } from 'rxjs';
 import sharp from 'sharp';
 import { In, Repository } from 'typeorm';
 
+import { SubmitStandaloneTokenMetadataDto } from './dto/submit-standalone-token-metadata.dto';
 import { TokenMetadataDto } from './dto/token-metadata.dto';
 
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
@@ -224,6 +225,72 @@ export class MetadataRegistryApiService {
       }
 
       this.logger.error('Failed to submit token metadata:', error);
+      throw new InternalServerErrorException(error.response?.data?.message || 'Failed to submit token metadata');
+    }
+  }
+
+  /**
+   * Submits metadata for a token that is NOT backed by a vault (e.g. the standalone
+   * L4VA token). One-off admin flow: unlike submitVaultTokenMetadata, the resulting
+   * PR is not persisted to the token_registry table (that table requires a vault_id),
+   * so there is no auto-retry/status polling for it - check/close the PR manually.
+   */
+  async submitStandaloneTokenMetadata(
+    metadataInput: SubmitStandaloneTokenMetadataDto
+  ): Promise<{ success: boolean; message: string; prUrl?: string }> {
+    const exists = await this.checkTokenExistsInRegistry(metadataInput.subject);
+    if (exists) {
+      return { success: false, message: 'Token already exists' };
+    }
+
+    try {
+      const name = this.signMetadataField(metadataInput.subject, 0, metadataInput.name);
+      const description = this.signMetadataField(metadataInput.subject, 0, metadataInput.description);
+      const ticker = this.signMetadataField(metadataInput.subject, 0, metadataInput.ticker);
+      const url = this.signMetadataField(metadataInput.subject, 0, metadataInput.url);
+      const decimals =
+        metadataInput.decimals !== undefined
+          ? this.signMetadataField(metadataInput.subject, 0, metadataInput.decimals)
+          : undefined;
+
+      let logoData: ItemData | undefined;
+      if (metadataInput.logo) {
+        // If metadataInput.logo is a URL, convert it to byte string
+        if (metadataInput.logo.startsWith('http')) {
+          const logoBytes = await this.convertImageUrlToBase64(metadataInput.logo);
+          logoData = this.signMetadataField(metadataInput.subject, 0, logoBytes);
+        } else {
+          // Already a base64 byte string, use it directly
+          logoData = this.signMetadataField(metadataInput.subject, 0, metadataInput.logo);
+        }
+      }
+
+      const metadata: TokenMetaData = {
+        subject: metadataInput.subject,
+        policy: metadataInput.policy,
+        name,
+        description,
+        ticker,
+        url,
+        logo: logoData,
+        decimals,
+      };
+
+      if (!this.validateTokenMetadata(metadata)) {
+        return { success: false, message: 'Invalid token metadata format' };
+      }
+
+      return await this.createMetadataRegistryPR(metadata);
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof UnauthorizedException
+      ) {
+        throw error;
+      }
+
+      this.logger.error('Failed to submit standalone token metadata:', error);
       throw new InternalServerErrorException(error.response?.data?.message || 'Failed to submit token metadata');
     }
   }
@@ -544,7 +611,7 @@ export class MetadataRegistryApiService {
    */
   private async createMetadataRegistryPR(
     metadata: TokenMetaData,
-    vaultId: string
+    vaultId?: string
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {
     try {
       // Validate GitHub token before proceeding
@@ -646,8 +713,9 @@ export class MetadataRegistryApiService {
         base: defaultBranch,
       });
 
-      // 12. Save PR information to database
-      if (pr.number) {
+      // 12. Save PR information to database (skipped for standalone, non-vault tokens -
+      // token_registry.vault_id is a required FK, so there's nothing to link it to)
+      if (pr.number && vaultId) {
         try {
           // Create a new TokenRegistry record
           const tokenRegistryRecord = this.tokenRegistryRepository.create({
@@ -661,8 +729,10 @@ export class MetadataRegistryApiService {
           this.logger.error('Failed to save PR information to database:', dbError);
           // Continue since PR was created successfully on GitHub
         }
+      } else if (!pr.number) {
+        this.logger.warn(`Cannot save PR to database: Missing PR number`);
       } else {
-        this.logger.warn(`Cannot save PR to database: Missing PR number or vault ID`);
+        this.logger.log(`PR #${pr.number} created without a vault link - not tracked in token_registry`);
       }
 
       return {

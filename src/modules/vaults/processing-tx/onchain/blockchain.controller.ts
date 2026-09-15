@@ -16,6 +16,7 @@ import { Repository } from 'typeorm';
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BuildTransactionRes } from './dto/build-transaction.res';
 import { HandleWebhookRes } from './dto/handle-webhook.res';
+import { SubmitStandaloneTokenMetadataDto } from './dto/submit-standalone-token-metadata.dto';
 import { BuildTransactionDto, SubmitTransactionDto, TransactionSubmitResponseDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { MetadataRegistryApiService } from './metadata-register.service';
@@ -157,5 +158,33 @@ export class BlockchainController {
       message: result.message,
       prUrl: (result.data as { prUrl?: string })?.prUrl,
     };
+  }
+
+  @Post('submit-token-metadata')
+  @ApiOperation({
+    summary: 'Manually submit a token registry PR for a token that is not backed by a vault',
+    description:
+      'Creates a GitHub PR to register a standalone token (e.g. the L4VA token) in the Cardano Token Registry. ' +
+      'One-off admin flow: the resulting PR is not persisted or auto-retried - check/close it manually.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Token metadata PR submitted successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Token already exists in the registry or metadata is invalid',
+  })
+  @UseGuards(AdminGuard)
+  async submitStandaloneTokenMetadata(
+    @Body() params: SubmitStandaloneTokenMetadataDto
+  ): Promise<{ success: boolean; message: string; prUrl?: string }> {
+    const result = await this.metadataRegistryApiService.submitStandaloneTokenMetadata(params);
+
+    if (!result.success) {
+      throw new BadRequestException(result.message);
+    }
+
+    return result;
   }
 }
