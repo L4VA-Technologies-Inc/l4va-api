@@ -1933,7 +1933,18 @@ export class GovernanceService {
     }
 
     // Check if governance fee is required for this proposal type
-    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
+    // marketplace_action proposals are charged per NFT (one fee unit per marketplace action).
+    // BUY_SELL is the deprecated predecessor of MARKETPLACE_ACTION and shares the same fee rate,
+    // so it's scaled the same way, reading its actions from the legacy metadata location.
+    let feeQuantity = 1;
+    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
+      feeQuantity = Math.max(createProposalReq.marketplaceActions?.length || 0, 1);
+    } else if (createProposalReq.type === ProposalType.BUY_SELL) {
+      const legacyActions =
+        createProposalReq.metadata?.marketplaceActions ?? createProposalReq.metadata?.buyingSellingOptions ?? [];
+      feeQuantity = Math.max(legacyActions.length || 0, 1);
+    }
+    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type, feeQuantity);
     const requiresPayment = feeAmount > 0;
 
     // If payment is required, set status to UNPAID and clear dates
@@ -1959,6 +1970,7 @@ export class GovernanceService {
           userAddress: user.address,
           proposalType: createProposalReq.type,
           vaultId,
+          quantity: feeQuantity,
         });
 
         return {
