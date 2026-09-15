@@ -39,6 +39,7 @@ import { WayUpModule } from './modules/wayup/wayup.module';
 
 import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
+import { FeeKeeperModule } from '@/modules/fee-keeper/fee-keeper.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
 import { PresaleModule } from '@/modules/presale/presale.module';
@@ -125,6 +126,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     StakeModule,
     TokensModule,
     UniswapModule,
+    FeeKeeperModule,
   ],
   controllers: [AppController],
   providers: [
