@@ -35,7 +35,8 @@ export class GetGovernanceFeesRes {
   proposalFeeBurning: number;
 
   @ApiProperty({
-    description: 'Governance fee for marketplace action proposals (in lovelace)',
+    description:
+      'Governance fee for marketplace action proposals, per NFT (in lovelace). Total fee = this value * number of NFTs in the proposal.',
     example: 5000000,
   })
   @Expose()
