@@ -102,6 +102,27 @@ export interface DistributionClaimMetadata extends BaseClaimMetadata {
 }
 
 /**
+ * Metadata for EVM pro-rata distribution claims.
+ *
+ * Separate from `DistributionClaimMetadata`, which is Cardano-shaped (batch
+ * processing against a treasury wallet). On EVM there are no batches: the pot
+ * is reserved in the vault contract and each holder pulls their own share, so
+ * what is worth recording is the on-chain identity of that payout.
+ */
+export interface EvmDistributionClaimMetadata extends BaseClaimMetadata {
+  /** On-chain distribution id. */
+  evmDistributionId: string;
+  /** `address(0)` for native, else the ERC-20 distributed. */
+  evmAsset: string;
+  /** The VT holder whose snapshot balance earned the share. */
+  evmHolder: string;
+  /** Where the funds were sent — differs from the holder when redirected. */
+  evmRecipient: string;
+  /** The claim transaction. */
+  evmTxHash: string;
+}
+
+/**
  * Metadata for L4VA token reward claims
  * Used for monthly L4VA token distributions to vault creators and VT holders
  */
@@ -174,6 +195,7 @@ export type ClaimMetadata =
   | TerminationClaimMetadata
   | LpClaimMetadata
   | DistributionClaimMetadata
+  | EvmDistributionClaimMetadata
   | L4vaClaimMetadata
   | ExpansionClaimMetadata
   | AcquirerClaimMetadata

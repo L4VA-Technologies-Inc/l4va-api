@@ -13,6 +13,15 @@ import { ChainType, VaultStatus } from '@/types/vault.types';
 
 const ERC20_TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
 
+/** Just the checkpoint readers — the full VaultToken ABI is not needed here. */
+const VAULT_TOKEN_CHECKPOINT_ABI = [
+  parseAbiItem('function balanceOfAt(address account, uint256 timepoint) view returns (uint256)'),
+  parseAbiItem('function circulatingSupplyAt(uint256 timepoint) view returns (uint256)'),
+  parseAbiItem('function isExcludedHolderAt(address account, uint256 timepoint) view returns (bool)'),
+] as const;
+
+export { VAULT_TOKEN_CHECKPOINT_ABI };
+
 /** Block range per getLogs request — stays safely within most RPC limits. */
 const LOG_CHUNK_BLOCKS = 10_000n;
 const HOLDERS_API_PAGE_SIZE = 200;
@@ -55,6 +64,14 @@ export class EvmSnapshotService {
     }
 
     const vtAddress = await this.getVaultTokenAddress(vault.contract_address as Address);
+
+    // Pin the chain position BEFORE reading balances. The holder sources below
+    // all read chain head, so capturing the block first means the recorded
+    // timepoint can only be at or behind the data, never ahead of it — an
+    // ahead-of-data timepoint would attribute balances to a moment they did
+    // not exist at. Any drift is caught by `reconcileWithChain` before a
+    // distribution is opened against this snapshot.
+    const pinnedBlock = await this.contractReader.publicClient.getBlock();
     this.logger.debug(`[EVM Snapshot] Vault ${vaultId}: resolved vaultToken=${vtAddress}`);
     const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
@@ -131,6 +148,8 @@ export class EvmSnapshotService {
       // Use the VaultToken ERC-20 address as assetId (mirrors Cardano policy+name pattern).
       assetId: vtAddress.toLowerCase(),
       addressBalances: addressBalancesForSnapshot,
+      snapshotBlock: String(pinnedBlock.number),
+      snapshotTimepoint: String(pinnedBlock.timestamp),
     });
 
     await this.snapshotRepository.save(snapshot);
@@ -140,6 +159,58 @@ export class EvmSnapshotService {
       `EVM snapshot created for vault ${vaultId} — vtToken=${vtAddress} holders=${balances.size} source=${balanceSource} durationMs=${durationMs}`
     );
     return snapshot;
+  }
+
+  /**
+   * Check a sample of this snapshot's balances against the VaultToken's own
+   * checkpoints at the recorded timepoint.
+   *
+   * Votes are counted from `addressBalances`; a distribution pays from
+   * `balanceOfAt`. Those are two different reads of the same thing, and if they
+   * disagree the money does not follow the weights the vote was decided on.
+   * This is the guard that turns that from a silent divergence into a loud
+   * failure before any pot is reserved.
+   *
+   * Returns the mismatches found; an empty array means the sample agreed.
+   */
+  async reconcileWithChain(
+    snapshot: Snapshot,
+    sampleSize = 25
+  ): Promise<Array<{ address: string; snapshotBalance: string; chainBalance: string }>> {
+    if (!snapshot.snapshotTimepoint) {
+      throw new Error(
+        `Snapshot ${snapshot.id} has no chain timepoint — it predates timepoint recording and cannot back a distribution. Take a fresh snapshot.`
+      );
+    }
+
+    const timepoint = BigInt(snapshot.snapshotTimepoint);
+    const entries = Object.entries(snapshot.addressBalances ?? {});
+    if (entries.length === 0) return [];
+
+    // Largest holders first: a divergence there moves the most money.
+    const sample = entries.sort(([, a], [, b]) => (BigInt(b) > BigInt(a) ? 1 : -1)).slice(0, sampleSize);
+
+    const mismatches: Array<{ address: string; snapshotBalance: string; chainBalance: string }> = [];
+    for (const [address, snapshotBalance] of sample) {
+      const chainBalance = (await this.contractReader.publicClient.readContract({
+        address: snapshot.assetId as Address,
+        abi: VAULT_TOKEN_CHECKPOINT_ABI,
+        functionName: 'balanceOfAt',
+        args: [address as Address, timepoint],
+      })) as bigint;
+
+      if (String(chainBalance) !== snapshotBalance) {
+        mismatches.push({ address, snapshotBalance, chainBalance: String(chainBalance) });
+      }
+    }
+
+    if (mismatches.length > 0) {
+      this.logger.error(
+        `[EVM Snapshot] Vault ${snapshot.vaultId}: snapshot ${snapshot.id} disagrees with on-chain balanceOfAt at ` +
+          `timepoint ${timepoint} for ${mismatches.length}/${sample.length} sampled holders.`
+      );
+    }
+    return mismatches;
   }
 
   /** Return all EVM vaults currently in locked/expansion status. */

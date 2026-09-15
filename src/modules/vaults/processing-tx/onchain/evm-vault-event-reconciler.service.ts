@@ -8,13 +8,18 @@ import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmAssetKindOnchain, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmExternalPosition, EvmPositionStatus } from '@/database/evm-external-position.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetStatus } from '@/types/asset.types';
+import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ExpectedEventSpec, TransactionStatus } from '@/types/transaction.types';
 
 export interface VaultLogInput {
@@ -154,6 +159,11 @@ export class EvmVaultEventReconciler {
             break;
           case 'PositionClosed':
             await this.handlePositionClosed(vault, log, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
+          case 'DistributionClaimed':
+            await this.handleDistributionClaimed(vault, log, decoded.args);
             recordApplied(log.txHash, decoded.eventName);
             processed++;
             break;
@@ -642,6 +652,87 @@ export class EvmVaultEventReconciler {
    * The one thing worth surfacing loudly is the claim deadline: after it,
    * holders permanently cannot redeem.
    */
+  /**
+   * DistributionClaimed(distributionId, holder, recipient, asset, amount)
+   *
+   * Records a pro-rata distribution payout as a Claim row so it appears in the
+   * user's claim history alongside Cardano distributions. The claim is written
+   * as already CLAIMED: unlike the Cardano flow, where the backend owes the
+   * holder a payout it still has to make, here the holder (or the admin on
+   * their behalf) has already pulled the funds out of the vault contract. This
+   * is a record of something that happened, not a promise of something owed.
+   *
+   * Idempotent on (vault, proposal, user, distributionId) so a replayed log or
+   * an overlapping reconciler range cannot duplicate the row.
+   */
+  private async handleDistributionClaimed(
+    vault: Vault,
+    log: VaultLogInput,
+    args: Record<string, unknown>
+  ): Promise<void> {
+    const distributionId = String(args.distributionId as bigint);
+    const holder = String(args.holder as Address).toLowerCase();
+    const asset = String(args.asset as Address).toLowerCase();
+    const amount = String(args.amount as bigint);
+
+    // Match on the on-chain id rather than assuming the newest proposal: a
+    // vault can have several distributions open at once.
+    const matching = await this.findProposalForDistribution(vault.id, distributionId);
+
+    const user = await this.dataSource
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .where('LOWER(user.address) = :addr', { addr: holder })
+      .getOne();
+
+    const claimsRepository = this.dataSource.getRepository(Claim);
+    const existing = await claimsRepository.findOne({
+      where: {
+        vault_id: vault.id,
+        type: ClaimType.DISTRIBUTION,
+        user_id: user?.id,
+        proposal_id: matching?.id,
+      },
+    });
+    const existingMeta = existing?.metadata as EvmDistributionClaimMetadata | undefined;
+    if (existingMeta?.evmDistributionId === distributionId) {
+      return; // already recorded
+    }
+
+    await claimsRepository.save(
+      claimsRepository.create({
+        vault_id: vault.id,
+        user_id: user?.id ?? null,
+        proposal_id: matching?.id ?? null,
+        type: ClaimType.DISTRIBUTION,
+        status: ClaimStatus.CLAIMED,
+        amount,
+        description: `Pro-rata distribution ${distributionId}`,
+        metadata: {
+          evmDistributionId: distributionId,
+          evmAsset: asset,
+          evmHolder: holder,
+          evmRecipient: String(args.recipient as Address).toLowerCase(),
+          evmTxHash: log.txHash,
+        } satisfies EvmDistributionClaimMetadata,
+      })
+    );
+
+    this.logger.log(
+      `DistributionClaimed vault=${vault.id} distribution=${distributionId} holder=${holder} amount=${amount} tx=${log.txHash}`
+    );
+  }
+
+  /** Locate the proposal that opened `distributionId` for this vault. */
+  private async findProposalForDistribution(vaultId: string, distributionId: string): Promise<Proposal | null> {
+    return this.dataSource
+      .getRepository(Proposal)
+      .createQueryBuilder('p')
+      .where('p.vault_id = :vaultId', { vaultId })
+      .andWhere("p.metadata -> 'evmDistribution' ->> 'distributionId' = :did", { did: distributionId })
+      .getOne();
+  }
+
   private async handleTerminationEvent(
     vault: Vault,
     log: VaultLogInput,

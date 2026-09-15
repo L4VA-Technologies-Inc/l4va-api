@@ -49,6 +49,8 @@ export enum TransactionType {
   evmOpenPosition = 'evm-open-position',
   /** EVM: admin-signed `closePosition(ClosePositionParams)`. */
   evmClosePosition = 'evm-close-position',
+  evmSellNft = 'evm-sell-nft',
+  evmReleaseNftRefundable = 'evm-release-nft-refundable',
   /** EVM: admin-signed `beginTerminationPreparing()`. */
   evmBeginTerminationPreparing = 'evm-begin-termination-preparing',
   /** EVM: admin-signed `beginTermination(assets[])`. */
