@@ -11,6 +11,7 @@ import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ImageType } from './dto/upload-profile-image.dto';
 import { EmailVerificationService } from './email-verification.service';
+import { WalletLinkService } from './wallet-link.service';
 
 import { Asset } from '@/database/asset.entity';
 import { FileEntity } from '@/database/file.entity';
@@ -35,7 +36,8 @@ export class UsersService {
     private linksRepository: Repository<LinkEntity>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly priceService: PriceService,
-    private readonly emailVerificationService: EmailVerificationService
+    private readonly emailVerificationService: EmailVerificationService,
+    private readonly walletLinkService: WalletLinkService
   ) {}
 
   async findByStakeAddress(address: string): Promise<User | undefined> {
@@ -218,6 +220,10 @@ export class UsersService {
     if (updateData.email !== undefined) {
       const nextEmail = updateData.email?.trim().toLowerCase() || null;
       if (nextEmail !== (user.email?.toLowerCase() || null)) {
+        if (nextEmail) {
+          // Fail early instead of sending a verification link that can never be confirmed
+          await this.walletLinkService.assertEmailAvailable(user, nextEmail);
+        }
         user.email = nextEmail;
         user.email_verified = false;
         emailChanged = true;

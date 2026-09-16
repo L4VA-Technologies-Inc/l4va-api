@@ -7,6 +7,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { EmailVerificationService } from './email-verification.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { WalletLinkService } from './wallet-link.service';
 
 import { Asset } from '@/database/asset.entity';
 import { FileEntity } from '@/database/file.entity';
@@ -21,7 +22,7 @@ import { Vault } from '@/database/vault.entity';
     NotificationModule,
   ],
   controllers: [UsersController],
-  providers: [UsersService, EmailVerificationService],
-  exports: [UsersService],
+  providers: [UsersService, EmailVerificationService, WalletLinkService],
+  exports: [UsersService, WalletLinkService],
 })
 export class UsersModule {}
