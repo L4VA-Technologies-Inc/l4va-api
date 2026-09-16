@@ -26,6 +26,9 @@ export interface SystemSettingsData {
   contribution_enabled: boolean;
   acquire_enabled: boolean;
   governance_enabled: boolean;
+  // Allows disabling NFT (ERC721/ERC1155) assets on EVM (Robinhood-chain) vaults
+  // without a contract change; Cardano NFT support is unaffected.
+  evm_nft_assets_enabled: boolean;
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: number;
   governance_fee_proposal_distribution: number;
@@ -90,6 +93,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   contribution_enabled: true,
   acquire_enabled: true,
   governance_enabled: true,
+  evm_nft_assets_enabled: false,
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: 5000000, // 5 ADA
   governance_fee_proposal_distribution: 5000000, // 5 ADA
@@ -411,6 +415,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   get governanceEnabled(): boolean {
     return this.settings.governance_enabled !== false; // Default true if not set
+  }
+
+  get evmNftAssetsEnabled(): boolean {
+    return this.settings.evm_nft_assets_enabled !== false; // Default true if not set
   }
 
   /**

@@ -22,7 +22,7 @@ import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/
 import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 // Threshold for logging warnings about large token quantities (decimal-adjusted)
 // Set to 1 trillion tokens to catch potentially suspicious contributions
@@ -86,6 +86,7 @@ export class ContributionService {
         'vault.id',
         'vault.vault_status',
         'vault.max_contribute_assets',
+        'vault.chain_type',
         'owner.id',
         'assets_whitelist.id',
         'assets_whitelist.policy_id',
@@ -96,6 +97,14 @@ export class ContributionService {
 
     if (!vaultData) {
       throw new NotFoundException('Vault not found');
+    }
+
+    if (
+      vaultData.chain_type === ChainType.robinhood &&
+      !this.systemSettingsService.evmNftAssetsEnabled &&
+      normalizedAssets.some(asset => asset.type === AssetType.NFT)
+    ) {
+      throw new BadRequestException('NFT contributions are temporarily disabled for this chain.');
     }
 
     let currentAssetCount = 0;
