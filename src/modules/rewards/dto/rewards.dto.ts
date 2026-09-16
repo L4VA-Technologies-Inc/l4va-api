@@ -73,7 +73,7 @@ export interface AlignmentDetailsDto {
   maxMultiplier: number;
   maxMultiplierPercent: number;
   /** Wallets combined through a shared verified email (empty when not linked) */
-  linkedWallets: { address: string; chainType: string }[];
+  linkedWallets?: { address: string; chainType: string }[];
 }
 
 export interface RewardSplitDto {

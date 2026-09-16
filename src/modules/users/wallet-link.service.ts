@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Not, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { LinkedWalletRes } from './dto/linked-wallet.res';
 
@@ -74,6 +74,7 @@ export class WalletLinkService {
    * The caller may unlink its own wallet or any wallet sharing its verified email.
    */
   async unlinkWallet(userId: string, targetUserId: string): Promise<void> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
     const linked = await this.getLinkedWallets(userId);
     const target = linked.find(wallet => wallet.userId === targetUserId);
 
@@ -84,15 +85,25 @@ export class WalletLinkService {
       throw new BadRequestException('Wallet has no linked wallets');
     }
 
-    await this.usersRepository.update(
-      { id: targetUserId, deleted: Not(true) },
-      {
+    // Conditional update: skip if the target changed its email after the lookup above
+    const { affected } = await this.usersRepository
+      .createQueryBuilder()
+      .update(User)
+      .set({
         email: null,
         email_verified: false,
         email_verification_token_hash: null,
         email_verification_expires_at: null,
         email_verification_sent_at: null,
-      }
-    );
+      })
+      .where('id = :targetUserId', { targetUserId })
+      .andWhere('LOWER(email) = LOWER(:email)', { email: user.email })
+      .andWhere('email_verified = true')
+      .andWhere('deleted = false')
+      .execute();
+
+    if (!affected) {
+      throw new ConflictException('Wallet link has changed, please refresh and try again');
+    }
   }
 }
