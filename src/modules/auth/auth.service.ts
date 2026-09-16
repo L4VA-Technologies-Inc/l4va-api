@@ -16,7 +16,7 @@ import { LoginRes } from './dto/login.res';
 
 import { Vault } from '@/database/vault.entity';
 import { transformImageToUrl } from '@/helpers';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { ChainType, isEvmChain, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AuthService {
@@ -32,16 +32,17 @@ export class AuthService {
     if (payload.chainType === ChainType.cardano) {
       return await this.handleCardano(payload);
     }
-    if (payload.chainType === ChainType.robinhood) {
-      return await this.handleRobinhood(payload);
+    if (isEvmChain(payload.chainType)) {
+      return await this.handleEvm(payload);
     }
   }
 
-  async handleRobinhood(payload: LoginReq): Promise<LoginRes> {
+  /** EVM chains (Robinhood, Arc) share one user per wallet address. */
+  async handleEvm(payload: LoginReq): Promise<LoginRes> {
     const { walletAddress, chainType } = payload;
 
     // Find user in database by wallet address
-    let user = await this.usersService.findByAddress(walletAddress);
+    let user = await this.usersService.findByAddress(walletAddress, chainType);
 
     if (!user) {
       try {
@@ -96,14 +97,14 @@ export class AuthService {
               { userId: user.id }
             )
             .orWhere(
-              `EXISTS (
+              `(vault.chain_type = :userChainType AND EXISTS (
             SELECT 1 FROM snapshot
             WHERE snapshot.vault_id = vault.id 
             AND snapshot.address_balances -> :userAddress IS NOT NULL
             ORDER BY snapshot.created_at DESC
             LIMIT 1
-          )`,
-              { userAddress: user.address }
+          ))`,
+              { userAddress: user.address, userChainType: user.chain_type }
             );
         })
       )

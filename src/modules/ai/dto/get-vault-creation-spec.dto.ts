@@ -1,12 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsEnum, IsIn } from 'class-validator';
+import { IsIn } from 'class-validator';
 
-import { ChainType } from '@/types/vault.types';
+import { ChainType, VAULT_CREATION_CHAIN_TYPES } from '@/types/vault.types';
 
 export class GetVaultCreationSpecDto {
-  @ApiProperty({ enum: [ChainType.cardano, ChainType.robinhood] })
-  @IsEnum(ChainType)
+  @ApiProperty({ enum: VAULT_CREATION_CHAIN_TYPES })
+  @IsIn(VAULT_CREATION_CHAIN_TYPES)
   @Expose()
   chain: ChainType;
 

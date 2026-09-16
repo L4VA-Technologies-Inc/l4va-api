@@ -1759,14 +1759,14 @@ export class VaultsService {
                   { userId }
                 )
                 .orWhere(
-                  `EXISTS (
+                  `(vault.chain_type = :userChainType AND EXISTS (
               SELECT 1 FROM snapshot
               WHERE snapshot.vault_id = vault.id 
               AND snapshot.address_balances -> :userAddress IS NOT NULL
               ORDER BY snapshot.created_at DESC
               LIMIT 1
-            )`,
-                  { userAddress: user.address }
+            ))`,
+                  { userAddress: user.address, userChainType: user.chain_type }
                 );
             })
           );

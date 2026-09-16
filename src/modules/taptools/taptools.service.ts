@@ -1271,8 +1271,7 @@ export class TaptoolsService {
         continue;
       }
 
-      const isFungible =
-        asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
+      const isFungible = asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
       const key = isFungible ? `${asset.policy_id}_${asset.asset_id}_${asset.type}` : `nft_${asset.id}`;
       const existingAsset = isFungible ? assetMap.get(key) : undefined;
 
@@ -1844,7 +1843,9 @@ export class TaptoolsService {
           })
         : [];
 
-    const addressToUserIdMap = new Map(usersByAddress.map(u => [u.address, u.id]));
+    // One address can be several users (the same EVM wallet on Robinhood and Arc).
+    const addressToUserIds = new Map<string, string[]>();
+    usersByAddress.forEach(u => addressToUserIds.set(u.address, [...(addressToUserIds.get(u.address) ?? []), u.id]));
 
     // Identify affected users
     const affectedUserIds = new Set<string>();
@@ -1863,8 +1864,7 @@ export class TaptoolsService {
     snapshots.forEach(snapshot => {
       if (snapshot.addressBalances) {
         Object.keys(snapshot.addressBalances).forEach(address => {
-          const userId = addressToUserIdMap.get(address);
-          if (userId) affectedUserIds.add(userId);
+          addressToUserIds.get(address)?.forEach(userId => affectedUserIds.add(userId));
         });
       }
     });
@@ -1880,7 +1880,15 @@ export class TaptoolsService {
           vault_status: In(VAULT_STATUSES_ACTIVE),
         },
         relations: ['owner'],
-        select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
+        select: [
+          'id',
+          'vault_status',
+          'ft_token_supply',
+          'ft_token_decimals',
+          'initial_total_value_ada',
+          'owner',
+          'chain_type',
+        ],
       });
 
       // Batch query: Get all vault values at once
@@ -1907,7 +1915,7 @@ export class TaptoolsService {
       // Batch query: Get all users with their addresses
       const allUsers = await this.userRepository.find({
         where: { id: In([...affectedUserIds]) },
-        select: ['id', 'address'],
+        select: ['id', 'address', 'chain_type'],
       });
       const userMap = new Map(allUsers.map(u => [u.id, u]));
 
@@ -1960,6 +1968,9 @@ export class TaptoolsService {
           if (!summary) continue;
 
           if (VAULT_STATUSES_WITH_VT_TOKENS.includes(vault.vault_status)) {
+            // VT holdings are matched by address, so only the user's own chain counts.
+            if (vault.chain_type !== user.chain_type) continue;
+
             // Get user's share from VT token holdings (applies to locked, expansion, and acquire_expansion)
             const snapshot = snapshotByVaultId.get(vault.id);
 

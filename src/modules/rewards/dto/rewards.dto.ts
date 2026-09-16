@@ -227,7 +227,7 @@ export interface ClaimsSummaryDto {
 export interface LinkedWalletClaimsDto {
   userId: string;
   address: string;
-  chainType: 'cardano' | 'robinhood';
+  chainType: 'cardano' | 'robinhood' | 'arc';
   isCurrent: boolean;
   claims: ClaimsSummaryDto;
 }

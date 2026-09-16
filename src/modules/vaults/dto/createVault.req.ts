@@ -6,6 +6,7 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsObject,
@@ -32,6 +33,7 @@ import {
   VaultPrivacy,
   VaultType,
   ChainType,
+  VAULT_CREATION_CHAIN_TYPES,
 } from '@/types/vault.types';
 
 export class CreateVaultReq {
@@ -454,9 +456,9 @@ export class CreateVaultReq {
   @Expose()
   isExpandableAssetWhitelist?: boolean;
 
-  @ApiProperty({ description: 'Chain to deploy vault on', enum: ChainType, required: false })
+  @ApiProperty({ description: 'Chain to deploy vault on', enum: VAULT_CREATION_CHAIN_TYPES, required: false })
   @IsOptional()
-  @IsEnum(ChainType)
+  @IsIn(VAULT_CREATION_CHAIN_TYPES)
   @Expose()
   chainType?: ChainType;
 }
