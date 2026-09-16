@@ -4,7 +4,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import { Brackets, In, Not, Repository } from 'typeorm';
-import { keccak256, encodePacked, formatEther, parseEther } from 'viem';
+import {
+  keccak256,
+  encodePacked,
+  formatEther,
+  parseEther,
+  createPublicClient,
+  defineChain,
+  http,
+  parseAbi,
+  type Address,
+} from 'viem';
 
 import { DexHunterService } from '../dexhunter/dexhunter.service';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
@@ -151,6 +161,14 @@ function normalizeMinAcquireThresholdForDb(
   return String(value);
 }
 
+// ---------------------------------------------------------------------------
+// ERC-165 detection for EVM asset-whitelist entries (used to reject NFT
+// collections at vault-creation time when evm_nft_assets_enabled is off).
+// ---------------------------------------------------------------------------
+const ERC165_ABI = parseAbi(['function supportsInterface(bytes4 interfaceId) view returns (bool)']);
+const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
+const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
+
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
@@ -242,6 +260,70 @@ export class VaultsService {
     } catch (error) {
       console.error('Error parsing CSV from Google Cloud Storage:', error);
       throw new BadRequestException('Failed to parse CSV file');
+    }
+  }
+
+  private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
+    const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
+    if (!evmRpcUrl) {
+      throw new BadRequestException('EVM RPC URL not configured');
+    }
+    const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
+    const robinhoodChain = defineChain({
+      id: chainId,
+      name: 'Robinhood',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: { default: { http: [evmRpcUrl] } },
+    });
+    return createPublicClient({ chain: robinhoodChain, transport: http(evmRpcUrl) });
+  }
+
+  /**
+   * Rejects EVM asset-whitelist entries that are NFT collections (ERC721/ERC1155)
+   * when evm_nft_assets_enabled is off. Detected via ERC-165 supportsInterface
+   * rather than a client-supplied type, since whitelist entries carry no NFT/FT
+   * marker of their own.
+   */
+  private async assertNoNftWhitelistEntriesForEvm(contractAddresses: string[]): Promise<void> {
+    if (this.systemSettingsService.evmNftAssetsEnabled || contractAddresses.length === 0) {
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client: any = this.getEvmPublicClient();
+    const nftAddresses: string[] = [];
+
+    await Promise.all(
+      contractAddresses.map(async address => {
+        const [isErc721, isErc1155] = await Promise.all([
+          client
+            .readContract({
+              address: address as Address,
+              abi: ERC165_ABI,
+              functionName: 'supportsInterface',
+              args: [ERC721_INTERFACE_ID],
+            })
+            .catch(() => false),
+          client
+            .readContract({
+              address: address as Address,
+              abi: ERC165_ABI,
+              functionName: 'supportsInterface',
+              args: [ERC1155_INTERFACE_ID],
+            })
+            .catch(() => false),
+        ]);
+
+        if (isErc721 || isErc1155) {
+          nftAddresses.push(address);
+        }
+      })
+    );
+
+    if (nftAddresses.length > 0) {
+      throw new BadRequestException(
+        `NFT assets are temporarily disabled for this chain. Remove NFT contract(s) from the whitelist: ${nftAddresses.join(', ')}`
+      );
     }
   }
 
@@ -404,6 +486,8 @@ export class VaultsService {
             );
           }
         }
+      } else if (data.chainType === ChainType.robinhood && uniquePolicyIds.length > 0) {
+        await this.assertNoNftWhitelistEntriesForEvm(uniquePolicyIds.map(item => item.policyId).filter(Boolean));
       }
 
       // ========================================================================
@@ -1512,15 +1596,14 @@ export class VaultsService {
     } else {
       // No DexHunter index (typical on testnet). Price/FDV come from vault NAV, not a DEX.
       const fdvFromVault = vault.fdv != null ? Number(vault.fdv) : null;
-      vaultStatsFdvAda = fdvFromVault && fdvFromVault > 0 ? fdvFromVault : vaultStatsTvlAda ?? null;
+      vaultStatsFdvAda = fdvFromVault && fdvFromVault > 0 ? fdvFromVault : (vaultStatsTvlAda ?? null);
       vaultStatsFdvUsd =
-        vaultStatsFdvAda != null && adaPrice > 0 ? vaultStatsFdvAda * adaPrice : vaultStatsTvlUsd ?? null;
+        vaultStatsFdvAda != null && adaPrice > 0 ? vaultStatsFdvAda * adaPrice : (vaultStatsTvlUsd ?? null);
       vaultStatsFdvTvl =
         vaultStatsFdvAda != null && vaultStatsTvlAda > 0 ? Number(vaultStatsFdvAda) / Number(vaultStatsTvlAda) : null;
     }
     const supplyNum = vault.ft_token_supply != null ? Number(vault.ft_token_supply) : 0;
-    const navPriceAda =
-      supplyNum > 0 && vaultStatsTvlAda > 0 ? Number(vaultStatsTvlAda) / supplyNum : null;
+    const navPriceAda = supplyNum > 0 && vaultStatsTvlAda > 0 ? Number(vaultStatsTvlAda) / supplyNum : null;
     const listedPriceAda = vault.vt_price != null && Number(vault.vt_price) > 0 ? Number(vault.vt_price) : null;
     const vtPriceAda = hasActiveLp ? (listedPriceAda ?? navPriceAda) : navPriceAda;
     additionalData['vaultStats'] = {
