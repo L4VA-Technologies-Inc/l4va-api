@@ -18,12 +18,15 @@ import {
   ValidateIf,
   ArrayMinSize,
   IsUUID,
+  ValidateNested,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 
+import { IndexBasketReq } from '@/modules/vaults/index-vault/dto/index-basket.dto';
+import { VaultArchetype } from '@/types/index-vault.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -459,4 +462,26 @@ export class CreateVaultReq {
   @IsEnum(ChainType)
   @Expose()
   chainType?: ChainType;
+
+  @ApiProperty({
+    description: 'Product archetype. index_weighted is Robinhood-only and requires an acquire-only vault.',
+    enum: VaultArchetype,
+    required: false,
+    default: VaultArchetype.standard,
+  })
+  @IsOptional()
+  @IsEnum(VaultArchetype)
+  @Expose()
+  vaultArchetype?: VaultArchetype;
+
+  @ApiProperty({
+    description: 'Target basket the vault buys once the acquire window locks (index_weighted only)',
+    type: IndexBasketReq,
+    required: false,
+  })
+  @ValidateIf(o => o.vaultArchetype === VaultArchetype.index_weighted)
+  @ValidateNested()
+  @Type(() => IndexBasketReq)
+  @Expose()
+  indexBasket?: IndexBasketReq;
 }

@@ -14,6 +14,7 @@ import {
   JoinTable,
 } from 'typeorm';
 
+import { IndexConfig, VaultArchetype } from '../types/index-vault.types';
 import {
   ApplyParamsResult,
   ChainType,
@@ -850,6 +851,16 @@ export class Vault {
   @Expose({ name: 'evmCancelCycleTxHash' })
   @Column({ name: 'evm_cancel_cycle_tx_hash', nullable: true })
   evm_cancel_cycle_tx_hash?: string;
+
+  /** Product archetype. `index_weighted` vaults buy and hold a governed basket. */
+  @Expose({ name: 'vaultArchetype' })
+  @Column({ name: 'vault_archetype', type: 'varchar', nullable: false, default: VaultArchetype.standard })
+  vault_archetype: VaultArchetype;
+
+  /** Target basket of an index-weighted vault. Null for every other archetype. */
+  @Expose({ name: 'indexConfig' })
+  @Column({ name: 'index_config', type: 'jsonb', nullable: true })
+  index_config?: IndexConfig | null;
 
   @BeforeInsert()
   setDate(): void {

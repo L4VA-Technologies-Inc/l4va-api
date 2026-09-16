@@ -50,6 +50,8 @@ export enum TransactionType {
   /** EVM: admin-signed `closePosition(ClosePositionParams)`. */
   evmClosePosition = 'evm-close-position',
   evmSellNft = 'evm-sell-nft',
+  /** EVM: admin-signed position-less `swap(SwapParams)` (index-vault basket trades). */
+  evmSwap = 'evm-swap',
   evmReleaseNftRefundable = 'evm-release-nft-refundable',
   /** EVM: admin-signed `beginTerminationPreparing()`. */
   evmBeginTerminationPreparing = 'evm-begin-termination-preparing',

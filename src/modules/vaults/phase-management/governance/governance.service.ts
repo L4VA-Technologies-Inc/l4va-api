@@ -51,6 +51,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
+import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -158,7 +159,8 @@ export class GovernanceService {
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
     private readonly evmSnapshotService: EvmSnapshotService,
-    private readonly uniswapQuoteService: UniswapQuoteService
+    private readonly uniswapQuoteService: UniswapQuoteService,
+    private readonly indexVaultService: IndexVaultService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -2135,6 +2137,41 @@ export class GovernanceService {
           };
         }
 
+        break;
+      }
+
+      case ProposalType.INDEX_REWEIGHT: {
+        const reweight = createProposalReq.indexReweight;
+        if (vault.chain_type !== ChainType.robinhood) {
+          throw new BadRequestException('Index re-weight proposals are only available on Robinhood vaults');
+        }
+        if (!reweight?.targets?.length) {
+          throw new BadRequestException('A re-weight proposal needs the new target basket');
+        }
+
+        const indexVault = await this.indexVaultService.requireIndexVault(vaultId);
+        const activeReweight = await this.proposalRepository.findOne({
+          where: {
+            vaultId,
+            proposalType: ProposalType.INDEX_REWEIGHT,
+            status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING, ProposalStatus.PASSED]),
+          },
+        });
+        if (activeReweight) {
+          throw new BadRequestException(
+            `Only one re-weight proposal can be open at a time. Wait for "${activeReweight.title}" to finish.`
+          );
+        }
+
+        // Resolved now, not at execution: holders vote on exact assets and
+        // decimals, and a basket the adapter cannot trade is rejected up front.
+        const targets = await this.indexVaultService.resolveBasket(reweight.targets);
+        proposal.metadata.indexReweight = {
+          targets,
+          reserveBps: reweight.reserveBps,
+          previousTargets: indexVault.index_config?.targets ?? [],
+          previousReserveBps: indexVault.index_config?.reserveBps ?? null,
+        };
         break;
       }
     }

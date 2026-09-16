@@ -396,6 +396,56 @@ export const VAULT_ABI = [
     ],
     outputs: [{ type: 'uint256' }],
   },
+  // --- Position-less swap (index-vault basket buys, re-weights, unwinds) -----
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'swap',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          { name: 'operationId', type: 'bytes32' },
+          { name: 'adapter', type: 'address' },
+          { name: 'assetIn', type: 'address' },
+          { name: 'amountIn', type: 'uint256' },
+          { name: 'assetOut', type: 'address' },
+          { name: 'minAmountOut', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'route', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [{ name: 'netOut', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'isSwapOperationIdUsed',
+    inputs: [{ name: 'operationId', type: 'bytes32' }],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'protocolFeeConfig',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'event',
+    name: 'Swapped',
+    inputs: [
+      { name: 'operationId', type: 'bytes32', indexed: true },
+      { name: 'adapter', type: 'address', indexed: true },
+      { name: 'assetIn', type: 'address', indexed: false },
+      { name: 'amountIn', type: 'uint256', indexed: false },
+      { name: 'assetOut', type: 'address', indexed: false },
+      { name: 'grossOut', type: 'uint256', indexed: false },
+      { name: 'fee', type: 'uint256', indexed: false },
+    ],
+  },
   {
     type: 'function',
     stateMutability: 'view',

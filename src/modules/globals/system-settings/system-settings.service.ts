@@ -438,6 +438,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalExpansion;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdate;
+      case 'index_reweight':
+        return this.governanceFeeProposalMarketplaceAction;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;
@@ -470,6 +472,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalExpansionEvm;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdateEvm;
+      case 'index_reweight':
+        return this.governanceFeeProposalMarketplaceActionEvm;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return '0';

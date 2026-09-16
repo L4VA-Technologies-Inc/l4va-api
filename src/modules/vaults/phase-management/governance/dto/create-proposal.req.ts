@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 
 import { AssetWhitelistDto } from '@/modules/vaults/dto/assetWhitelist.dto';
+import { IndexBasketReq } from '@/modules/vaults/index-vault/dto/index-basket.dto';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
@@ -716,6 +717,17 @@ export class CreateProposalReq {
   @Type(() => AssetWhitelistProposalDto)
   @Expose()
   assetsWhitelist?: AssetWhitelistProposalDto[];
+
+  @ApiProperty({
+    description: 'New target basket for index re-weight proposals (index-weighted Robinhood vaults only)',
+    type: IndexBasketReq,
+    required: false,
+  })
+  @ValidateIf(o => o.type === ProposalType.INDEX_REWEIGHT)
+  @ValidateNested()
+  @Type(() => IndexBasketReq)
+  @Expose()
+  indexReweight?: IndexBasketReq;
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

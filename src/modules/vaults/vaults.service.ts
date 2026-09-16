@@ -27,6 +27,7 @@ import {
   VaultActivityItem,
 } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
@@ -54,6 +55,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -200,7 +202,8 @@ export class VaultsService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly claimsService: ClaimsService,
-    private readonly evmVaultSignerService: EvmVaultSignerService
+    private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly indexVaultService: IndexVaultService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -458,6 +461,24 @@ export class VaultsService {
       const acquireOpenWindowTimeForDb = skipsAcquirePhase ? null : acquireOpenWindowTime;
       const contributionOpenWindowTimeForDb = data.isAcquireOnly ? null : contributionOpenWindowTime;
 
+      // Index-weighted vaults raise native only and buy the basket at lock, so
+      // the basket is resolved (decimals, tradeability) before anything is saved.
+      const isIndexVault = data.vaultArchetype === VaultArchetype.index_weighted;
+      let indexConfig: IndexConfig | null = null;
+      if (isIndexVault) {
+        if (data.chainType !== ChainType.robinhood) {
+          throw new BadRequestException('Index-weighted vaults are only available on Robinhood Chain');
+        }
+        if (!data.isAcquireOnly) {
+          throw new BadRequestException('Index-weighted vaults must use the acquire-only preset');
+        }
+        if (!data.indexBasket?.targets?.length) {
+          throw new BadRequestException('Index-weighted vaults need a target basket');
+        }
+        const targets = await this.indexVaultService.resolveBasket(data.indexBasket.targets);
+        indexConfig = this.indexVaultService.buildConfig(targets, data.indexBasket.reserveBps);
+      }
+
       if (data.chainType === ChainType.robinhood) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
         evmVaultId = keccak256(
@@ -488,6 +509,10 @@ export class VaultsService {
         delete vaultData.tags;
         delete vaultData.acquirer_whitelist_csv;
         delete vaultData.contributor_whitelist_csv;
+        delete vaultData.index_basket;
+        // Set after the snake-case transform, which would otherwise rewrite the config's own keys.
+        vaultData.vault_archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
+        vaultData.index_config = indexConfig;
         newVault = await this.vaultsRepository.save(vaultData as Vault);
       } else {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
@@ -1512,15 +1537,14 @@ export class VaultsService {
     } else {
       // No DexHunter index (typical on testnet). Price/FDV come from vault NAV, not a DEX.
       const fdvFromVault = vault.fdv != null ? Number(vault.fdv) : null;
-      vaultStatsFdvAda = fdvFromVault && fdvFromVault > 0 ? fdvFromVault : vaultStatsTvlAda ?? null;
+      vaultStatsFdvAda = fdvFromVault && fdvFromVault > 0 ? fdvFromVault : (vaultStatsTvlAda ?? null);
       vaultStatsFdvUsd =
-        vaultStatsFdvAda != null && adaPrice > 0 ? vaultStatsFdvAda * adaPrice : vaultStatsTvlUsd ?? null;
+        vaultStatsFdvAda != null && adaPrice > 0 ? vaultStatsFdvAda * adaPrice : (vaultStatsTvlUsd ?? null);
       vaultStatsFdvTvl =
         vaultStatsFdvAda != null && vaultStatsTvlAda > 0 ? Number(vaultStatsFdvAda) / Number(vaultStatsTvlAda) : null;
     }
     const supplyNum = vault.ft_token_supply != null ? Number(vault.ft_token_supply) : 0;
-    const navPriceAda =
-      supplyNum > 0 && vaultStatsTvlAda > 0 ? Number(vaultStatsTvlAda) / supplyNum : null;
+    const navPriceAda = supplyNum > 0 && vaultStatsTvlAda > 0 ? Number(vaultStatsTvlAda) / supplyNum : null;
     const listedPriceAda = vault.vt_price != null && Number(vault.vt_price) > 0 ? Number(vault.vt_price) : null;
     const vtPriceAda = hasActiveLp ? (listedPriceAda ?? navPriceAda) : navPriceAda;
     additionalData['vaultStats'] = {
@@ -1631,6 +1655,7 @@ export class VaultsService {
       reserveMet,
       isOfficialPartner,
       chainType,
+      vaultArchetype,
       search,
       page = 1,
       limit = 10,
@@ -1899,6 +1924,10 @@ export class VaultsService {
 
     if (chainType) {
       queryBuilder.andWhere('vault.chain_type = :chainType', { chainType });
+    }
+
+    if (vaultArchetype) {
+      queryBuilder.andWhere('vault.vault_archetype = :vaultArchetype', { vaultArchetype });
     }
 
     // Apply sorting

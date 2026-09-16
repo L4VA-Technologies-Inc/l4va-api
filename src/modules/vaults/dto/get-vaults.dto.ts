@@ -4,6 +4,7 @@ import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString,
 
 import { PaginationDto } from './pagination.dto';
 
+import { VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
 export enum VaultFilter {
@@ -410,4 +411,14 @@ export class GetVaultsDto extends PaginationDto {
   })
   @Expose()
   chainType?: ChainType;
+
+  @IsEnum(VaultArchetype)
+  @IsOptional()
+  @ApiProperty({
+    enum: VaultArchetype,
+    required: false,
+    description: 'Filter by vault archetype (standard or index_weighted)',
+  })
+  @Expose()
+  vaultArchetype?: VaultArchetype;
 }
