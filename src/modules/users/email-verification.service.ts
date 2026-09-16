@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from 'crypto';
 
-import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
+
+import { WalletLinkService } from './wallet-link.service';
 
 import { User } from '@/database/user.entity';
 import { NotificationService } from '@/modules/notification/notification.service';
@@ -20,7 +22,8 @@ export class EmailVerificationService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly notificationService: NotificationService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly walletLinkService: WalletLinkService
   ) {
     // CLIENT_APP_URL lets local setups point the verification link at e.g. http://localhost:5173
     this.appUrl =
@@ -82,6 +85,8 @@ export class EmailVerificationService {
       throw new BadRequestException('Email is already verified');
     }
 
+    await this.walletLinkService.assertEmailAvailable(user, user.email);
+
     const sentAt = user.email_verification_sent_at?.getTime();
     if (sentAt && Date.now() - sentAt < RESEND_COOLDOWN_MS) {
       const retryAfterSeconds = Math.ceil((RESEND_COOLDOWN_MS - (Date.now() - sentAt)) / 1000);
@@ -117,14 +122,27 @@ export class EmailVerificationService {
       throw new BadRequestException('Verification link has expired');
     }
 
-    await this.usersRepository.update(
-      { id: user.id },
-      {
-        email_verified: true,
-        email_verification_token_hash: null,
-        email_verification_expires_at: null,
+    // Verifying links this wallet with any wallet of the other chain holding the same verified email
+    await this.walletLinkService.assertEmailAvailable(user, user.email);
+
+    try {
+      await this.usersRepository.update(
+        { id: user.id },
+        {
+          email_verified: true,
+          email_verification_token_hash: null,
+          email_verification_expires_at: null,
+        }
+      );
+    } catch (error) {
+      // IDX_users_verified_email_chain: a concurrent verification won the race
+      if (error instanceof QueryFailedError && (error as QueryFailedError & { code?: string }).code === '23505') {
+        throw new ConflictException(
+          `This email is already linked to another ${user.chain_type} wallet. Unlink that wallet first.`
+        );
       }
-    );
+      throw error;
+    }
 
     return { email: user.email, emailVerified: true };
   }

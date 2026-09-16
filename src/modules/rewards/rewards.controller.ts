@@ -10,6 +10,7 @@ import {
   ClaimTransactionDto,
   CurrentEpochEstimateDto,
   CurrentEpochResponseDto,
+  LinkedWalletClaimsDto,
   EpochDto,
   EpochsResponseDto,
   PrepareClaimResponseDto,
@@ -29,6 +30,7 @@ import { RewardEventProducer } from './services/reward-event-producer.service';
 import { Vault } from '@/database/vault.entity';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
+import { WalletLinkService } from '@/modules/users/wallet-link.service';
 import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
 
 /**
@@ -45,6 +47,7 @@ export class RewardsController {
   constructor(
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly rewardClaimProxy: RewardClaimProxy,
+    private readonly walletLinkService: WalletLinkService,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
   ) {}
@@ -246,6 +249,24 @@ export class RewardsController {
   async getClaimsSummary(@Request() req: AuthRequest): Promise<ClaimsSummaryDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getAvailableClaims(walletAddress);
+  }
+
+  /**
+   * GET /rewards/me/claims/by-chain
+   * Read-only rewards overview per chain for wallets linked by verified email.
+   * Without a linked wallet only the current wallet's chain is returned.
+   * Claiming still goes through the wallet (and chain) where rewards were earned.
+   */
+  @UseGuards(AuthGuard)
+  @Get('me/claims/by-chain')
+  async getClaimsByChain(@Request() req: AuthRequest): Promise<LinkedWalletClaimsDto[]> {
+    const wallets = await this.walletLinkService.getLinkedWallets(req.user.sub);
+    return Promise.all(
+      wallets.map(async wallet => ({
+        ...wallet,
+        claims: await this.rewardClaimProxy.getAvailableClaims(wallet.address),
+      }))
+    );
   }
 
   @UseGuards(AuthGuard)

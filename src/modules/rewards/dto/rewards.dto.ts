@@ -72,6 +72,8 @@ export interface AlignmentDetailsDto {
   };
   maxMultiplier: number;
   maxMultiplierPercent: number;
+  /** Wallets combined through a shared verified email (empty when not linked) */
+  linkedWallets: { address: string; chainType: string }[];
 }
 
 export interface RewardSplitDto {
@@ -220,6 +222,14 @@ export interface ClaimsSummaryDto {
   pendingClaims: number;
   lastClaimDate: string | null;
   availableRewards: AvailableRewardDto[];
+}
+
+export interface LinkedWalletClaimsDto {
+  userId: string;
+  address: string;
+  chainType: 'cardano' | 'robinhood';
+  isCurrent: boolean;
+  claims: ClaimsSummaryDto;
 }
 
 export interface ClaimHistoryItemDto {
