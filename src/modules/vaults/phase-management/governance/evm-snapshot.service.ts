@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { parseAbiItem, type Address } from 'viem';
 
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
@@ -9,7 +9,9 @@ import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { EvmChainConfig } from '@/modules/evm-chains/evm-chains.config';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
+import { EVM_CHAIN_TYPES, VaultStatus, isEvmChain } from '@/types/vault.types';
 
 const ERC20_TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
 
@@ -36,6 +38,7 @@ export class EvmSnapshotService {
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Snapshot) private readonly snapshotRepository: Repository<Snapshot>,
     private readonly contractReader: EvmContractReader,
+    private readonly evmChains: EvmChainsService,
     private readonly configService: ConfigService
   ) {}
 
@@ -53,16 +56,18 @@ export class EvmSnapshotService {
     const startedAt = Date.now();
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      select: ['id', 'contract_address', 'chain_type'],
+      select: ['id', 'contract_address', 'chain_type', 'chain_id'],
     });
 
-    if (!vault || vault.chain_type !== ChainType.robinhood) {
+    if (!vault || !isEvmChain(vault.chain_type)) {
       throw new Error(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {
       throw new Error(`Vault ${vaultId} has no contract address`);
     }
 
+    const chain = this.evmChains.forVault(vault);
+    const client = this.evmChains.publicClient(chain.chainId);
     const vtAddress = await this.getVaultTokenAddress(vault.contract_address as Address);
 
     // Pin the chain position BEFORE reading balances. The holder sources below
@@ -71,8 +76,10 @@ export class EvmSnapshotService {
     // ahead-of-data timepoint would attribute balances to a moment they did
     // not exist at. Any drift is caught by `reconcileWithChain` before a
     // distribution is opened against this snapshot.
-    const pinnedBlock = await this.contractReader.publicClient.getBlock();
-    this.logger.debug(`[EVM Snapshot] Vault ${vaultId}: resolved vaultToken=${vtAddress}`);
+    const pinnedBlock = await client.getBlock();
+    this.logger.debug(
+      `[EVM Snapshot] Vault ${vaultId}: chain=${chain.chainType}(${chain.chainId}) resolved vaultToken=${vtAddress}`
+    );
     const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
@@ -96,7 +103,7 @@ export class EvmSnapshotService {
     let balanceSource: 'holders_api' | 'alchemy_token_balances' | 'transfer_replay';
 
     try {
-      balances = await this.fetchHolderBalancesFromApi(vtAddress, vaultId);
+      balances = await this.fetchHolderBalancesFromApi(vtAddress, vaultId, chain);
       balanceSource = 'holders_api';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -105,14 +112,14 @@ export class EvmSnapshotService {
       );
 
       const canTryAlchemy =
-        this.hasAlchemyApiKey() &&
+        chain.rpcUrl.toLowerCase().includes('alchemy') &&
         canUseIncrementalBaseline &&
         !!latestSnapshot?.addressBalances &&
         Object.keys(latestSnapshot.addressBalances).length > 0;
 
       if (canTryAlchemy) {
         try {
-          balances = await this.fetchHolderBalancesFromAlchemy(vtAddress, vaultId, latestSnapshot!);
+          balances = await this.fetchHolderBalancesFromAlchemy(vtAddress, vaultId, latestSnapshot!, chain.rpcUrl);
           balanceSource = 'alchemy_token_balances';
         } catch (alchemyError) {
           const alchemyMessage = alchemyError instanceof Error ? alchemyError.message : String(alchemyError);
@@ -123,7 +130,8 @@ export class EvmSnapshotService {
           balances = await this.buildHolderBalances(
             vtAddress,
             vaultId,
-            canUseIncrementalBaseline ? latestSnapshot : null
+            canUseIncrementalBaseline ? latestSnapshot : null,
+            client
           );
           balanceSource = 'transfer_replay';
         }
@@ -131,7 +139,8 @@ export class EvmSnapshotService {
         balances = await this.buildHolderBalances(
           vtAddress,
           vaultId,
-          canUseIncrementalBaseline ? latestSnapshot : null
+          canUseIncrementalBaseline ? latestSnapshot : null,
+          client
         );
         balanceSource = 'transfer_replay';
       }
@@ -190,9 +199,21 @@ export class EvmSnapshotService {
     // Largest holders first: a divergence there moves the most money.
     const sample = entries.sort(([, a], [, b]) => (BigInt(b) > BigInt(a) ? 1 : -1)).slice(0, sampleSize);
 
+    const vault = await this.vaultRepository.findOne({
+      where: { id: snapshot.vaultId },
+      select: ['id', 'chain_id', 'chain_type'],
+    });
+    if (!vault) {
+      throw new Error(`Vault ${snapshot.vaultId} not found for snapshot ${snapshot.id}`);
+    }
+
+    // viem's generic typing doesn't line up with this const ABI; the call is checked below.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = this.evmChains.publicClient(this.evmChains.forVault(vault).chainId) as any;
+
     const mismatches: Array<{ address: string; snapshotBalance: string; chainBalance: string }> = [];
     for (const [address, snapshotBalance] of sample) {
-      const chainBalance = (await this.contractReader.publicClient.readContract({
+      const chainBalance = (await client.readContract({
         address: snapshot.assetId as Address,
         abi: VAULT_TOKEN_CHECKPOINT_ABI,
         functionName: 'balanceOfAt',
@@ -217,9 +238,9 @@ export class EvmSnapshotService {
   async findEligibleVaults(): Promise<Pick<Vault, 'id' | 'contract_address'>[]> {
     return this.vaultRepository.find({
       where: [
-        { chain_type: ChainType.robinhood, vault_status: VaultStatus.locked },
-        { chain_type: ChainType.robinhood, vault_status: VaultStatus.expansion },
-        { chain_type: ChainType.robinhood, vault_status: VaultStatus.acquire_expansion },
+        { chain_type: In([...EVM_CHAIN_TYPES]), vault_status: VaultStatus.locked },
+        { chain_type: In([...EVM_CHAIN_TYPES]), vault_status: VaultStatus.expansion },
+        { chain_type: In([...EVM_CHAIN_TYPES]), vault_status: VaultStatus.acquire_expansion },
       ],
       select: ['id', 'contract_address'],
     });
@@ -228,7 +249,7 @@ export class EvmSnapshotService {
   // ---------------------------------------------------------------------------
 
   private async getVaultTokenAddress(vaultAddress: Address): Promise<Address> {
-    return this.contractReader.publicClient.readContract({
+    return (await this.contractReader.clientFor(vaultAddress)).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'vaultToken',
@@ -242,13 +263,15 @@ export class EvmSnapshotService {
   private async buildHolderBalances(
     vtAddress: Address,
     vaultId: string,
-    baselineSnapshot?: Snapshot | null
+    baselineSnapshot: Snapshot | null | undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any
   ): Promise<Map<string, bigint>> {
     const balances = baselineSnapshot
       ? this.snapshotAddressBalancesToMap(baselineSnapshot.addressBalances)
       : new Map<string, bigint>();
 
-    const latestBlock: bigint = await this.contractReader.publicClient.getBlockNumber();
+    const latestBlock: bigint = await client.getBlockNumber();
     const startedAt = Date.now();
     let chunkIndex = 0;
     let totalLogs = 0;
@@ -256,14 +279,18 @@ export class EvmSnapshotService {
     let fromBlock: bigint;
 
     if (baselineSnapshot) {
-      const estimatedBaselineBlock = await this.estimateBlockForTimestamp(baselineSnapshot.createdAt, latestBlock);
+      const estimatedBaselineBlock = await this.estimateBlockForTimestamp(
+        baselineSnapshot.createdAt,
+        latestBlock,
+        client
+      );
       fromBlock = estimatedBaselineBlock + 1n;
       this.logger.debug(
         `[EVM Snapshot] Vault ${vaultId}: incremental replay from block ${fromBlock.toString()} (latest=${latestBlock.toString()})`
       );
     } else {
       try {
-        fromBlock = await this.findContractDeploymentBlock(vtAddress, latestBlock);
+        fromBlock = await this.findContractDeploymentBlock(vtAddress, latestBlock, client);
       } catch (error) {
         if (this.isMissingTrieNodeError(error)) {
           // Non-archive RPCs may fail historical eth_getCode lookups.
@@ -297,7 +324,7 @@ export class EvmSnapshotService {
       const maxFullReplayChunks = this.resolveMaxFullReplayChunks();
       if (estimatedChunks > maxFullReplayChunks) {
         throw new Error(
-          `Full replay aborted: estimatedChunks=${estimatedChunks} exceeds limit=${maxFullReplayChunks}. Configure ROBINHOOD_HOLDERS_API_BASE_URL to a working explorer endpoint or increase EVM_SNAPSHOT_MAX_FULL_REPLAY_CHUNKS if full replay is intentional.`
+          `Full replay aborted: estimatedChunks=${estimatedChunks} exceeds limit=${maxFullReplayChunks}. Configure <CHAIN>_HOLDERS_API_BASE_URL to a working explorer endpoint or increase EVM_SNAPSHOT_MAX_FULL_REPLAY_CHUNKS if full replay is intentional.`
         );
       }
     }
@@ -310,7 +337,7 @@ export class EvmSnapshotService {
       const toBlock = fromBlock + LOG_CHUNK_BLOCKS - 1n < latestBlock ? fromBlock + LOG_CHUNK_BLOCKS - 1n : latestBlock;
       chunkIndex++;
 
-      const logs = await this.contractReader.publicClient.getLogs({
+      const logs = await client.getLogs({
         address: vtAddress,
         event: ERC20_TRANSFER_EVENT,
         fromBlock,
@@ -387,8 +414,12 @@ export class EvmSnapshotService {
    * Primary fast path: fetch token holders from Blockscout v2 API with pagination.
    * Falls back to transfer-replay path when this API is unavailable.
    */
-  private async fetchHolderBalancesFromApi(vtAddress: Address, vaultId: string): Promise<Map<string, bigint>> {
-    const baseUrls = this.resolveHoldersApiBaseUrls();
+  private async fetchHolderBalancesFromApi(
+    vtAddress: Address,
+    vaultId: string,
+    chain: EvmChainConfig
+  ): Promise<Map<string, bigint>> {
+    const baseUrls = this.resolveHoldersApiBaseUrls(chain);
     const token = vtAddress.toLowerCase();
     const errors: string[] = [];
 
@@ -405,21 +436,12 @@ export class EvmSnapshotService {
     throw new Error(`All holders API bases failed: ${errors.join(' | ')}`);
   }
 
-  private resolveHoldersApiBaseUrls(): string[] {
-    const explicit = this.configService.get<string>('ROBINHOOD_HOLDERS_API_BASE_URL')?.trim();
-    if (explicit) {
-      return [explicit.replace(/\/$/, '')];
+  private resolveHoldersApiBaseUrls(chain: EvmChainConfig): string[] {
+    const explicit = chain.holdersApiBaseUrl?.trim();
+    if (!explicit) {
+      throw new Error(`No holders API configured for ${chain.chainType} (${chain.chainId})`);
     }
-
-    const testnetBase = 'https://explorer.testnet.chain.robinhood.com/api/v2';
-    const mainnetBase = 'https://robinhoodchain.blockscout.com/api/v2';
-    const rpcUrl = this.configService.get<string>('ROBINHOOD_RPC_URL', '').toLowerCase();
-
-    if (rpcUrl.includes('testnet')) {
-      return [testnetBase, mainnetBase];
-    }
-
-    return [mainnetBase, testnetBase];
+    return [explicit.replace(/\/$/, '')];
   }
 
   private async fetchHolderBalancesFromApiBase(
@@ -549,41 +571,12 @@ export class EvmSnapshotService {
     return Math.floor(parsed);
   }
 
-  private hasAlchemyApiKey(): boolean {
-    return !!this.configService.get<string>('ALCHEMY_API_KEY')?.trim();
-  }
-
-  private resolveAlchemyRpcUrl(): string {
-    const apiKey = this.configService.get<string>('ALCHEMY_API_KEY')?.trim();
-    if (!apiKey) {
-      throw new Error('ALCHEMY_API_KEY is not configured');
-    }
-
-    const explicit = this.configService.get<string>('ROBINHOOD_ALCHEMY_RPC_URL')?.trim();
-    if (explicit) {
-      return explicit.replace(/\/$/, '');
-    }
-
-    const network = this.configService.get<string>('ALCHEMY_NETWORK')?.trim().toLowerCase();
-    if (network) {
-      return `https://${network}.g.alchemy.com/v2/${apiKey}`;
-    }
-
-    // Fall back to inferring network from the RPC URL when ALCHEMY_NETWORK is not set.
-    const rpcUrl = this.configService.get<string>('ROBINHOOD_RPC_URL', '').toLowerCase();
-    if (rpcUrl.includes('testnet')) {
-      return `https://robinhood-testnet.g.alchemy.com/v2/${apiKey}`;
-    }
-
-    return `https://robinhood-mainnet.g.alchemy.com/v2/${apiKey}`;
-  }
-
   private async fetchHolderBalancesFromAlchemy(
     vtAddress: Address,
     vaultId: string,
-    baselineSnapshot: Snapshot
+    baselineSnapshot: Snapshot,
+    rpcUrl: string
   ): Promise<Map<string, bigint>> {
-    const rpcUrl = this.resolveAlchemyRpcUrl();
     const baselineMap = this.snapshotAddressBalancesToMap(baselineSnapshot.addressBalances);
     const addresses = [...baselineMap.keys()];
 
@@ -765,7 +758,12 @@ export class EvmSnapshotService {
    * Approximate a block number for a timestamp using binary search.
    * Used to continue replay from the latest saved snapshot time.
    */
-  private async estimateBlockForTimestamp(targetTime: Date, latestBlock: bigint): Promise<bigint> {
+  private async estimateBlockForTimestamp(
+    targetTime: Date,
+    latestBlock: bigint,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any
+  ): Promise<bigint> {
     const targetTs = BigInt(Math.floor(targetTime.getTime() / 1000));
     let low = 0n;
     let high = latestBlock;
@@ -773,7 +771,7 @@ export class EvmSnapshotService {
 
     while (low <= high) {
       const mid = (low + high) / 2n;
-      const block = await this.contractReader.publicClient.getBlock({ blockNumber: mid });
+      const block = await client.getBlock({ blockNumber: mid });
       const ts = BigInt(block.timestamp);
 
       if (ts <= targetTs) {
@@ -792,8 +790,13 @@ export class EvmSnapshotService {
    * Find the earliest block where bytecode exists at token address.
    * This avoids scanning from genesis for first-time snapshots.
    */
-  private async findContractDeploymentBlock(tokenAddress: Address, latestBlock: bigint): Promise<bigint> {
-    const latestCode = await this.contractReader.publicClient.getBytecode({
+  private async findContractDeploymentBlock(
+    tokenAddress: Address,
+    latestBlock: bigint,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any
+  ): Promise<bigint> {
+    const latestCode = await client.getBytecode({
       address: tokenAddress,
       blockNumber: latestBlock,
     });
@@ -808,7 +811,7 @@ export class EvmSnapshotService {
 
     while (low <= high) {
       const mid = (low + high) / 2n;
-      const codeAtMid = await this.contractReader.publicClient.getBytecode({
+      const codeAtMid = await client.getBytecode({
         address: tokenAddress,
         blockNumber: mid,
       });

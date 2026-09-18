@@ -1,8 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createPublicClient, http, type Address, type Hex } from 'viem';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { type Address, type Hex } from 'viem';
 
 import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
+
+import { Vault } from '@/database/vault.entity';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 
 /** Shape returned by Vault.getCycle(cycleId). Mirrors CycleView in Vault.sol. */
 export interface OnchainCycleView {
@@ -48,25 +52,83 @@ export interface OnchainContributionView {
 @Injectable()
 export class EvmContractReader {
   private readonly logger = new Logger(EvmContractReader.name);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly client: any;
-  readonly chainId: number;
+  /** Vault address (lowercase) -> chain id. Vault addresses never move between chains. */
+  private readonly chainIdByVault = new Map<string, number>();
 
-  constructor(private readonly configService: ConfigService) {
-    const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
-    if (!rpcUrl) {
-      throw new Error('EVM_RPC_URL is not configured.');
+  constructor(
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
+    private readonly evmChains: EvmChainsService
+  ) {}
+
+  /** Chain id of the default (first configured) chain — used when there is no vault context. */
+  get chainId(): number {
+    return this.evmChains.defaultChain?.chainId ?? 0;
+  }
+
+  /**
+   * Which chain a vault contract lives on. Looked up from the DB once per address
+   * and cached, so the 70-odd existing call sites keep their signatures while
+   * still reading from the right chain on Arc and Robinhood alike.
+   */
+  async chainIdOf(address: Address): Promise<number> {
+    const key = address.toLowerCase();
+    const cached = this.chainIdByVault.get(key);
+    if (cached) return cached;
+
+    const row = await this.vaultRepository
+      .createQueryBuilder('v')
+      .where('LOWER(v.contract_address) = :addr', { addr: key })
+      .select(['v.id', 'v.chain_id'])
+      .getOne();
+    if (row?.chain_id) {
+      this.chainIdByVault.set(key, row.chain_id);
+      return row.chain_id;
     }
-    this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
-    this.client = createPublicClient({
-      transport: http(rpcUrl),
-    });
+    // Not a vault address: a vault token, adapter or plain ERC-20. Ask each configured
+    // chain which one actually has code there — defaulting made reads return "0x", e.g.
+    // an Arc vault token read against Robinhood during the termination preflight.
+    const chainId = (await this.findChainWithCode(address)) ?? this.chainId;
+    this.chainIdByVault.set(key, chainId);
+    return chainId;
+  }
+
+  private async findChainWithCode(address: Address): Promise<number | undefined> {
+    const found: number[] = [];
+    for (const chain of this.evmChains.all) {
+      try {
+        const code = await this.evmChains.publicClient(chain.chainId).getCode({ address });
+        if (code && code !== '0x') found.push(chain.chainId);
+      } catch (error) {
+        this.logger.debug(`getCode(${address}) failed on ${chain.chainType}: ${(error as Error).message}`);
+      }
+    }
+    if (found.length === 1) return found[0];
+    if (found.length > 1) {
+      this.logger.debug(`${address} has code on chains ${found.join(', ')}; using the default one`);
+    }
+    return undefined;
+  }
+
+  /**
+   * Client for the chain an address lives on.
+   * @param chainIdHint the vault's chain when the caller knows it — authoritative, skips the lookup.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async clientFor(address: Address, chainIdHint?: number): Promise<any> {
+    return this.evmChains.publicClient(chainIdHint ?? (await this.chainIdOf(address)));
+  }
+
+  /** Default-chain client for callers without a vault address (webhooks, receipts). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  get publicClient(): any {
+    return this.evmChains.publicClient(this.chainId);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  get publicClient(): any {
-    return this.client;
+  publicClientFor(chainId: number): any {
+    return this.evmChains.publicClient(chainId);
   }
 
   // ---------------------------------------------------------------------------
@@ -74,7 +136,7 @@ export class EvmContractReader {
   // ---------------------------------------------------------------------------
 
   async getCycle(vault: Address, cycleId: bigint): Promise<OnchainCycleView> {
-    return this.client.readContract({
+    return (await this.clientFor(vault)).readContract({
       address: vault,
       abi: VAULT_ABI,
       functionName: 'getCycle',
@@ -83,7 +145,7 @@ export class EvmContractReader {
   }
 
   async getContribution(vault: Address, id: bigint): Promise<OnchainContributionView> {
-    return this.client.readContract({
+    return (await this.clientFor(vault)).readContract({
       address: vault,
       abi: VAULT_ABI,
       functionName: 'getContribution',
@@ -92,7 +154,7 @@ export class EvmContractReader {
   }
 
   async isClaimed(vault: Address, cycleId: bigint, claimIndex: bigint): Promise<boolean> {
-    return this.client.readContract({
+    return (await this.clientFor(vault)).readContract({
       address: vault,
       abi: VAULT_ABI,
       functionName: 'isClaimed',
@@ -101,7 +163,7 @@ export class EvmContractReader {
   }
 
   async currentCycleId(vault: Address): Promise<bigint> {
-    return this.client.readContract({
+    return (await this.clientFor(vault)).readContract({
       address: vault,
       abi: VAULT_ABI,
       functionName: 'currentCycleId',
@@ -109,7 +171,7 @@ export class EvmContractReader {
   }
 
   async totalContributions(vault: Address): Promise<bigint> {
-    return this.client.readContract({
+    return (await this.clientFor(vault)).readContract({
       address: vault,
       abi: VAULT_ABI,
       functionName: 'totalContributions',
@@ -140,7 +202,7 @@ export class EvmContractReader {
     }
   }
 
-  async getTransactionReceipt(hash: Hex) {
-    return this.client.getTransactionReceipt({ hash });
+  async getTransactionReceipt(hash: Hex, chainId?: number) {
+    return this.evmChains.publicClient(chainId ?? this.chainId).getTransactionReceipt({ hash });
   }
 }

@@ -21,6 +21,7 @@ import { AssetStatus } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ExpectedEventSpec, TransactionStatus } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 export interface VaultLogInput {
   address: string;
@@ -458,6 +459,8 @@ export class EvmVaultEventReconciler {
           .createQueryBuilder()
           .update(Vault)
           .set({
+            vault_status: VaultStatus.locked,
+            locked_at: () => 'COALESCE("locked_at", CURRENT_TIMESTAMP)',
             evm_current_cycle_id: cycleId,
             evm_allocation_root: allocationRoot,
             evm_close_cycle_tx_hash: snapshot.submit_tx_hash ?? log.txHash,
@@ -578,21 +581,29 @@ export class EvmVaultEventReconciler {
    * contribution (see useEvmContributeTransaction.js).
    */
   private async findParentTransactionForContribution(vaultId: string, txHash: string): Promise<Transaction | null> {
-    const direct = await this.transactionsRepository.findOne({
-      where: { tx_hash: txHash, vault_id: vaultId },
-      relations: ['user'],
-    });
+    const normalizedHash = txHash.toLowerCase();
+    const direct = await this.transactionsRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.user', 'user')
+      .where('t.vault_id = :vaultId', { vaultId })
+      .andWhere('LOWER(t.tx_hash) = :txHash', { txHash: normalizedHash })
+      .getOne();
     if (direct) return direct;
 
-    // Fallback: JSONB `@>` containment. Wraps the tx hash in a JSON array so
-    // Postgres will find it inside `metadata.evmChildTxHashes: [...]`.
+    // Fallback: child hashes stored when the user submitted approvals + N
+    // contribute() calls under one Transaction row. Compare case-insensitively
+    // because wallets mix checksummed and lowercase hex.
     return this.transactionsRepository
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.user', 'user')
       .where('t.vault_id = :vaultId', { vaultId })
-      .andWhere(`t.metadata -> 'evmChildTxHashes' @> :hashArray::jsonb`, {
-        hashArray: JSON.stringify([txHash]),
-      })
+      .andWhere(
+        `EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(COALESCE(t.metadata -> 'evmChildTxHashes', '[]'::jsonb)) AS h
+          WHERE LOWER(h) = :txHash
+        )`,
+        { txHash: normalizedHash }
+      )
       .getOne();
   }
 

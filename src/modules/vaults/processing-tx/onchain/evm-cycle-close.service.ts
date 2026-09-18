@@ -16,7 +16,7 @@ import {
   TransactionStatus,
   TransactionType,
 } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 
 /**
  * Broadcast + reconciliation half of Phase B.
@@ -65,7 +65,7 @@ export class EvmCycleCloseService {
   async closeCycleForVault(vaultId: string, cycleId: bigint): Promise<{ txHash: Hex; snapshotId: string }> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {
@@ -352,7 +352,7 @@ export class EvmCycleCloseService {
   async cancelCurrentCycle(vaultId: string, reason: string): Promise<{ txHash: Hex }> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {
@@ -367,7 +367,9 @@ export class EvmCycleCloseService {
     const vaultAddress = vault.contract_address as Address;
 
     // Preflight: on-chain vault status must be Active.
-    const onchainStatus = (await this.contractReader.publicClient.readContract({
+    const onchainStatus = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'status',

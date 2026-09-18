@@ -534,7 +534,7 @@ export class TokensService {
     const seed = await this.marketService.listRobinhoodTokens(MarketTokenKind.memecoin);
     const [enriched, vaultTokens] = await Promise.all([
       this.enrichRobinhoodTokens(seed.filter(t => !!t.contract_address).map(t => this.marketToTokenSeed(t))),
-      this.marketService.listVaultLpTokens(ChainType.robinhood),
+      this.marketService.listVaultLpTokens(ChainType.robinhood), // RH-only market page; Arc has no token market yet
     ]);
     return [...vaultTokens, ...enriched];
   }

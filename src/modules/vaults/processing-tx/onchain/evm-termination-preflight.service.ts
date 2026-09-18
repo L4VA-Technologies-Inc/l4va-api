@@ -105,12 +105,14 @@ export class EvmTerminationPreflightService {
    * indistinguishable from "no pools", which would silently pass a vault whose
    * exposure is unknown, and summing requires every pair, not the best one.
    */
-  async discoverPools(vtAddress: Address): Promise<PoolDiscoveryResult> {
+  async discoverPools(vtAddress: Address, chainIdHint?: number): Promise<PoolDiscoveryResult> {
     const checkedAt = new Date();
 
     let totalSupply: bigint;
     try {
-      totalSupply = (await this.contractReader.publicClient.readContract({
+      totalSupply = (await (
+        await this.contractReader.clientFor(vtAddress, chainIdHint)
+      ).readContract({
         address: vtAddress,
         abi: erc20Abi,
         functionName: 'totalSupply',
@@ -166,7 +168,9 @@ export class EvmTerminationPreflightService {
     let poolHeldVt = 0n;
     for (const pair of pairs) {
       try {
-        const bal = (await this.contractReader.publicClient.readContract({
+        const bal = (await (
+          await this.contractReader.clientFor(vtAddress, chainIdHint)
+        ).readContract({
           address: vtAddress,
           abi: erc20Abi,
           functionName: 'balanceOf',
@@ -205,7 +209,9 @@ export class EvmTerminationPreflightService {
    * `openPosition`/`closePosition` only.
    */
   async summarizeLpPositions(vaultAddress: Address): Promise<LpPositionSummary> {
-    const total = (await this.contractReader.publicClient.readContract({
+    const total = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'totalLiquidityPositions',
@@ -215,7 +221,9 @@ export class EvmTerminationPreflightService {
     let activeCount = 0;
 
     for (let i = 1n; i <= total; i++) {
-      const p = (await this.contractReader.publicClient.readContract({
+      const p = (await (
+        await this.contractReader.clientFor(vaultAddress)
+      ).readContract({
         address: vaultAddress,
         abi: VAULT_ABI,
         functionName: 'getLiquidityPosition',
@@ -247,14 +255,19 @@ export class EvmTerminationPreflightService {
   async check(vaultAddress: Address, strict: boolean): Promise<TerminationPreflightResult> {
     const thresholdBps = BigInt(this.systemSettings.evmTerminationMaxPoolVtBps);
     const blockers: string[] = [];
+    // Everything below reads the vault's own chain: the vault token and any pools
+    // live there too, and they are not in the vaults table to be looked up.
+    const chainId = await this.contractReader.chainIdOf(vaultAddress);
 
-    const vtAddress = (await this.contractReader.publicClient.readContract({
+    const vtAddress = (await (
+      await this.contractReader.clientFor(vaultAddress, chainId)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'vaultToken',
     })) as Address;
 
-    const discovery = await this.discoverPools(vtAddress);
+    const discovery = await this.discoverPools(vtAddress, chainId);
     const lp = await this.summarizeLpPositions(vaultAddress);
 
     switch (discovery.outcome) {

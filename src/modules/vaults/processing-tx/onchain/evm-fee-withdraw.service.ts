@@ -10,7 +10,7 @@ import { VAULT_ABI } from './vault.abi';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 export interface WithdrawFeesResult {
   txHash: Hex;
@@ -45,7 +45,7 @@ export class EvmFeeWithdrawService {
   private async withdrawFees(vaultId: string, asset: Address): Promise<WithdrawFeesResult | null> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {
@@ -59,12 +59,16 @@ export class EvmFeeWithdrawService {
     let accrued: bigint;
     try {
       accrued = isNative
-        ? await this.contractReader.publicClient.readContract({
+        ? await (
+            await this.contractReader.clientFor(vaultAddress)
+          ).readContract({
             address: vaultAddress,
             abi: VAULT_ABI,
             functionName: 'accruedFeeNative',
           })
-        : await this.contractReader.publicClient.readContract({
+        : await (
+            await this.contractReader.clientFor(vaultAddress)
+          ).readContract({
             address: vaultAddress,
             abi: VAULT_ABI,
             functionName: 'accruedFeeErc20',

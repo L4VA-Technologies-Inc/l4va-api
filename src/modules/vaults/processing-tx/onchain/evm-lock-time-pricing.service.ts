@@ -12,7 +12,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Vault } from '@/database/vault.entity';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 // ---------------------------------------------------------------------------
 // Minimal viem ABI slices for the pricing pipeline.
@@ -151,7 +151,7 @@ export class EvmLockTimePricingService {
   async resolvePricesForCycle(vaultId: string, cycleId: bigint): Promise<PricingResult> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new BadRequestException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.chain_id) {
@@ -357,10 +357,12 @@ export class EvmLockTimePricingService {
     throw new BadRequestException(`Unexpected kind ${c.kind} for applyUnitPrice`);
   }
 
-  private async getErc20Decimals(tokenAddress: string, cache: Map<string, number>, _chainId: number): Promise<number> {
+  private async getErc20Decimals(tokenAddress: string, cache: Map<string, number>, chainId: number): Promise<number> {
     const cached = cache.get(tokenAddress);
     if (cached !== undefined) return cached;
-    const decimals = (await this.contractReader.publicClient.readContract({
+    // Token addresses are not vault contracts — never use clientFor(token),
+    // which falls back to Robinhood when no vault row matches.
+    const decimals = (await this.contractReader.publicClientFor(Number(chainId)).readContract({
       address: tokenAddress as Address,
       abi: ERC20_ABI,
       functionName: 'decimals',
@@ -374,9 +376,10 @@ export class EvmLockTimePricingService {
     now: Date
   ): Promise<{ unitPriceWei: bigint; rawAnswer: bigint; feedDecimals: number; updatedAt: bigint }> {
     const feedAddress = feed.chainlink_feed_address as Address;
+    const client = this.contractReader.publicClientFor(Number(feed.chain_id));
 
     // Round data.
-    const roundData = (await this.contractReader.publicClient.readContract({
+    const roundData = (await client.readContract({
       address: feedAddress,
       abi: CHAINLINK_AGGREGATOR_ABI,
       functionName: 'latestRoundData',
@@ -401,7 +404,7 @@ export class EvmLockTimePricingService {
     const feedDecimals =
       feed.feed_decimals ??
       Number(
-        await this.contractReader.publicClient.readContract({
+        await client.readContract({
           address: feedAddress,
           abi: CHAINLINK_AGGREGATOR_ABI,
           functionName: 'decimals',

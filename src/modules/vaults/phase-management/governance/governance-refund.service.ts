@@ -13,7 +13,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { ProposalStatus } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceRefundService {
@@ -83,7 +83,7 @@ export class GovernanceRefundService {
       return { refunded: false };
     }
 
-    const isEvmVault = proposal.vault?.chain_type === ChainType.robinhood;
+    const isEvmVault = isEvmChain(proposal.vault?.chain_type);
     // transaction.amount is read back through parseFloat, which rounds wei above
     // 2^53. The metadata copy is written as an exact decimal string, so it — not
     // the column — is authoritative for EVM refunds.

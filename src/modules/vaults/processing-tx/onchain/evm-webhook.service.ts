@@ -8,6 +8,7 @@ import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
 import { EvmVaultEventReconciler, VaultLogInput, PerTxOutcome } from './evm-vault-event-reconciler.service';
 
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { TransactionStatus } from '@/types/transaction.types';
 
 /**
@@ -19,14 +20,22 @@ import { TransactionStatus } from '@/types/transaction.types';
 @Injectable()
 export class EvmWebhookService {
   private readonly logger = new Logger(EvmWebhookService.name);
-  private readonly signingKey: string;
-
   constructor(
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly configService: ConfigService,
-    private readonly vaultEventReconciler: EvmVaultEventReconciler
-  ) {
-    this.signingKey = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly evmChains: EvmChainsService
+  ) {}
+
+  /**
+   * Each chain has its own Alchemy app, so its webhook signs with its own key
+   * (`ARC_ALCHEMY_WEBHOOK_SIGNING_KEY`, …). The legacy unprefixed key stays
+   * valid so the existing Robinhood webhook keeps working unchanged.
+   */
+  private get signingKeys(): string[] {
+    const keys = this.evmChains.all.map(chain => chain.alchemyWebhookSigningKey);
+    keys.push(this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY'));
+    return [...new Set(keys.filter((key): key is string => !!key))];
   }
 
   /**
@@ -181,17 +190,21 @@ export class EvmWebhookService {
    * signing key and sends the hex digest in the `x-alchemy-signature` header.
    */
   private verifySignature(rawBody: string, signatureHeader: string): void {
-    if (!this.signingKey) {
-      this.logger.warn('ALCHEMY_WEBHOOK_SIGNING_KEY is not configured — skipping signature verification');
+    const keys = this.signingKeys;
+    if (keys.length === 0) {
+      this.logger.warn('No Alchemy webhook signing key configured — skipping signature verification');
       return;
     }
 
-    const digest = createHmac('sha256', this.signingKey).update(rawBody, 'utf8').digest('hex');
-
     const provided = Buffer.from(signatureHeader ?? '', 'utf8');
-    const expected = Buffer.from(digest, 'utf8');
+    // One endpoint serves every chain's webhook, so the body is valid if it matches
+    // any configured key; each key is a per-chain shared secret.
+    const matches = keys.some(key => {
+      const expected = Buffer.from(createHmac('sha256', key).update(rawBody, 'utf8').digest('hex'), 'utf8');
+      return provided.length === expected.length && timingSafeEqual(provided, expected);
+    });
 
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    if (!matches) {
       this.logger.error('Invalid Alchemy webhook signature');
       throw new UnauthorizedException('Invalid webhook signature');
     }

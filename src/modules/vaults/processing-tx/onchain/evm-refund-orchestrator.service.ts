@@ -18,7 +18,7 @@ import { Vault } from '@/database/vault.entity';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultFailureReason, VaultStatus } from '@/types/vault.types';
+import { EVM_CHAIN_TYPES, VaultFailureReason, VaultStatus, isEvmChain } from '@/types/vault.types';
 
 /** Solidity `MAX_BATCH_SIZE = 20` (Vault.sol#L71). */
 const MAX_BATCH_SIZE = 20;
@@ -98,7 +98,7 @@ export class EvmRefundOrchestrator {
     // no confirmed snapshot (i.e. we haven't just locked them).
     const query = this.vaultsRepository
       .createQueryBuilder('vault')
-      .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .where('vault.chain_type IN (:...evmChains)', { evmChains: EVM_CHAIN_TYPES })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.evm_cancel_cycle_tx_hash IS NULL')
       .andWhere('vault.evm_root_committed_at IS NULL')
@@ -138,20 +138,21 @@ export class EvmRefundOrchestrator {
       // judged failed. `end === 0n` is the "unset" sentinel (see Vault
       // `_validateWindow`) and must NOT be treated as "ended" — an open-ended
       // window means contributions are still possible.
-      const contributionEnded = cycleView.assetWindow.end !== 0n && cycleView.assetWindow.end <= nowSec;
+      // Acquire-only vaults encode the asset window as {0,0} (no contribution
+      // phase). Judge those after the acquire window instead.
+      const assetWindowUnset = cycleView.assetWindow.start === 0n && cycleView.assetWindow.end === 0n;
+      const contributionEnded = assetWindowUnset
+        ? Boolean(vault.is_acquire_only)
+        : cycleView.assetWindow.end !== 0n && cycleView.assetWindow.end <= nowSec;
       if (!contributionEnded) continue;
-
-      // If an acquire window has been opened, it must also have ended before we
-      // act on a missed threshold. `end === 0n` here means acquisition never
-      // started, which is itself a failure once the contribution window closed.
-      const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
-      if (!acquireEnded) continue;
 
       // Failure conditions:
       //   (a) Threshold set and not met  → nativeCollected < minAcquireThreshold
-      //   (b) Nobody contributed at all  → totalContributions == 0
-      // Case (b) covers vaults that opened but no one showed up — on Cardano
-      // these transition straight to `failed`.
+      //   (b) Nobody contributed at all  → totalContributions == 0 (not acquire-only)
+      //   (c) Acquire-only with 0 native after the acquire window
+      // Case (b) matches Cardano: empty vaults fail as soon as the contribution
+      // window ends and never enter acquire. Case (a) still waits for the
+      // acquire window, because acquirers can still meet the threshold.
       // NOTE: vaults with contributions but 0 acquisitions and minThreshold=0 are
       // NOT cancelled here — handleEvmContributionToSnapshotReady owns that path
       // (mirrors Cardano: threshold=0 is always met, vault proceeds to locked).
@@ -165,11 +166,21 @@ export class EvmRefundOrchestrator {
         continue;
       }
 
+      const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
       const thresholdMissed =
         cycleView.minAcquireThreshold > 0n && cycleView.nativeCollected < cycleView.minAcquireThreshold;
-      const emptyVault = totalContribs === 0n;
+      const emptyVault = totalContribs === 0n && !vault.is_acquire_only;
+      const acquireOnlyMissed =
+        Boolean(vault.is_acquire_only) &&
+        acquireEnded &&
+        (cycleView.minAcquireThreshold > 0n
+          ? cycleView.nativeCollected < cycleView.minAcquireThreshold
+          : cycleView.nativeCollected === 0n);
 
-      if (!thresholdMissed && !emptyVault) continue;
+      if (!emptyVault && !acquireOnlyMissed) {
+        if (!acquireEnded) continue;
+        if (!thresholdMissed) continue;
+      }
 
       // Guard: don't cancel while a `ready` snapshot is being broadcast — the
       // closeCycle path owns the transition.
@@ -194,6 +205,14 @@ export class EvmRefundOrchestrator {
           failureDetails = {
             message: 'No contributions received before acquire window closed',
             totalContributions: totalContribs.toString(),
+          };
+        } else if (acquireOnlyMissed) {
+          reason = `Acquire-only vault collected no native: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`;
+          failureReason = VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET;
+          failureDetails = {
+            message: 'Acquire-only vault failed: nothing was acquired during the acquire window',
+            required: cycleView.minAcquireThreshold.toString(),
+            actual: cycleView.nativeCollected.toString(),
           };
         } else {
           reason = `Acquire threshold not met: collected=${cycleView.nativeCollected} threshold=${cycleView.minAcquireThreshold}`;
@@ -247,7 +266,7 @@ export class EvmRefundOrchestrator {
       .createQueryBuilder('c')
       .innerJoin(Vault, 'vault', 'vault.id = c.vault_id')
       .where('c.status = :active', { active: EvmContributionRowStatus.active })
-      .andWhere('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.chain_type IN (:...evmChains)', { evmChains: EVM_CHAIN_TYPES })
       .andWhere('vault.contract_address IS NOT NULL')
       .andWhere('vault.evm_cancel_cycle_tx_hash IS NOT NULL')
       .select('c.vault_id', 'vault_id')
@@ -277,7 +296,7 @@ export class EvmRefundOrchestrator {
   async pushOneBatchForVault(vaultId: string, cycleId: bigint): Promise<RefundBatchResult> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {
@@ -662,7 +681,7 @@ export class EvmRefundOrchestrator {
   async finalizeCancelledVaults(): Promise<{ finalized: number }> {
     const candidates = await this.vaultsRepository
       .createQueryBuilder('vault')
-      .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .where('vault.chain_type IN (:...evmChains)', { evmChains: EVM_CHAIN_TYPES })
       .andWhere('vault.evm_cancel_cycle_tx_hash IS NOT NULL')
       .andWhere('vault.vault_status IN (:...statuses)', {
         statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],

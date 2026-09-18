@@ -18,7 +18,7 @@ import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { generateCardanoWallet, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { EVM_CHAIN_TYPES, VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class TreasuryWalletService {
   private readonly logger = new Logger(TreasuryWalletService.name);
@@ -608,7 +608,7 @@ export class TreasuryWalletService {
         // for one, and creating them made EVM vaults look like they had a
         // treasury, which distribution validation then tried to read a
         // Blockfrost balance from.
-        .andWhere('vault.chain_type != :evmChain', { evmChain: ChainType.robinhood })
+        .andWhere('vault.chain_type NOT IN (:...evmChains)', { evmChains: EVM_CHAIN_TYPES })
         .andWhere('wallet.id IS NULL') // No treasury wallet exists
         .select(['vault.id', 'vault.name', 'vault.vault_status'])
         .getMany();

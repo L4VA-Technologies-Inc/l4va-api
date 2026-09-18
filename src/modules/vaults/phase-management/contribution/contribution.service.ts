@@ -22,7 +22,7 @@ import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/
 import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 
 // Threshold for logging warnings about large token quantities (decimal-adjusted)
 // Set to 1 trillion tokens to catch potentially suspicious contributions
@@ -87,6 +87,7 @@ export class ContributionService {
         'vault.vault_status',
         'vault.max_contribute_assets',
         'vault.chain_type',
+        'vault.chain_id',
         'owner.id',
         'assets_whitelist.id',
         'assets_whitelist.policy_id',
@@ -100,7 +101,7 @@ export class ContributionService {
     }
 
     if (
-      vaultData.chain_type === ChainType.robinhood &&
+      isEvmChain(vaultData.chain_type) &&
       !this.systemSettingsService.evmNftAssetsEnabled &&
       normalizedAssets.some(asset => asset.type === AssetType.NFT)
     ) {
@@ -171,7 +172,7 @@ export class ContributionService {
 
     // Handle expansion mode contributions
     if (vaultData.vault_status === VaultStatus.expansion) {
-      return this.handleExpansionContribution(vaultId, contributeReq, userId);
+      return this.handleExpansionContribution(vaultId, contributeReq, userId, vaultData.chain_id);
     }
 
     const contributionAssetCount = sumContributionQuantitiesForLimits(normalizedAssets);
@@ -289,6 +290,7 @@ export class ContributionService {
       userId,
       fee: contributionFee,
       metadata: normalizedAssets,
+      chain_id: isEvmChain(vaultData.chain_type) ? vaultData.chain_id : undefined,
     });
 
     return {
@@ -306,7 +308,8 @@ export class ContributionService {
   private async handleExpansionContribution(
     vaultId: string,
     contributeReq: any,
-    userId: string
+    userId: string,
+    chainId?: number
   ): Promise<{
     success: boolean;
     message: string;
@@ -412,6 +415,7 @@ export class ContributionService {
       userId,
       fee: expansionFee,
       metadata: normalizedAssets,
+      chain_id: chainId,
     });
 
     return {

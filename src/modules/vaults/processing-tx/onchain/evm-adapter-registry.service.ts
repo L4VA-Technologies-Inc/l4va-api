@@ -46,7 +46,9 @@ export class EvmAdapterRegistryService implements OnModuleInit {
       throw new Error('EVM_ADAPTER_REGISTRY_ADDRESS and EVM_FACTORY_ADDRESS are both unset');
     }
     try {
-      this.registryAddress = (await this.contractReader.publicClient.readContract({
+      this.registryAddress = (await (
+        await this.contractReader.clientFor(this.factoryAddress)
+      ).readContract({
         address: this.factoryAddress,
         abi: FACTORY_ABI,
         functionName: 'adapterRegistry',
@@ -58,7 +60,7 @@ export class EvmAdapterRegistryService implements OnModuleInit {
   }
 
   async isApproved(adapter: Address): Promise<boolean> {
-    return this.contractReader.publicClient.readContract({
+    return (await this.contractReader.clientFor(this.registryAddress)).readContract({
       address: this.registryAddress,
       abi: ADAPTER_REGISTRY_ABI,
       functionName: 'approved',

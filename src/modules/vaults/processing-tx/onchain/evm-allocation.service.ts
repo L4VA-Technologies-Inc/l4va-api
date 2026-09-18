@@ -14,7 +14,7 @@ import { EvmContributionValuation } from '@/database/evm-contribution-valuation.
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Vault } from '@/database/vault.entity';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
 
@@ -100,7 +100,7 @@ export class EvmAllocationService {
 
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault (chain_type=${vault.chain_type})`);
     }
     if (!vault.contract_address) {

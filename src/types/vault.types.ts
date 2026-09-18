@@ -17,8 +17,8 @@ export const EVM_CHAIN_TYPES: readonly ChainType[] = [ChainType.robinhood, Chain
 export const isEvmChain = (chainType?: ChainType | string | null): boolean =>
   EVM_CHAIN_TYPES.includes(chainType as ChainType);
 
-/** Chains vaults can be created on. Arc is login-only until its contracts are deployed. */
-export const VAULT_CREATION_CHAIN_TYPES: readonly ChainType[] = [ChainType.cardano, ChainType.robinhood];
+/** Chains vaults can be created on (Arc contracts live since 2026-09-17). */
+export const VAULT_CREATION_CHAIN_TYPES: readonly ChainType[] = [ChainType.cardano, ChainType.robinhood, ChainType.arc];
 
 export enum VaultPrivacy {
   // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE) in SC

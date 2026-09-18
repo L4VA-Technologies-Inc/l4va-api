@@ -2,16 +2,17 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, type Address, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { encodeAbiParameters, keccak256, parseEther, toBytes, type Address, type Hex } from 'viem';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { EvmChainConfig } from '@/modules/evm-chains/evm-chains.config';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 // ---------------------------------------------------------------------------
 // ABI parameter definitions — mirrors V4 VaultTypes.sol exactly.
@@ -99,7 +100,12 @@ export interface EvmCreationPayload {
   adminNonce: string;
   deadline: number;
   adminSignature: Hex;
+  /** Chain the signature is bound to — the client must send the tx there. */
+  chainId: number;
+  factoryAddress: Address;
 }
+
+const VAULT_CREATED_TOPIC = keccak256(toBytes('VaultCreated(bytes32,address,address,address,address)')).toLowerCase();
 
 // ---------------------------------------------------------------------------
 // Service
@@ -109,28 +115,15 @@ export interface EvmCreationPayload {
 export class EvmVaultSignerService {
   private readonly logger = new Logger(EvmVaultSignerService.name);
 
-  private readonly factoryAddress: Address;
-  private readonly adminAddress: Address;
-  private readonly mintingSignerAddress: Address;
-  private readonly treasuryAddress: Address;
-  private readonly chainId: number;
-  private readonly adminPrivateKey: Hex;
-
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly configService: ConfigService,
-    private readonly transactionsService: TransactionsService
-  ) {
-    this.factoryAddress = this.configService.get<string>('EVM_FACTORY_ADDRESS') as Address;
-    this.adminAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS') as Address;
-    this.mintingSignerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS') as Address;
-    this.treasuryAddress = this.configService.get<string>('EVM_TREASURY_ADDRESS') as Address;
-    this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
-    this.adminPrivateKey = this.configService.get<string>('EVM_ADMIN_PRIVATE_KEY') as Hex;
-  }
+    private readonly transactionsService: TransactionsService,
+    private readonly evmChains: EvmChainsService
+  ) {}
 
   // --------------------------------------------------------------------------
   // Public API
@@ -152,12 +145,15 @@ export class EvmVaultSignerService {
     });
     if (!user) throw new BadRequestException('User not found');
 
-    const cfg = this.buildVaultConfig(evmVaultId, user.address as Address, data);
+    // The signature is bound to the vault's chain: the EIP-712 domain carries that
+    // chain's id and factory, so a Robinhood signature is rejected on Arc and vice versa.
+    const chain = this.evmChains.get(data.chainType);
+    const cfg = this.buildVaultConfig(chain, evmVaultId, user.address as Address, data);
 
     const adminNonce = BigInt(Date.now());
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
-    const adminSignature = await this.signCreationAuthorization(cfg, adminNonce, deadline);
+    const adminSignature = await this.signCreationAuthorization(chain, cfg, adminNonce, deadline);
 
     // Create transaction record for vault creation
     const transaction = await this.transactionsService.createTransaction({
@@ -165,6 +161,7 @@ export class EvmVaultSignerService {
       type: TransactionType.createVault,
       userId,
       assets: [],
+      chain_id: chain.chainId,
     });
 
     this.logger.log(
@@ -177,7 +174,42 @@ export class EvmVaultSignerService {
       adminNonce: adminNonce.toString(),
       deadline: Number(deadline),
       adminSignature,
+      chainId: chain.chainId,
+      factoryAddress: chain.factoryAddress as Address,
     };
+  }
+
+  /**
+   * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, ...)
+   * — topics[2] is the new vault contract. Returns null if the receipt isn't readable yet.
+   */
+  private async readVaultAddressFromReceipt(
+    vault: Vault,
+    txHash: Hex,
+    transactionId: string
+  ): Promise<{ contractAddress: string | null; success: boolean } | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const client = this.evmChains.publicClient(this.evmChains.forVault(vault).chainId) as any;
+      const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: 15_000 });
+      const success = receipt.status === 'success';
+
+      await this.transactionsService.updateTransactionStatusById(
+        transactionId,
+        success ? TransactionStatus.confirmed : TransactionStatus.failed
+      );
+
+      if (!success) return { contractAddress: null, success: false };
+
+      const log = (receipt.logs as { topics: Hex[] }[]).find(
+        entry => entry.topics[0]?.toLowerCase() === VAULT_CREATED_TOPIC
+      );
+      if (!log?.topics[2]) return { contractAddress: null, success: true };
+      return { contractAddress: `0x${log.topics[2].slice(-40)}`.toLowerCase(), success: true };
+    } catch (error) {
+      this.logger.warn(`Could not read VaultCreated from ${txHash}: ${(error as Error).message}`);
+      return null;
+    }
   }
 
   async confirmVaultCreation(userId: string, dbVaultId: string, txHash: string, transactionId: string): Promise<void> {
@@ -189,21 +221,48 @@ export class EvmVaultSignerService {
     if (vault.owner.id !== userId) throw new BadRequestException('Not the vault owner');
 
     try {
-      // Update transaction record with the tx hash
       await this.transactionsService.updateTransactionHash(transactionId, txHash);
 
-      // Mark vault as published. The actual vault contract address will be filled
-      // when the VaultCreated event arrives via webhook (see updateVaultFromCreatedEvent).
-      vault.vault_status = VaultStatus.published;
+      const receipt = await this.readVaultAddressFromReceipt(vault, txHash as Hex, transactionId);
+      if (!receipt) {
+        throw new BadRequestException(
+          'Timed out waiting for the vault creation receipt. Retry publish once the transaction is mined.'
+        );
+      }
+      if (!receipt.success) {
+        throw new BadRequestException('Vault creation transaction reverted on-chain. Recreate the vault.');
+      }
+      if (!receipt.contractAddress) {
+        throw new BadRequestException('VaultCreated event not found in the creation receipt.');
+      }
+
+      vault.contract_address = receipt.contractAddress;
       vault.publication_hash = txHash;
       vault.last_update_tx_hash = txHash;
-      // Note: contract_address remains null/factory until webhook updates it
+      vault.vault_status = VaultStatus.published;
+
+      // Arc has no Alchemy webhook, so the published → contribution/acquire
+      // flip that Robinhood gets from handleCreateVaultConfirmation must happen here.
+      const now = new Date();
+      if (vault.is_acquire_only) {
+        if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          vault.vault_status = VaultStatus.acquire;
+          vault.acquire_phase_start = now;
+        }
+      } else if (vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
+        vault.vault_status = VaultStatus.contribution;
+        vault.contribution_phase_start = now;
+      }
+
       await this.vaultsRepository.save(vault);
 
-      this.logger.log(`EVM vault confirmed — dbId=${dbVaultId} txHash=${txHash} txId=${transactionId}`);
+      this.logger.log(
+        `EVM vault confirmed — dbId=${dbVaultId} addr=${receipt.contractAddress} status=${vault.vault_status} txHash=${txHash}`
+      );
     } catch (error) {
-      // Update transaction status to failed on error
-      await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
+      if (!(error instanceof BadRequestException)) {
+        await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
+      }
       this.logger.error(`Failed to confirm vault creation: ${(error as Error).message}`);
       throw error;
     }
@@ -247,17 +306,22 @@ export class EvmVaultSignerService {
   // EIP-712 signing
   // --------------------------------------------------------------------------
 
-  private async signCreationAuthorization(cfg: EvmVaultConfig, adminNonce: bigint, deadline: bigint): Promise<Hex> {
+  private async signCreationAuthorization(
+    chain: EvmChainConfig,
+    cfg: EvmVaultConfig,
+    adminNonce: bigint,
+    deadline: bigint
+  ): Promise<Hex> {
     const configHash = this.computeConfigHash(cfg);
 
-    const account = privateKeyToAccount(this.adminPrivateKey);
+    const account = this.evmChains.adminAccount(chain.chainId);
 
     const signature = await account.signTypedData({
       domain: {
         name: 'L4VA-VaultFactory',
         version: '1',
-        chainId: this.chainId,
-        verifyingContract: this.factoryAddress,
+        chainId: chain.chainId,
+        verifyingContract: chain.factoryAddress as Address,
       },
       types: {
         CreationAuthorization: [
@@ -289,42 +353,71 @@ export class EvmVaultSignerService {
   // VaultConfig builder
   // --------------------------------------------------------------------------
 
-  private buildVaultConfig(evmVaultId: Hex, creatorAddress: Address, data: CreateVaultReq): EvmVaultConfig {
+  private buildVaultConfig(
+    chain: EvmChainConfig,
+    evmVaultId: Hex,
+    creatorAddress: Address,
+    data: CreateVaultReq
+  ): EvmVaultConfig {
     const now = BigInt(Math.floor(Date.now() / 1000));
     const oneDay = BigInt(86400);
+    const isAcquireOnly = Boolean(data.isAcquireOnly);
 
-    // Asset (contribution) window — default 7 days from now if not specified
-    const assetWindowStart = now;
-    const assetWindowEnd = data.contributionDuration
-      ? now + BigInt(Math.floor(Number(data.contributionDuration) / 1000))
-      : now + oneDay * 7n;
+    // Asset (contribution) window — default 7 days from now if not specified.
+    // Acquire-only vaults have no contribution phase. Vault._validateWindow
+    // rejects end <= start unless both are 0 (the closed/unset sentinel).
+    const assetWindowStart = isAcquireOnly ? 0n : now;
+    const assetWindowEnd = isAcquireOnly
+      ? 0n
+      : data.contributionDuration
+        ? now + BigInt(Math.floor(Number(data.contributionDuration) / 1000))
+        : now + oneDay * 7n;
 
     // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
     // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
     const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
-    const acquireWindowStart = skipsAcquirePhase ? 0n : now;
+
+    // The acquire window opens when the phase does — after the contribution window
+    // closes, or at the configured custom time. Starting it at creation made the
+    // on-chain window expire before the phase even opened (the contract then reverts
+    // with OutsideAcquireWindow), which short windows hit every time.
+    const acquireWindowStart = skipsAcquirePhase
+      ? 0n
+      : data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
+        ? BigInt(Math.floor(new Date(data.acquireOpenWindowTime).getTime() / 1000))
+        : isAcquireOnly
+          ? now
+          : assetWindowEnd;
     const acquireWindowEnd = skipsAcquirePhase
       ? 0n
-      : data.acquireWindowDuration
-        ? now + BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000))
-        : now + oneDay * 7n;
+      : acquireWindowStart +
+        (data.acquireWindowDuration ? BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000)) : oneDay * 7n);
+
+    let minAcquireThreshold = 0n;
+    if (data.minAcquireThreshold != null && Number(data.minAcquireThreshold) > 0) {
+      try {
+        minAcquireThreshold = parseEther(String(data.minAcquireThreshold));
+      } catch {
+        throw new BadRequestException('Invalid minAcquireThreshold');
+      }
+    }
 
     return {
       vaultId: evmVaultId,
       archetype: '0xaf85f1959fc2aa8b532f1218046c19fa780e1da2664cec6949ee750524d8ccfd' as Hex, // BatchVaultDeployer.BATCH = keccak256("L4VA.Vault.Batch")
-      vaultDeployer: this.configService.get<string>('EVM_BATCH_DEPLOYER_ADDRESS') as Address,
+      vaultDeployer: chain.batchDeployerAddress as Address,
       creator: creatorAddress,
-      creationApprover: this.adminAddress,
-      authority: this.adminAddress,
-      mintingKey: this.mintingSignerAddress,
-      treasury: this.treasuryAddress,
+      creationApprover: chain.adminAddress as Address,
+      authority: chain.adminAddress as Address,
+      mintingKey: chain.mintingSignerAddress as Address,
+      treasury: chain.treasuryAddress as Address,
       vtName: data.name,
       vtSymbol: (data.vaultTokenTicker || 'VT').toUpperCase(),
       vtDecimals: 18,
       initialCycle: {
         assetWindow: { start: assetWindowStart, end: assetWindowEnd },
         acquireWindow: { start: acquireWindowStart, end: acquireWindowEnd },
-        minAcquireThreshold: 0n,
+        minAcquireThreshold,
         // V3: LP-pair multiplier only. Contribution-time rates are gone —
         // final VT / native allocations are committed off-chain and
         // published on-chain as a Merkle root at `closeCycle`.

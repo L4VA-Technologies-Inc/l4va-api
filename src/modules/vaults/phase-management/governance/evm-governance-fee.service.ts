@@ -7,6 +7,7 @@ import { getAddress, type Address, type Hex } from 'viem';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
 
 import { Transaction } from '@/database/transaction.entity';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 
 /**
@@ -83,6 +84,7 @@ export class EvmGovernanceFeeService {
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly contractReader: EvmContractReader,
+    private readonly evmChains: EvmChainsService,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>
   ) {
@@ -171,7 +173,8 @@ export class EvmGovernanceFeeService {
     }
 
     // The receipt carries from/to but not value, so read the transaction too.
-    const tx = await this.contractReader.publicClient.getTransaction({ hash });
+    const feeChainId = this.feeChainByHash.get(hash.toLowerCase()) ?? this.contractReader.chainId;
+    const tx = await this.contractReader.publicClientFor(feeChainId).getTransaction({ hash });
     if (!tx) {
       throw new FeePaymentNotVisibleError(hash, `Fee transaction ${hash} could not be read`);
     }
@@ -221,6 +224,9 @@ export class EvmGovernanceFeeService {
    * FeePaymentNotVisibleError — never a plain rejection — because a missing
    * receipt does not prove the user failed to pay.
    */
+  /** Chain each fee hash was found on, so the follow-up read hits the same one. */
+  private readonly feeChainByHash = new Map<string, number>();
+
   private async fetchReceiptWithRetry(
     hash: Hex
   ): Promise<NonNullable<Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>>> {
@@ -230,11 +236,18 @@ export class EvmGovernanceFeeService {
       if (attempt > 0) {
         await new Promise(resolve => setTimeout(resolve, EvmGovernanceFeeService.RECEIPT_RETRY_DELAY_MS));
       }
-      try {
-        const receipt = await this.contractReader.getTransactionReceipt(hash);
-        if (receipt) return receipt;
-      } catch (error) {
-        lastError = (error as Error).message;
+      // A fee can be paid on any configured chain, and the hash alone does not say
+      // which — try each rather than assuming the default one.
+      for (const chain of this.evmChains.all) {
+        try {
+          const receipt = await this.contractReader.getTransactionReceipt(hash, chain.chainId);
+          if (receipt) {
+            this.feeChainByHash.set(hash.toLowerCase(), chain.chainId);
+            return receipt;
+          }
+        } catch (error) {
+          lastError = (error as Error).message;
+        }
       }
     }
 

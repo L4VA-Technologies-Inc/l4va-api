@@ -39,6 +39,7 @@ import { WayUpModule } from './modules/wayup/wayup.module';
 
 import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
+import { EvmChainsModule } from '@/modules/evm-chains/evm-chains.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
 import { PresaleModule } from '@/modules/presale/presale.module';
@@ -56,6 +57,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    EvmChainsModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({

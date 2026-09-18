@@ -279,8 +279,16 @@ export class AssetsService {
       queryBuilder.andWhere('asset.type = :type', { type });
     }
 
-    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
-    const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+    // Same as the acquired list: the native asset is USDC on Arc, ETH on Robinhood.
+    const assetsVault = await this.vaultsRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'chain_type', 'chain_id'],
+    });
+    const [adaPrice, nativeUsdPrice] = await Promise.all([
+      this.priceService.getAdaPrice(),
+      this.priceService.getNativeUsdPrice(assetsVault?.chain_type),
+    ]);
+    const ethPriceInAda = adaPrice > 0 ? nativeUsdPrice / adaPrice : 0;
 
     // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
@@ -432,8 +440,9 @@ export class AssetsService {
     minQuantity?: number,
     maxQuantity?: number
   ): Promise<GetAcquiredAssetsRes> {
-    const vault = await this.vaultsRepository.exists({
+    const vault = await this.vaultsRepository.findOne({
       where: { id: vaultId },
+      select: ['id', 'chain_type', 'chain_id'],
     });
 
     if (!vault) {
@@ -493,8 +502,13 @@ export class AssetsService {
       });
     }
 
-    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
-    const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+    // `AssetType.ETH` means "the chain's native token": ETH on Robinhood, USDC on Arc.
+    // Pricing it as ETH everywhere turned 2 acquired USDC into ~$5,000.
+    const [adaPrice, nativeUsdPrice] = await Promise.all([
+      this.priceService.getAdaPrice(),
+      this.priceService.getNativeUsdPrice(vault.chain_type),
+    ]);
+    const ethPriceInAda = adaPrice > 0 ? nativeUsdPrice / adaPrice : 0;
 
     const statsResult = await queryBuilder
       .clone()

@@ -22,7 +22,7 @@ import {
   GetTransactionType,
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 @Injectable()
@@ -67,6 +67,8 @@ export class TransactionsService {
     metadata?: object;
     is_expansion?: boolean;
     expansion_proposal_id?: string;
+    /** EVM chain the transaction lives on; the health cron picks its RPC from it. */
+    chain_id?: number;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
@@ -79,6 +81,7 @@ export class TransactionsService {
       metadata: data.metadata,
       is_expansion: data.is_expansion || false,
       expansion_proposal_id: data.expansion_proposal_id,
+      chain_id: data.chain_id,
     });
   }
 
@@ -112,6 +115,15 @@ export class TransactionsService {
     const assetsToCreate: Partial<Asset>[] = [];
 
     if (transaction.type === TransactionType.acquire) {
+      // Which native token the acquire is denominated in depends on the vault's chain:
+      // ADA on Cardano, ETH on Robinhood, USDC on Arc. `AssetType.ETH` is the stored
+      // marker for "EVM native"; the symbol shown to users comes from the chain.
+      const acquireVault = await this.vaultRepository.findOne({
+        where: { id: transaction.vault_id },
+        select: ['id', 'chain_type'],
+      });
+      const isEvmVault = isEvmChain(acquireVault?.chain_type);
+
       pendingAssets.forEach(assetItem => {
         const rawType = String(assetItem.type ?? assetItem.asset_type ?? '')
           .trim()
@@ -124,15 +136,19 @@ export class TransactionsService {
           .toLowerCase();
         const isNativeEthAddress = policyId === '0x0000000000000000000000000000000000000000';
 
-        // Acquire flow supports only native assets: ADA (Cardano) or ETH (EVM).
-        if (rawType && rawType !== AssetType.ADA && rawType !== AssetType.ETH) {
+        // Acquire is always paid in the chain's native token. Clients may label it
+        // 'native', 'eth' or the chain's symbol ('usdc' on Arc) — all mean the same asset.
+        const NATIVE_ACQUIRE_TYPES = [AssetType.ADA, AssetType.ETH, 'native'];
+        if (rawType && !NATIVE_ACQUIRE_TYPES.includes(rawType as AssetType)) {
           throw new BadRequestException(
-            `Invalid acquire asset type "${rawType}". Acquire supports only "${AssetType.ADA}" or "${AssetType.ETH}".`
+            `Invalid acquire asset type "${rawType}". Acquire only supports the chain's native token.`
           );
         }
 
         const resolvedType: AssetType =
-          rawType === AssetType.ETH || isNativeEthAddress || assetName === 'eth' ? AssetType.ETH : AssetType.ADA;
+          isEvmVault || rawType === AssetType.ETH || isNativeEthAddress || assetName === 'eth'
+            ? AssetType.ETH
+            : AssetType.ADA;
 
         assetsToCreate.push({
           transaction,
@@ -983,7 +999,7 @@ export class TransactionsService {
       // asset window closes immediately rather than waiting for the configured duration.
       const assetMax = expansionProposal.metadata.expansion.assetMax;
       if (
-        vault.chain_type === ChainType.robinhood &&
+        isEvmChain(vault.chain_type) &&
         assetMax &&
         !expansionProposal.metadata.expansion.noMax &&
         currentAssetCount >= assetMax

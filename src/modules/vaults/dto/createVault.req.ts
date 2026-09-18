@@ -110,6 +110,7 @@ export class CreateVaultReq {
   })
   @IsOptional()
   @IsNumber()
+  @Type(() => Number)
   @Expose()
   minAcquireThreshold?: number;
 
@@ -410,6 +411,7 @@ export class CreateVaultReq {
       },
     ],
   })
+  @ValidateIf(o => !o.isAcquireOnly)
   @IsArray()
   @ArrayMinSize(1, { message: 'At least one asset must be whitelisted' })
   @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
