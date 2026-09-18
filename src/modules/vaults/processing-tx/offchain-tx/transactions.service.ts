@@ -138,7 +138,7 @@ export class TransactionsService {
 
         // Acquire is always paid in the chain's native token. Clients may label it
         // 'native', 'eth' or the chain's symbol ('usdc' on Arc) — all mean the same asset.
-        const NATIVE_ACQUIRE_TYPES = [AssetType.ADA, AssetType.ETH, 'native'];
+        const NATIVE_ACQUIRE_TYPES = [AssetType.ADA, AssetType.ETH, 'native', 'usdc'];
         if (rawType && !NATIVE_ACQUIRE_TYPES.includes(rawType as AssetType)) {
           throw new BadRequestException(
             `Invalid acquire asset type "${rawType}". Acquire only supports the chain's native token.`

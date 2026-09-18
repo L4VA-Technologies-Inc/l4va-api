@@ -458,9 +458,9 @@ export class CreateVaultReq {
   @Expose()
   isExpandableAssetWhitelist?: boolean;
 
-  @ApiProperty({ description: 'Chain to deploy vault on', enum: VAULT_CREATION_CHAIN_TYPES, required: false })
+  @ApiProperty({ description: 'Chain to deploy vault on', enum: [...VAULT_CREATION_CHAIN_TYPES], required: false })
   @IsOptional()
-  @IsIn(VAULT_CREATION_CHAIN_TYPES)
+  @IsIn([...VAULT_CREATION_CHAIN_TYPES])
   @Expose()
   chainType?: ChainType;
 }

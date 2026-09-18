@@ -40,8 +40,8 @@ export class VaultAssistantMessageReq {
   @Expose()
   messages: AssistantChatMessage[];
 
-  @ApiProperty({ enum: VAULT_CREATION_CHAIN_TYPES })
-  @IsIn(VAULT_CREATION_CHAIN_TYPES)
+  @ApiProperty({ enum: [...VAULT_CREATION_CHAIN_TYPES] })
+  @IsIn([...VAULT_CREATION_CHAIN_TYPES])
   @Expose()
   chain: ChainType;
 

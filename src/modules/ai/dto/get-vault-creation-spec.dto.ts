@@ -5,8 +5,8 @@ import { IsIn } from 'class-validator';
 import { ChainType, VAULT_CREATION_CHAIN_TYPES } from '@/types/vault.types';
 
 export class GetVaultCreationSpecDto {
-  @ApiProperty({ enum: VAULT_CREATION_CHAIN_TYPES })
-  @IsIn(VAULT_CREATION_CHAIN_TYPES)
+  @ApiProperty({ enum: [...VAULT_CREATION_CHAIN_TYPES] })
+  @IsIn([...VAULT_CREATION_CHAIN_TYPES])
   @Expose()
   chain: ChainType;
 
