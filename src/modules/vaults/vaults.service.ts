@@ -954,12 +954,19 @@ export class VaultsService {
    * @returns Full vault response
    */
   async publishVault(userId: string, signedTx: PublishVaultDto): Promise<VaultFullResponse> {
-    // The vault row is the source of truth for its chain: an older client may omit
-    // chainType, and guessing Cardano there sends an EVM vault down the wrong flow.
-    const chainType =
-      signedTx.chainType ??
-      (await this.vaultsRepository.findOne({ where: { id: signedTx.vaultId }, select: ['id', 'chain_type'] }))
-        ?.chain_type;
+    // The vault row is the source of truth for its chain. A stale or malicious
+    // client hint must not send an Arc vault down the Cardano flow (or vice versa).
+    const stored = await this.vaultsRepository.findOne({
+      where: { id: signedTx.vaultId },
+      select: ['id', 'chain_type'],
+    });
+    if (!stored) throw new BadRequestException('Vault not found');
+    if (signedTx.chainType && signedTx.chainType !== stored.chain_type) {
+      throw new BadRequestException(
+        `chainType "${signedTx.chainType}" does not match vault chain "${stored.chain_type}"`
+      );
+    }
+    const chainType = stored.chain_type;
 
     // ---- EVM path (Robinhood, Arc) ------------------------------------------
     if (isEvmChain(chainType)) {

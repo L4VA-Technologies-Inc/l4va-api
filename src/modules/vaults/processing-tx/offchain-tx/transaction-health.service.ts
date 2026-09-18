@@ -186,7 +186,11 @@ export class TransactionHealthService {
             transaction.tx_hash,
             Number(receipt.transactionIndex),
             TransactionStatus.confirmed,
-            receipt.logs.map(log => ({ topics: (log as any).topics ?? [], data: log.data }))
+            receipt.logs.map(log => ({
+              address: (log as { address?: string }).address,
+              topics: (log as { topics?: string[] }).topics ?? [],
+              data: log.data,
+            }))
           );
 
           // Update block_number if not already set
@@ -468,7 +472,10 @@ export class TransactionHealthService {
 
     let stats: Awaited<ReturnType<EvmVaultEventReconciler['reconcileLogs']>>;
     try {
-      stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+      stats = await this.vaultEventReconciler.reconcileLogs(
+        vaultLogs,
+        transaction.chain_id != null ? Number(transaction.chain_id) : undefined
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await this.recordReconciliationAttempt(transaction, EvmReconciliationStatus.pending, `reconciler threw: ${msg}`);

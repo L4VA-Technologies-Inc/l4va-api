@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, parseEther, toBytes, type Address, type Hex } from 'viem';
+import { decodeEventLog, encodeAbiParameters, keccak256, parseEther, toBytes, type Address, type Hex } from 'viem';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -107,6 +107,20 @@ export interface EvmCreationPayload {
 
 const VAULT_CREATED_TOPIC = keccak256(toBytes('VaultCreated(bytes32,address,address,address,address)')).toLowerCase();
 
+const VAULT_CREATED_EVENT = {
+  type: 'event',
+  name: 'VaultCreated',
+  inputs: [
+    { indexed: true, name: 'vaultId', type: 'bytes32' },
+    { indexed: true, name: 'vault', type: 'address' },
+    { indexed: true, name: 'creator', type: 'address' },
+    { indexed: false, name: 'admin', type: 'address' },
+    { indexed: false, name: 'vaultToken', type: 'address' },
+  ],
+} as const;
+
+type VaultCreatedLog = { address?: string; topics: readonly string[]; data?: string };
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -181,7 +195,8 @@ export class EvmVaultSignerService {
 
   /**
    * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, ...)
-   * — topics[2] is the new vault contract. Returns null if the receipt isn't readable yet.
+   * Only a log from this vault's factory, for this vault id and owner, counts.
+   * Returns null if the receipt isn't readable yet.
    */
   private async readVaultAddressFromReceipt(
     vault: Vault,
@@ -189,8 +204,9 @@ export class EvmVaultSignerService {
     transactionId: string
   ): Promise<{ contractAddress: string | null; success: boolean } | null> {
     try {
+      const chain = this.evmChains.forVault(vault);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const client = this.evmChains.publicClient(this.evmChains.forVault(vault).chainId) as any;
+      const client = this.evmChains.publicClient(chain.chainId) as any;
       const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: 15_000 });
       const success = receipt.status === 'success';
 
@@ -201,15 +217,45 @@ export class EvmVaultSignerService {
 
       if (!success) return { contractAddress: null, success: false };
 
-      const log = (receipt.logs as { topics: Hex[] }[]).find(
-        entry => entry.topics[0]?.toLowerCase() === VAULT_CREATED_TOPIC
-      );
-      if (!log?.topics[2]) return { contractAddress: null, success: true };
-      return { contractAddress: `0x${log.topics[2].slice(-40)}`.toLowerCase(), success: true };
+      const contractAddress = this.contractAddressFromFactoryLog(vault, receipt.logs ?? []);
+      return { contractAddress, success: true };
     } catch (error) {
       this.logger.warn(`Could not read VaultCreated from ${txHash}: ${(error as Error).message}`);
       return null;
     }
+  }
+
+  private decodeVaultCreated(log: VaultCreatedLog): { vaultId: Hex; vault: Address; creator: Address } | null {
+    if (log.topics[0]?.toLowerCase() !== VAULT_CREATED_TOPIC) return null;
+    try {
+      const decoded = decodeEventLog({
+        abi: [VAULT_CREATED_EVENT],
+        data: (log.data || '0x') as Hex,
+        topics: log.topics as [Hex, ...Hex[]],
+      });
+      if (decoded.eventName !== 'VaultCreated') return null;
+      return decoded.args as { vaultId: Hex; vault: Address; creator: Address };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Accept only VaultCreated from this vault's configured factory, matching id + owner. */
+  private contractAddressFromFactoryLog(vault: Vault, logs: VaultCreatedLog[]): string | null {
+    const factory = this.evmChains.forVault(vault).factoryAddress?.toLowerCase();
+    const expectedVaultId = vault.evm_vault_id?.toLowerCase();
+    const expectedCreator = vault.owner?.address?.toLowerCase();
+    if (!factory || !expectedVaultId || !expectedCreator) return null;
+
+    for (const log of logs) {
+      if (log.address?.toLowerCase() !== factory) continue;
+      const args = this.decodeVaultCreated(log);
+      if (!args) continue;
+      if (args.vaultId.toLowerCase() !== expectedVaultId) continue;
+      if (args.creator.toLowerCase() !== expectedCreator) continue;
+      return args.vault.toLowerCase();
+    }
+    return null;
   }
 
   async confirmVaultCreation(userId: string, dbVaultId: string, txHash: string, transactionId: string): Promise<void> {
@@ -270,35 +316,42 @@ export class EvmVaultSignerService {
 
   /**
    * Update vault contract address from VaultCreated event (called by webhook handler).
-   * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
-   * topics[0] = event signature, topics[1] = vaultId, topics[2] = vault address, topics[3] = creator
-   * data = abi.encode(admin, vaultToken)
+   * Only logs emitted by the vault's configured factory, for its evm_vault_id and owner, apply.
    */
-  async updateVaultFromCreatedEvent(txHash: string, topics: string[], _data: string): Promise<void> {
-    if (topics.length < 4) {
-      this.logger.warn(`VaultCreated event has insufficient topics: ${topics.length}`);
+  async updateVaultFromCreatedEvent(
+    txHash: string,
+    log: { address?: string; topics: string[]; data: string }
+  ): Promise<void> {
+    const args = this.decodeVaultCreated(log);
+    if (!args) {
+      this.logger.warn(`VaultCreated log in ${txHash} could not be decoded`);
       return;
     }
 
-    const evmVaultId = topics[1]; // indexed bytes32
-    const vaultAddress = '0x' + topics[2].slice(-40); // indexed address (last 20 bytes)
-
     const vault = await this.vaultsRepository.findOne({
-      where: { evm_vault_id: evmVaultId },
+      where: { evm_vault_id: args.vaultId },
+      relations: ['owner'],
     });
 
     if (!vault) {
-      this.logger.debug(`VaultCreated event for unknown evmVaultId=${evmVaultId} (might be external vault)`);
+      this.logger.debug(`VaultCreated event for unknown evmVaultId=${args.vaultId} (might be external vault)`);
       return;
     }
 
-    // Update the vault contract address
-    vault.contract_address = vaultAddress.toLowerCase();
+    const contractAddress = this.contractAddressFromFactoryLog(vault, [log]);
+    if (!contractAddress) {
+      this.logger.warn(
+        `Ignoring VaultCreated in ${txHash} for vault ${vault.id}: emitter ${log.address} failed factory/id/owner checks`
+      );
+      return;
+    }
+
+    vault.contract_address = contractAddress;
     await this.vaultsRepository.save(vault);
 
     this.logger.log(
       `Vault contract address updated from VaultCreated event — ` +
-        `dbId=${vault.id} evmVaultId=${evmVaultId} vaultAddr=${vaultAddress} txHash=${txHash}`
+        `dbId=${vault.id} evmVaultId=${args.vaultId} vaultAddr=${contractAddress} txHash=${txHash}`
     );
   }
 

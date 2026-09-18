@@ -167,7 +167,7 @@ export class EvmVaultContributionService {
     }
 
     const isPaused = (await (
-      await this.contractReader.clientFor(vault.contract_address as Address)
+      await this.contractReader.clientFor(vault.contract_address as Address, vault.chain_id ?? undefined)
     ).readContract({
       address: vault.contract_address as Address,
       abi: VAULT_ABI,
@@ -323,7 +323,8 @@ export class EvmVaultContributionService {
     const status = receipt.status === 'success' ? 1 : receipt.status === 'reverted' ? 0 : null;
     if (status === null) return;
 
-    const logs: { topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
+    const logs: { address?: string; topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
+      address: String(l.address ?? ''),
       topics: (l.topics ?? []) as string[],
       data: String(l.data ?? '0x'),
     }));
@@ -349,7 +350,10 @@ export class EvmVaultContributionService {
         logIndex: typeof l.logIndex === 'number' ? l.logIndex : null,
       }));
       try {
-        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        const stats = await this.vaultEventReconciler.reconcileLogs(
+          vaultLogs,
+          vault.chain_id != null ? Number(vault.chain_id) : undefined
+        );
         this.logger.debug(
           `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
         );

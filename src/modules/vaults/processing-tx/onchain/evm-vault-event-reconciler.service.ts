@@ -81,7 +81,7 @@ export class EvmVaultEventReconciler {
   ) {}
 
   /** Process a batch of vault-emitted logs. Unknown events are ignored. */
-  async reconcileLogs(logs: VaultLogInput[]): Promise<ReconcileStats> {
+  async reconcileLogs(logs: VaultLogInput[], chainId?: number): Promise<ReconcileStats> {
     let processed = 0;
     let skipped = 0;
     let errors = 0;
@@ -103,20 +103,30 @@ export class EvmVaultEventReconciler {
       outcome(hash).errors.push(msg);
     };
 
-    // Pre-resolve vault records by contract address in one query.
+    // Pre-resolve vault records by contract address in one query. Address is
+    // only unique per chain — an Arc webhook must not hit the Robinhood vault
+    // at the same address.
     const distinctAddresses = Array.from(new Set(logs.map(l => l.address.toLowerCase())));
-    const vaults = distinctAddresses.length
-      ? await this.vaultsRepository
-          .createQueryBuilder('v')
-          .where('LOWER(v.contract_address) IN (:...addrs)', { addrs: distinctAddresses })
-          .getMany()
-      : [];
-    const vaultByAddress = new Map<string, Vault>();
-    for (const v of vaults) if (v.contract_address) vaultByAddress.set(v.contract_address.toLowerCase(), v);
+    const vaultQuery = this.vaultsRepository
+      .createQueryBuilder('v')
+      .where('LOWER(v.contract_address) IN (:...addrs)', { addrs: distinctAddresses });
+    if (chainId != null) {
+      vaultQuery.andWhere('v.chain_id = :chainId', { chainId });
+    }
+    const vaults = distinctAddresses.length ? await vaultQuery.getMany() : [];
+    const vaultsByAddress = new Map<string, Vault[]>();
+    for (const v of vaults) {
+      if (!v.contract_address) continue;
+      const key = v.contract_address.toLowerCase();
+      const group = vaultsByAddress.get(key) ?? [];
+      group.push(v);
+      vaultsByAddress.set(key, group);
+    }
 
     for (const log of logs) {
       try {
-        const vault = vaultByAddress.get(log.address.toLowerCase());
+        const matches = vaultsByAddress.get(log.address.toLowerCase()) ?? [];
+        const vault = matches.length === 1 ? matches[0] : undefined;
         if (!vault) {
           skipped++;
           continue;

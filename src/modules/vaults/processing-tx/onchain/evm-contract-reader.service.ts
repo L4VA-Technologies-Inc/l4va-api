@@ -67,31 +67,46 @@ export class EvmContractReader {
   }
 
   /**
-   * Which chain a vault contract lives on. Looked up from the DB once per address
-   * and cached, so the 70-odd existing call sites keep their signatures while
-   * still reading from the right chain on Arc and Robinhood alike.
+   * Which chain a vault contract lives on. Prefer an explicit chain_id from the
+   * caller — addresses are only unique within a chain, so an address-only
+   * lookup must not pick among Robinhood vs Arc collisions.
    */
-  async chainIdOf(address: Address): Promise<number> {
+  async chainIdOf(address: Address, chainIdHint?: number): Promise<number> {
+    if (chainIdHint) return chainIdHint;
+
     const key = address.toLowerCase();
     const cached = this.chainIdByVault.get(key);
     if (cached) return cached;
 
-    const row = await this.vaultRepository
+    const rows = await this.vaultRepository
       .createQueryBuilder('v')
       .where('LOWER(v.contract_address) = :addr', { addr: key })
       .select(['v.id', 'v.chain_id'])
-      .getOne();
-    if (row?.chain_id) {
-      this.chainIdByVault.set(key, row.chain_id);
-      return row.chain_id;
+      .getMany();
+    const chainIds = [
+      ...new Set(
+        rows
+          .map(row => (row.chain_id != null ? Number(row.chain_id) : undefined))
+          .filter((id): id is number => Number.isFinite(id))
+      ),
+    ];
+    if (chainIds.length > 1) {
+      throw new Error(`Contract ${key} is registered on multiple chains (${chainIds.join(', ')}); pass chain_id`);
+    }
+    if (chainIds.length === 1) {
+      this.chainIdByVault.set(key, chainIds[0]);
+      return chainIds[0];
     }
 
     // Not a vault address: a vault token, adapter or plain ERC-20. Ask each configured
     // chain which one actually has code there — defaulting made reads return "0x", e.g.
     // an Arc vault token read against Robinhood during the termination preflight.
-    const chainId = (await this.findChainWithCode(address)) ?? this.chainId;
-    this.chainIdByVault.set(key, chainId);
-    return chainId;
+    const unique = await this.findChainWithCode(address);
+    if (unique) {
+      this.chainIdByVault.set(key, unique);
+      return unique;
+    }
+    return this.chainId;
   }
 
   private async findChainWithCode(address: Address): Promise<number | undefined> {
@@ -106,7 +121,7 @@ export class EvmContractReader {
     }
     if (found.length === 1) return found[0];
     if (found.length > 1) {
-      this.logger.debug(`${address} has code on chains ${found.join(', ')}; using the default one`);
+      throw new Error(`${address} has code on chains ${found.join(', ')}; pass chain_id rather than guessing`);
     }
     return undefined;
   }
@@ -117,7 +132,7 @@ export class EvmContractReader {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async clientFor(address: Address, chainIdHint?: number): Promise<any> {
-    return this.evmChains.publicClient(chainIdHint ?? (await this.chainIdOf(address)));
+    return this.evmChains.publicClient(await this.chainIdOf(address, chainIdHint));
   }
 
   /** Default-chain client for callers without a vault address (webhooks, receipts). */

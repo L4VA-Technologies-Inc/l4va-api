@@ -134,12 +134,13 @@ export class EvmContributionBackfillService {
     // 3. Prefer receipts for txs we already stored. Alchemy Free on Arc rejects
     //    eth_getLogs over >10 blocks, but eth_getTransactionReceipt is unbounded.
     const receiptLogs = await this.fetchLogsFromKnownTransactions(vault.id, address);
-    let reconciled = await this.reconcileMissingLogs(vault.id, receiptLogs);
+    const vaultChainId = vault.chain_id != null ? Number(vault.chain_id) : undefined;
+    let reconciled = await this.reconcileMissingLogs(vault.id, receiptLogs, vaultChainId);
 
     let inDbAfter = await this.contribsRepository.count({ where: { vault_id: vault.id } });
     if (BigInt(inDbAfter) < onChain) {
       const scanLogs = await this.fetchContributionLogs(address);
-      const scanStats = await this.reconcileMissingLogs(vault.id, scanLogs);
+      const scanStats = await this.reconcileMissingLogs(vault.id, scanLogs, vaultChainId);
       reconciled = {
         processed: reconciled.processed + scanStats.processed,
         skipped: reconciled.skipped + scanStats.skipped,
@@ -165,7 +166,8 @@ export class EvmContributionBackfillService {
 
   private async reconcileMissingLogs(
     vaultId: string,
-    logs: VaultLogInput[]
+    logs: VaultLogInput[],
+    chainId?: number
   ): Promise<{ processed: number; skipped: number; errors: number }> {
     if (logs.length === 0) return { processed: 0, skipped: 0, errors: 0 };
 
@@ -180,7 +182,7 @@ export class EvmContributionBackfillService {
     const missing = logs.filter(l => !existingIds.has(this.decodeContributionIdFromTopic(l.topics[1])));
     if (missing.length === 0) return { processed: 0, skipped: 0, errors: 0 };
 
-    return this.reconciler.reconcileLogs(missing);
+    return this.reconciler.reconcileLogs(missing, chainId);
   }
 
   /**
