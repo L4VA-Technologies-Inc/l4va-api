@@ -350,10 +350,7 @@ export class EvmVaultContributionService {
         logIndex: typeof l.logIndex === 'number' ? l.logIndex : null,
       }));
       try {
-        const stats = await this.vaultEventReconciler.reconcileLogs(
-          vaultLogs,
-          vault.chain_id != null ? Number(vault.chain_id) : undefined
-        );
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs, chainId);
         this.logger.debug(
           `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
         );

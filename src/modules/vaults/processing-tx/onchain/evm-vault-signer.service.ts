@@ -232,9 +232,9 @@ export class EvmVaultSignerService {
         abi: [VAULT_CREATED_EVENT],
         data: (log.data || '0x') as Hex,
         topics: log.topics as [Hex, ...Hex[]],
-      });
+      }) as { eventName: string; args: { vaultId: Hex; vault: Address; creator: Address } };
       if (decoded.eventName !== 'VaultCreated') return null;
-      return decoded.args as { vaultId: Hex; vault: Address; creator: Address };
+      return decoded.args;
     } catch {
       return null;
     }
