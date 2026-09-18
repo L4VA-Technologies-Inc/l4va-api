@@ -60,6 +60,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
@@ -77,6 +78,7 @@ import {
   VaultFailureReason,
   SmartContractVaultStatus,
   ChainType,
+  isEvmChain,
 } from '@/types/vault.types';
 
 /**
@@ -140,17 +142,19 @@ function normalizeMinAcquireThresholdForDb(
     throw new BadRequestException('minAcquireThreshold must be a non-negative number');
   }
 
-  if (chainType === ChainType.robinhood) {
+  // Every EVM chain stores the threshold in 18-decimal native units (ETH on
+  // Robinhood, USDC on Arc).
+  if (isEvmChain(chainType)) {
     if (value < 0.01) {
-      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold must be at least 0.01 ETH');
+      throw new BadRequestException('For EVM vaults, minAcquireThreshold must be at least 0.01');
     }
     if (value > 10000) {
-      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold cannot exceed 10000 ETH');
+      throw new BadRequestException('For EVM vaults, minAcquireThreshold cannot exceed 10000');
     }
     try {
       return parseEther(String(value)).toString();
     } catch {
-      throw new BadRequestException('Invalid minAcquireThreshold for Robinhood chain');
+      throw new BadRequestException(`Invalid minAcquireThreshold for ${chainType}`);
     }
   }
 
@@ -218,7 +222,8 @@ export class VaultsService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly claimsService: ClaimsService,
-    private readonly evmVaultSignerService: EvmVaultSignerService
+    private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly evmChains: EvmChainsService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -356,6 +361,9 @@ export class VaultsService {
     adminNonce?: string;
     deadline?: number;
     evmVaultConfig?: Record<string, unknown>;
+    /** EVM only: chain the admin signature is bound to and the factory to call. */
+    chainId?: number;
+    factoryAddress?: string;
   }> {
     let newVault: Vault | null = null;
     try {
@@ -440,7 +448,7 @@ export class VaultsService {
       const collectionNameByPolicyId = new Map<string, string>();
       let lpTokenMap = new Map<string, { onchainId: string | null; isLp: boolean }>();
 
-      if (data.chainType !== ChainType.robinhood && uniquePolicyIds.length > 0) {
+      if (!isEvmChain(data.chainType) && uniquePolicyIds.length > 0) {
         const uniqueWhitelistItems = Array.from(
           new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
         );
@@ -486,7 +494,7 @@ export class VaultsService {
             );
           }
         }
-      } else if (data.chainType === ChainType.robinhood && uniquePolicyIds.length > 0) {
+      } else if (isEvmChain(data.chainType) && !data.isAcquireOnly && uniquePolicyIds.length > 0) {
         await this.assertNoNftWhitelistEntriesForEvm(uniquePolicyIds.map(item => item.policyId).filter(Boolean));
       }
 
@@ -512,7 +520,7 @@ export class VaultsService {
       // ========================================================================
       let acquirerWhitelistFile = null;
       let contributorWhitelistFile = null;
-      if (data.chainType !== ChainType.robinhood) {
+      if (!isEvmChain(data.chainType)) {
         const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
         if (acquirerWhitelistCsvKey) {
           acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
@@ -542,12 +550,12 @@ export class VaultsService {
       const acquireOpenWindowTimeForDb = skipsAcquirePhase ? null : acquireOpenWindowTime;
       const contributionOpenWindowTimeForDb = data.isAcquireOnly ? null : contributionOpenWindowTime;
 
-      if (data.chainType === ChainType.robinhood) {
+      if (isEvmChain(data.chainType)) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
         evmVaultId = keccak256(
           encodePacked(['address', 'uint256'], [owner.address as `0x${string}`, BigInt(Date.now())])
         );
-        const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
+        const { chainId } = this.evmChains.get(data.chainType);
         const vaultData = transformToSnakeCase({
           ...data,
           // EVM VT follows the standard 18-decimal precision.
@@ -560,7 +568,7 @@ export class VaultsService {
           contributionOpenWindowTime: contributionOpenWindowTimeForDb,
           timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
           vaultStatus: VaultStatus.draft,
-          chainType: ChainType.robinhood,
+          chainType: data.chainType,
           chainId,
           evmVaultId,
           vaultImage: vaultImg,
@@ -708,7 +716,7 @@ export class VaultsService {
       // ========================================================================
       // CHAIN-SPECIFIC: On-chain transaction creation
       // ========================================================================
-      if (data.chainType === ChainType.robinhood) {
+      if (isEvmChain(data.chainType)) {
         const payload = await this.evmVaultSignerService.prepareVaultCreationWithExistingVault(
           userId,
           newVault.id,
@@ -722,6 +730,8 @@ export class VaultsService {
           adminNonce: payload.adminNonce,
           deadline: payload.deadline,
           evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
+          chainId: payload.chainId,
+          factoryAddress: payload.factoryAddress,
         };
       }
 
@@ -944,8 +954,22 @@ export class VaultsService {
    * @returns Full vault response
    */
   async publishVault(userId: string, signedTx: PublishVaultDto): Promise<VaultFullResponse> {
-    // ---- EVM (Robinhood) path -----------------------------------------------
-    if (signedTx.chainType === ChainType.robinhood) {
+    // The vault row is the source of truth for its chain. A stale or malicious
+    // client hint must not send an Arc vault down the Cardano flow (or vice versa).
+    const stored = await this.vaultsRepository.findOne({
+      where: { id: signedTx.vaultId },
+      select: ['id', 'chain_type'],
+    });
+    if (!stored) throw new BadRequestException('Vault not found');
+    if (signedTx.chainType && signedTx.chainType !== stored.chain_type) {
+      throw new BadRequestException(
+        `chainType "${signedTx.chainType}" does not match vault chain "${stored.chain_type}"`
+      );
+    }
+    const chainType = stored.chain_type;
+
+    // ---- EVM path (Robinhood, Arc) ------------------------------------------
+    if (isEvmChain(chainType)) {
       if (!signedTx.txHash) throw new BadRequestException('txHash is required for EVM vault publishing');
       if (!signedTx.txId)
         throw new BadRequestException('txId (transaction record ID) is required for EVM vault publishing');
@@ -1355,7 +1379,7 @@ export class VaultsService {
     let requireReservedCostAda: number;
     let requireReservedCostUsd: number;
     let requireReservedCostEth: number;
-    const isRobinhoodVault = vault.chain_type === ChainType.robinhood;
+    const isEvmVault = isEvmChain(vault.chain_type);
 
     if (vault.is_acquire_only) {
       // Acquire-only vault threshold is stored in chain-native units:
@@ -1366,7 +1390,7 @@ export class VaultsService {
       // only used for API display and Cardano lifecycle. Parse as bigint first
       // so we never silently truncate an oversized value.
       const rawThresholdBigInt = safeBigIntFromDb(vault.min_acquire_threshold);
-      if (isRobinhoodVault) {
+      if (isEvmVault) {
         requireReservedCostEth = Number(formatEther(rawThresholdBigInt));
         requireReservedCostUsd = requireReservedCostEth * ethPrice;
         requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
@@ -1378,7 +1402,7 @@ export class VaultsService {
       }
     } else {
       // Normal vault: derive reserve threshold in each currency.
-      if (isRobinhoodVault) {
+      if (isEvmVault) {
         requireReservedCostEth =
           assetsPrices.totalValueEth * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
         requireReservedCostUsd = requireReservedCostEth * ethPrice;
@@ -1418,7 +1442,7 @@ export class VaultsService {
       requireReservedCostEth,
       minAcquireThreshold:
         vault.min_acquire_threshold != null
-          ? isRobinhoodVault
+          ? isEvmVault
             ? Number(formatEther(safeBigIntFromDb(vault.min_acquire_threshold)))
             : bigIntToSafeNumber(safeBigIntFromDb(vault.min_acquire_threshold))
           : null,
@@ -1759,14 +1783,14 @@ export class VaultsService {
                   { userId }
                 )
                 .orWhere(
-                  `EXISTS (
+                  `(vault.chain_type = :userChainType AND EXISTS (
               SELECT 1 FROM snapshot
               WHERE snapshot.vault_id = vault.id 
               AND snapshot.address_balances -> :userAddress IS NOT NULL
               ORDER BY snapshot.created_at DESC
               LIMIT 1
-            )`,
-                  { userAddress: user.address }
+            ))`,
+                  { userAddress: user.address, userChainType: user.chain_type }
                 );
             })
           );

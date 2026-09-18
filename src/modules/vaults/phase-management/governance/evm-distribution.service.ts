@@ -12,7 +12,7 @@ import { EvmSnapshotService } from './evm-snapshot.service';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 /** Matches `MIN_DISTRIBUTION_CLAIM_WINDOW` in Vault.sol. */
 export const MIN_CLAIM_WINDOW_SECONDS = 90 * 24 * 60 * 60;
@@ -238,7 +238,9 @@ export class EvmDistributionService {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
-    const alreadyClaimed = (await this.contractReader.publicClient.readContract({
+    const alreadyClaimed = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'isDistributionClaimed',
@@ -263,7 +265,9 @@ export class EvmDistributionService {
   /** What `holder` can claim right now, straight from the contract. */
   async claimableFor(vaultId: string, distributionId: string, holder: Address): Promise<string> {
     const vault = await this.requireEvmVault(vaultId);
-    const amount = (await this.contractReader.publicClient.readContract({
+    const amount = (await (
+      await this.contractReader.clientFor(vault.contract_address as Address)
+    ).readContract({
       address: vault.contract_address as Address,
       abi: VAULT_ABI,
       functionName: 'distributionClaimable',
@@ -283,7 +287,7 @@ export class EvmDistributionService {
       : 0n;
 
     return {
-      chain: ChainType.robinhood,
+      chain: vault.chain_type,
       // No treasury wallet on EVM — funds sit in the vault contract itself.
       vaultAddress,
       asset,
@@ -337,13 +341,17 @@ export class EvmDistributionService {
 
   private async availableForDistribution(vaultAddress: Address, asset: Address): Promise<bigint> {
     if (asset === zeroAddress) {
-      return (await this.contractReader.publicClient.readContract({
+      return (await (
+        await this.contractReader.clientFor(vaultAddress)
+      ).readContract({
         address: vaultAddress,
         abi: VAULT_ABI,
         functionName: 'availableNativeForOperations',
       })) as bigint;
     }
-    return (await this.contractReader.publicClient.readContract({
+    return (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'availableErc20ForOperations',
@@ -352,13 +360,17 @@ export class EvmDistributionService {
   }
 
   private async circulatingSupplyAt(vaultAddress: Address, timepoint: bigint): Promise<bigint> {
-    const vtAddress = (await this.contractReader.publicClient.readContract({
+    const vtAddress = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'vaultToken',
     })) as Address;
 
-    return (await this.contractReader.publicClient.readContract({
+    return (await (
+      await this.contractReader.clientFor(vtAddress)
+    ).readContract({
       address: vtAddress,
       abi: [
         {
@@ -375,7 +387,9 @@ export class EvmDistributionService {
   }
 
   private async readDistributionIdForKey(vaultAddress: Address, executionKey: Hex): Promise<bigint> {
-    return (await this.contractReader.publicClient.readContract({
+    return (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'distributionIdForExecutionKey',
@@ -384,7 +398,9 @@ export class EvmDistributionService {
   }
 
   private async readDistribution(vaultAddress: Address, distributionId: bigint) {
-    return (await this.contractReader.publicClient.readContract({
+    return (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'getDistribution',
@@ -409,7 +425,7 @@ export class EvmDistributionService {
   private async requireEvmVault(vaultId: string): Promise<Vault> {
     const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {

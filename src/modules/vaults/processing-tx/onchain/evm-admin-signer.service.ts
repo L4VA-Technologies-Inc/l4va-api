@@ -1,9 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
-  createWalletClient,
   decodeEventLog,
-  http,
   type Abi,
   type Account,
   type Address,
@@ -11,12 +9,15 @@ import {
   type Log,
   type TransactionReceipt,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 
 import { EvmContractReader } from './evm-contract-reader.service';
 
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
+
 export interface AdminTxOptions<TAbi extends Abi, TFunctionName extends string> {
   address: Address;
+  /** Chain to send on. Defaults to the chain the vault at `address` lives on. */
+  chainId?: number;
   abi: TAbi;
   functionName: TFunctionName;
   args: unknown[];
@@ -71,43 +72,68 @@ export interface AdminTxResult {
 export class EvmAdminSigner {
   private readonly logger = new Logger(EvmAdminSigner.name);
 
-  private readonly account: Account;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly walletClient: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly publicClient: any;
   readonly address: Address;
   readonly chainId: number;
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly contractReader: EvmContractReader
+    private readonly contractReader: EvmContractReader,
+    private readonly evmChains: EvmChainsService
   ) {
-    const privateKey = this.configService.get<string>('EVM_ADMIN_PRIVATE_KEY');
-    if (!privateKey) {
-      throw new Error(
-        'EVM_ADMIN_PRIVATE_KEY is not configured. Required for closeCycle / cancelCurrentCycle / claim / refund flows.'
-      );
+    const defaultChain = this.evmChains.defaultChain;
+    if (!defaultChain) {
+      throw new Error('No EVM chain configured (set EVM_RPC_URL for Robinhood and/or ARC_RPC_URL for Arc).');
     }
-    const explicitAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS');
-    const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
-    if (!rpcUrl) throw new Error('EVM_RPC_URL is not configured.');
+    this.chainId = defaultChain.chainId;
+    this.address = (defaultChain.adminAddress as Address) ?? this.evmChains.adminAccount(this.chainId).address;
 
-    this.account = privateKeyToAccount(privateKey as Hex);
-    this.address = (explicitAddress as Address) ?? this.account.address;
-
-    if (explicitAddress && explicitAddress.toLowerCase() !== this.account.address.toLowerCase()) {
-      throw new Error(
-        `EVM_ADMIN_ADDRESS (${explicitAddress}) does not match derived address (${this.account.address}) for the configured private key.`
-      );
+    for (const chain of this.evmChains.all) {
+      if (!chain.adminPrivateKey) continue;
+      const derived = this.evmChains.adminAccount(chain.chainId).address;
+      if (chain.adminAddress && chain.adminAddress.toLowerCase() !== derived.toLowerCase()) {
+        throw new Error(
+          `${chain.chainType.toUpperCase()}_ADMIN_ADDRESS (${chain.adminAddress}) does not match the address derived from its private key (${derived}).`
+        );
+      }
     }
+  }
 
-    this.chainId = this.contractReader.chainId;
-    this.publicClient = this.contractReader.publicClient;
-    this.walletClient = createWalletClient({
-      account: this.account,
-      transport: http(rpcUrl),
-    });
+  /** Per-chain admin account; each chain may run its own key. */
+  private account(chainId: number): Account {
+    return this.evmChains.adminAccount(chainId);
+  }
+
+  /** Chain for a transaction: explicit id, else the chain the target vault lives on. */
+  private async resolveChainId(opts: { chainId?: number; address: Address }): Promise<number> {
+    return opts.chainId ?? (await this.contractReader.chainIdOf(opts.address));
+  }
+
+  /**
+   * Gas limit for a write. Arc rejects transactions asking for more than 2^24 gas,
+   * so the padded estimate has to be clamped before broadcasting.
+   */
+  private async gasLimitFor(
+    chainId: number,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    params: any
+  ): Promise<bigint | undefined> {
+    const chain = this.evmChains.find(chainId);
+    if (!chain?.maxTxGas) return undefined;
+
+    try {
+      const estimate = (await this.evmChains.publicClient(chainId).estimateContractGas(params)) as bigint;
+      const padded = (estimate * 130n) / 100n;
+      const clamped = this.evmChains.clampGas(chainId, padded);
+      if (clamped < padded) {
+        this.logger.warn(
+          `Gas estimate ${padded} clamped to ${clamped} — ${chain.chainType} caps tx gas at ${chain.maxTxGas}.`
+        );
+      }
+      return clamped;
+    } catch (err) {
+      this.logger.debug(`estimateContractGas failed, letting the node price it: ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   /**
@@ -126,11 +152,19 @@ export class EvmAdminSigner {
     onBroadcast?: (hash: Hex) => Promise<void>
   ): Promise<AdminTxResult> {
     const { address, abi, functionName, args, value, timeoutMs = 120_000 } = opts;
+    const chainId = await this.resolveChainId(opts);
+    const account = this.account(chainId);
+    // viem's generic client types don't line up with these runtime-supplied ABIs;
+    // this service has always driven them untyped.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const publicClient = this.evmChains.publicClient(chainId) as any;
+    const walletClient = this.evmChains.walletClient(chainId) as any;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
 
     // 1. Simulate — catches revert before we pay gas.
     try {
-      await this.publicClient.simulateContract({
-        account: this.account,
+      await publicClient.simulateContract({
+        account,
         address,
         abi,
         functionName,
@@ -144,14 +178,16 @@ export class EvmAdminSigner {
     }
 
     // 2. Broadcast.
-    const hash = (await this.walletClient.writeContract({
-      account: this.account,
+    const gas = await this.gasLimitFor(chainId, { account, address, abi, functionName, args, value });
+    const hash = (await walletClient.writeContract({
+      account,
       chain: null,
       address,
       abi,
       functionName,
       args,
       value,
+      ...(gas ? { gas } : {}),
     })) as Hex;
 
     this.logger.log(`Broadcast ${functionName} tx=${hash}`);
@@ -169,7 +205,7 @@ export class EvmAdminSigner {
     }
 
     // 3. Wait for receipt.
-    const receipt = await this.publicClient.waitForTransactionReceipt({
+    const receipt = await publicClient.waitForTransactionReceipt({
       hash,
       timeout: timeoutMs,
     });
@@ -198,12 +234,16 @@ export class EvmAdminSigner {
   async sendNativeAndConfirm(
     to: Address,
     value: bigint,
-    opts?: { timeoutMs?: number; onBroadcast?: (hash: Hex) => Promise<void> }
+    opts?: { timeoutMs?: number; chainId?: number; onBroadcast?: (hash: Hex) => Promise<void> }
   ): Promise<{ hash: Hex; receipt: TransactionReceipt }> {
     const timeoutMs = opts?.timeoutMs ?? 120_000;
+    const chainId = opts?.chainId ?? this.chainId;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const publicClient = this.evmChains.publicClient(chainId) as any;
 
-    const hash = (await this.walletClient.sendTransaction({
-      account: this.account,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hash = (await (this.evmChains.walletClient(chainId) as any).sendTransaction({
+      account: this.account(chainId),
       chain: null,
       to,
       value,
@@ -221,7 +261,7 @@ export class EvmAdminSigner {
       }
     }
 
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: timeoutMs });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: timeoutMs });
     if (receipt.status !== 'success') {
       throw new TxRevertedError(hash, receipt);
     }
@@ -233,9 +273,11 @@ export class EvmAdminSigner {
   async fetchReceiptAndDecode<TAbi extends Abi>(
     hash: Hex,
     abi: TAbi,
-    expectedEventNames: string[]
+    expectedEventNames: string[],
+    chainId?: number
   ): Promise<AdminTxResult> {
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
+    const receipt = await // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.evmChains.publicClient(chainId ?? this.chainId) as any).waitForTransactionReceipt({ hash, timeout: 30_000 });
     if (receipt.status !== 'success') {
       throw new TxRevertedError(hash, receipt);
     }

@@ -26,6 +26,8 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
+import { EvmChainConfig } from '@/modules/evm-chains/evm-chains.config';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
@@ -34,9 +36,10 @@ import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@
 import {
   ChainType,
   VAULT_STATUSES_ACTIVE,
-  VAULT_STATUSES_WITH_VT_TOKENS,
   VAULT_STATUSES_WITHOUT_VT_TOKENS,
+  VAULT_STATUSES_WITH_VT_TOKENS,
   VaultStatus,
+  isEvmChain,
 } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
@@ -68,6 +71,8 @@ const ERC1155_ABI = parseAbi([
 // ERC-165 interface IDs
 const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
 const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
+const EVM_NATIVE_ASSET = '0x0000000000000000000000000000000000000000';
+const isEvmNativeAsset = (address?: string | null): boolean => (address ?? '').toLowerCase() === EVM_NATIVE_ASSET;
 
 // Transfer event topic0 values for token enumeration
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -187,6 +192,7 @@ export class TaptoolsService {
     private readonly alertsService: AlertsService,
     private readonly tapToolsClient: TapToolsClient,
     private readonly vyfiService: VyfiService,
+    private readonly evmChains: EvmChainsService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -1237,8 +1243,15 @@ export class TaptoolsService {
 
     // Load custom prices from vault whitelist
     const { customPrices: customPriceMap } = await this.getVaultCustomPrices(vaultId);
-    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
-    const isEvmVault = vault.chain_type === ChainType.robinhood;
+    const isEvmVault = isEvmChain(vault.chain_type);
+    // "ethPrice" here means "USD price of the chain's native token" — on Arc that is $1.
+    const [adaPrice, ethPrice] = await Promise.all([
+      this.priceService.getAdaPrice(),
+      isEvmVault ? this.priceService.getNativeUsdPrice(vault.chain_type) : this.priceService.getEthPrice(),
+    ]);
+    // For EVM vaults every per-asset price is denominated in the chain's native token,
+    // so USD conversion must use that token's price, not ADA's.
+    const usdPerUnit = isEvmVault ? ethPrice : adaPrice;
 
     // Group assets by policyId and assetId to handle quantities
     const assetMap = new Map<
@@ -1271,8 +1284,7 @@ export class TaptoolsService {
         continue;
       }
 
-      const isFungible =
-        asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
+      const isFungible = asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
       const key = isFungible ? `${asset.policy_id}_${asset.asset_id}_${asset.type}` : `nft_${asset.id}`;
       const existingAsset = isFungible ? assetMap.get(key) : undefined;
 
@@ -1331,10 +1343,10 @@ export class TaptoolsService {
             ...asset,
             assetName: 'ADA',
             valueAda: totalAdaValue,
-            valueUsd: totalAdaValue * adaPrice,
+            valueUsd: totalAdaValue * usdPerUnit,
           });
           totalValueAda += totalAdaValue;
-          totalValueUsd += totalAdaValue * adaPrice;
+          totalValueUsd += totalAdaValue * usdPerUnit;
           totalAcquiredAda += acquiredAdaValue;
           continue;
         }
@@ -1362,7 +1374,7 @@ export class TaptoolsService {
         if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
           // dex_price is in ADA per whole token for all FT assets (Cardano and EVM alike)
           valueAda = asset.cachedPrice;
-          valueUsd = valueAda * adaPrice;
+          valueUsd = valueAda * usdPerUnit;
 
           // Special handling: For Relics Vita NFTs, ensure character trait is cached even when using cached price
           if (asset.policyId === this.RELICS_OF_MAGMA_VITA_POLICY && asset.id && asset.name) {
@@ -1429,7 +1441,7 @@ export class TaptoolsService {
           // Add ADA from treasury
           treasuryAdaValue = treasuryBalance.lovelace * 1e-6;
           totalValueAda += treasuryAdaValue;
-          totalValueUsd += treasuryAdaValue * adaPrice;
+          totalValueUsd += treasuryAdaValue * usdPerUnit;
 
           // Value treasury assets (NFTs and FTs)
           for (const asset of treasuryBalance.assets) {
@@ -1448,7 +1460,7 @@ export class TaptoolsService {
               const valueAda = assetValue?.priceAda || 0;
 
               totalValueAda += valueAda * quantity;
-              totalValueUsd += valueAda * adaPrice * quantity;
+              totalValueUsd += valueAda * usdPerUnit * quantity;
             } catch (error: any) {
               this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
             }
@@ -1490,7 +1502,7 @@ export class TaptoolsService {
       tokens: assetsWithValues.filter(a => !a.isNft).length,
       lastUpdated: new Date().toISOString(),
       totalAcquiredAda,
-      totalAcquiredUsd: totalAcquiredAda * adaPrice,
+      totalAcquiredUsd: totalAcquiredAda * usdPerUnit,
       adaPrice,
       assetsByPolicy: Array.from(assetsByPolicyMap.values()),
     };
@@ -1542,6 +1554,11 @@ export class TaptoolsService {
 
       // Process each vault
       for (const vault of vaults) {
+        // Per vault: on Arc the native token is USDC ($1), on Robinhood it is ETH.
+        const nativeUsdPrice = isEvmChain(vault.chain_type)
+          ? await this.priceService.getNativeUsdPrice(vault.chain_type)
+          : ethPrice;
+        const usdPerUnitBatch = isEvmChain(vault.chain_type) ? nativeUsdPrice : adaPrice;
         let totalValueAda = 0;
         let totalValueUsd = 0;
         let totalValueEth = 0;
@@ -1579,7 +1596,7 @@ export class TaptoolsService {
             if (asset.type === AssetType.ADA) {
               totalAcquiredAda += asset.normalizedQuantity;
             } else if (asset.type === AssetType.ETH) {
-              const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+              const ethPriceInAda = adaPrice > 0 ? nativeUsdPrice / adaPrice : 0;
               totalAcquiredAda += asset.normalizedQuantity * ethPriceInAda;
             }
           }
@@ -1633,7 +1650,7 @@ export class TaptoolsService {
             if (asset.assetId === 'lovelace') {
               const totalAdaValue = asset.quantity * 1e-6;
               totalValueAda += totalAdaValue;
-              totalValueUsd += totalAdaValue * adaPrice;
+              totalValueUsd += totalAdaValue * usdPerUnitBatch;
               continue;
             }
 
@@ -1662,7 +1679,7 @@ export class TaptoolsService {
             }
 
             totalValueAda += valueAda * asset.quantity;
-            totalValueUsd += valueAda * adaPrice * asset.quantity;
+            totalValueUsd += valueAda * usdPerUnitBatch * asset.quantity;
           } catch (error: any) {
             // Skip assets that can't be valued
             this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
@@ -1680,7 +1697,7 @@ export class TaptoolsService {
               // Add ADA from treasury
               treasuryAdaValue = treasuryBalance.lovelace * 1e-6;
               totalValueAda += treasuryAdaValue;
-              totalValueUsd += treasuryAdaValue * adaPrice;
+              totalValueUsd += treasuryAdaValue * usdPerUnitBatch;
 
               // Value treasury assets (NFTs and FTs)
               for (const asset of treasuryBalance.assets) {
@@ -1698,7 +1715,7 @@ export class TaptoolsService {
                   const valueAda = assetValue?.priceAda || 0;
 
                   totalValueAda += valueAda * quantity;
-                  totalValueUsd += valueAda * adaPrice * quantity;
+                  totalValueUsd += valueAda * usdPerUnitBatch * quantity;
                 } catch (error: any) {
                   this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
                 }
@@ -1709,7 +1726,7 @@ export class TaptoolsService {
           // Treasury wallet doesn't exist or error fetching - continue without it
           this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
         }
-        totalValueEth = totalValueUsd / ethPrice;
+        totalValueEth = nativeUsdPrice > 0 ? totalValueUsd / nativeUsdPrice : 0;
 
         resultMap.set(vault.id, {
           totalValueAda: +totalValueAda.toFixed(6),
@@ -1844,7 +1861,9 @@ export class TaptoolsService {
           })
         : [];
 
-    const addressToUserIdMap = new Map(usersByAddress.map(u => [u.address, u.id]));
+    // One address can be several users (the same EVM wallet on Robinhood and Arc).
+    const addressToUserIds = new Map<string, string[]>();
+    usersByAddress.forEach(u => addressToUserIds.set(u.address, [...(addressToUserIds.get(u.address) ?? []), u.id]));
 
     // Identify affected users
     const affectedUserIds = new Set<string>();
@@ -1863,8 +1882,7 @@ export class TaptoolsService {
     snapshots.forEach(snapshot => {
       if (snapshot.addressBalances) {
         Object.keys(snapshot.addressBalances).forEach(address => {
-          const userId = addressToUserIdMap.get(address);
-          if (userId) affectedUserIds.add(userId);
+          addressToUserIds.get(address)?.forEach(userId => affectedUserIds.add(userId));
         });
       }
     });
@@ -1880,7 +1898,15 @@ export class TaptoolsService {
           vault_status: In(VAULT_STATUSES_ACTIVE),
         },
         relations: ['owner'],
-        select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
+        select: [
+          'id',
+          'vault_status',
+          'ft_token_supply',
+          'ft_token_decimals',
+          'initial_total_value_ada',
+          'owner',
+          'chain_type',
+        ],
       });
 
       // Batch query: Get all vault values at once
@@ -1907,7 +1933,7 @@ export class TaptoolsService {
       // Batch query: Get all users with their addresses
       const allUsers = await this.userRepository.find({
         where: { id: In([...affectedUserIds]) },
-        select: ['id', 'address'],
+        select: ['id', 'address', 'chain_type'],
       });
       const userMap = new Map(allUsers.map(u => [u.id, u]));
 
@@ -1960,6 +1986,9 @@ export class TaptoolsService {
           if (!summary) continue;
 
           if (VAULT_STATUSES_WITH_VT_TOKENS.includes(vault.vault_status)) {
+            // VT holdings are matched by address, so only the user's own chain counts.
+            if (vault.chain_type !== user.chain_type) continue;
+
             // Get user's share from VT token holdings (applies to locked, expansion, and acquire_expansion)
             const snapshot = snapshotByVaultId.get(vault.id);
 
@@ -2025,20 +2054,24 @@ export class TaptoolsService {
       const adaPriceUsd = await this.priceService.getAdaPrice();
 
       // Resolve vault to get chain type and custom prices
-      const vault = await this.vaultRepository.findOne({ where: { id: vaultId }, select: ['id', 'chain_type'] });
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'chain_type', 'chain_id'],
+      });
       const { customPrices: customPriceMap, chainlinkFeeds } = vault
         ? await this.getVaultCustomPrices(vault.id)
         : { customPrices: new Map<string, number>(), chainlinkFeeds: new Map<string, EvmPriceFeedConfig>() };
 
       // Route EVM chains to dedicated handler
-      if (vault?.chain_type === ChainType.robinhood) {
-        const ethPriceUsd = await this.priceService.getEthPrice();
+      if (isEvmChain(vault?.chain_type)) {
+        const ethPriceUsd = await this.priceService.getNativeUsdPrice(vault.chain_type);
         return this.getEvmWalletSummaryPaginated(
           paginationQuery,
           customPriceMap,
           chainlinkFeeds,
           adaPriceUsd,
-          ethPriceUsd
+          ethPriceUsd,
+          vault
         );
       }
 
@@ -2377,7 +2410,7 @@ export class TaptoolsService {
   }
 
   // ---------------------------------------------------------------------------
-  // EVM (Robinhood chain) wallet asset fetching
+  // EVM wallet asset fetching (Robinhood + Arc)
   // ---------------------------------------------------------------------------
 
   /**
@@ -2396,7 +2429,8 @@ export class TaptoolsService {
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
     isNft: boolean,
-    adaPriceUsd: number
+    adaPriceUsd: number,
+    client?: any
   ): Promise<number | null> {
     // 1. Vault-specific custom price
     const contractKey = contractAddress.toLowerCase();
@@ -2413,8 +2447,8 @@ export class TaptoolsService {
     // 3. Mainnet — Chainlink feed from evm_asset_price_feeds DB table
     const feedConfig = chainlinkFeeds.get(contractKey);
     if (feedConfig) {
-      const client = this.getEvmPublicClient();
-      const priceUsd = await this.getChainlinkPriceUsd(feedConfig.feedAddress, client, feedConfig.maxAgeSeconds);
+      const priceClient = client ?? this.getEvmPublicClient();
+      const priceUsd = await this.getChainlinkPriceUsd(feedConfig.feedAddress, priceClient, feedConfig.maxAgeSeconds);
       if (priceUsd !== null && adaPriceUsd > 0) return priceUsd / adaPriceUsd;
 
       if (!feedConfig.allowDexscreenerFallback) return null;
@@ -2523,7 +2557,15 @@ export class TaptoolsService {
     }
   }
 
-  private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
+  private getEvmPublicClient(chainRef?: ChainType | number | string): ReturnType<typeof createPublicClient> {
+    try {
+      if (chainRef != null) return this.evmChains.publicClient(chainRef) as ReturnType<typeof createPublicClient>;
+      const fallback = this.evmChains.defaultChain;
+      if (fallback) return this.evmChains.publicClient(fallback.chainId) as ReturnType<typeof createPublicClient>;
+    } catch (err: any) {
+      this.logger.warn(`EvmChainsService public client unavailable: ${err.message}`);
+    }
+
     const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
     if (!evmRpcUrl) {
       throw new HttpException('EVM RPC URL not configured', 500);
@@ -2600,7 +2642,14 @@ export class TaptoolsService {
       const decimalAdjustedBalance = Number(formatUnits(rawBalanceBigInt, decimalsNum));
       if (rawBalanceBigInt <= 0n) return null;
 
-      const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, false, adaPriceUsd);
+      const priceAda = await this.getEvmPriceAda(
+        contractAddress,
+        customPriceMap,
+        chainlinkFeeds,
+        false,
+        adaPriceUsd,
+        client
+      );
       if (priceAda === null) return null;
       const priceUsd = priceAda * adaPriceUsd;
       const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
@@ -2689,7 +2738,14 @@ export class TaptoolsService {
         return [];
       }
 
-      const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, true, adaPriceUsd);
+      const priceAda = await this.getEvmPriceAda(
+        contractAddress,
+        customPriceMap,
+        chainlinkFeeds,
+        true,
+        adaPriceUsd,
+        client
+      );
       if (priceAda === null) return [];
       const priceUsd = priceAda * adaPriceUsd;
       const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
@@ -2817,7 +2873,14 @@ export class TaptoolsService {
 
       const balanceResults = await client.multicall({ contracts: balanceCalls, allowFailure: true });
 
-      const priceAda = await this.getEvmPriceAda(contractAddress, customPriceMap, chainlinkFeeds, true, adaPriceUsd);
+      const priceAda = await this.getEvmPriceAda(
+        contractAddress,
+        customPriceMap,
+        chainlinkFeeds,
+        true,
+        adaPriceUsd,
+        client
+      );
       if (priceAda === null) return [];
       const priceUsd = priceAda * adaPriceUsd;
       const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
@@ -2895,25 +2958,25 @@ export class TaptoolsService {
   }
 
   /**
-   * Get paginated wallet summary for EVM (Robinhood) chain.
-   * Uses Alchemy APIs (NFT + Token) when ALCHEMY_API_KEY is configured,
-   * falls back to direct RPC enumeration otherwise.
-   *
-   * Alchemy network names for Robinhood:
-   *   testnet → robinhood-testnet   (set ALCHEMY_NETWORK=robinhood-testnet)
-   *   mainnet → robinhood-mainnet   (set ALCHEMY_NETWORK=robinhood-mainnet)
+   * Get paginated wallet summary for an EVM vault (Robinhood or Arc).
+   * Alchemy NFT/token APIs only index Robinhood. Using them for Arc "succeeds"
+   * with empty balances because the contracts live on a different chain.
+   * Arc (and any non-Robinhood EVM chain) always enumerates via that chain's RPC.
    */
   private async getEvmWalletSummaryPaginated(
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number,
-    ethPriceUsd: number
+    ethPriceUsd: number,
+    vault: { chain_id?: number | null; chain_type?: ChainType | string | null }
   ): Promise<PaginatedWalletSummaryDto> {
+    const chain = this.evmChains.forVault(vault);
+    const client = this.evmChains.publicClient(chain.chainId);
     const alchemyKey = this.configService.get<string>('ALCHEMY_API_KEY');
     const alchemyNetwork = this.configService.get<string>('ALCHEMY_NETWORK', 'robinhood-testnet');
 
-    if (alchemyKey) {
+    if (alchemyKey && chain.chainType === ChainType.robinhood) {
       try {
         return await this.getEvmWalletSummaryViaAlchemy(
           paginationQuery,
@@ -2922,14 +2985,24 @@ export class TaptoolsService {
           adaPriceUsd,
           ethPriceUsd,
           alchemyKey,
-          alchemyNetwork
+          alchemyNetwork,
+          client,
+          chain
         );
       } catch (err: any) {
         this.logger.warn(`Alchemy EVM wallet summary failed, falling back to RPC: ${err.message}`);
       }
     }
 
-    return this.getEvmWalletSummaryViaRpc(paginationQuery, customPriceMap, chainlinkFeeds, adaPriceUsd, ethPriceUsd);
+    return this.getEvmWalletSummaryViaRpc(
+      paginationQuery,
+      customPriceMap,
+      chainlinkFeeds,
+      adaPriceUsd,
+      ethPriceUsd,
+      client,
+      chain
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -3151,7 +3224,7 @@ export class TaptoolsService {
     ).filter((a): a is AssetValueDto => a !== null);
   }
 
-  /** Alchemy-based implementation of EVM wallet summary. */
+  /** Alchemy-based implementation of EVM wallet summary (Robinhood only). */
   private async getEvmWalletSummaryViaAlchemy(
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
@@ -3159,10 +3232,13 @@ export class TaptoolsService {
     adaPriceUsd: number,
     ethPriceUsd: number,
     apiKey: string,
-    network: string
+    network: string,
+    client: any,
+    chain: EvmChainConfig
   ): Promise<PaginatedWalletSummaryDto> {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
-    const contracts = whitelistedPolicies ?? [];
+    const allPolicies = whitelistedPolicies ?? [];
+    const contracts = allPolicies.filter(address => !isEvmNativeAsset(address));
     const allAssets: AssetValueDto[] = [];
 
     // --- NFTs (ERC721 + ERC1155) ---
@@ -3201,23 +3277,53 @@ export class TaptoolsService {
       }
     }
 
+    if (filter !== 'nfts' && allPolicies.some(isEvmNativeAsset)) {
+      const native = await this.getNativeAsset(
+        client,
+        chain,
+        walletAddress,
+        customPriceMap,
+        chainlinkFeeds,
+        adaPriceUsd,
+        ethPriceUsd
+      );
+      if (native) allAssets.push(native);
+    }
+
     return this.buildEvmPaginatedResponse(walletAddress, allAssets, page, limit, search);
   }
 
-  /** Direct-RPC fallback for EVM wallet summary (used when Alchemy is not configured). */
+  /** Direct-RPC fallback for EVM wallet summary (used when Alchemy is not configured or not indexed). */
   private async getEvmWalletSummaryViaRpc(
     paginationQuery: PaginationQueryDto,
     customPriceMap: CustomPriceMap,
     chainlinkFeeds: EvmPriceFeedsMap,
     adaPriceUsd: number,
-    ethPriceUsd: number
+    ethPriceUsd: number,
+    client: any,
+    chain: EvmChainConfig
   ): Promise<PaginatedWalletSummaryDto> {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
 
-    const client = this.getEvmPublicClient();
     const allAssets: AssetValueDto[] = [];
 
     for (const contractAddress of whitelistedPolicies ?? []) {
+      if (isEvmNativeAsset(contractAddress)) {
+        if (filter !== 'nfts') {
+          const native = await this.getNativeAsset(
+            client,
+            chain,
+            walletAddress,
+            customPriceMap,
+            chainlinkFeeds,
+            adaPriceUsd,
+            ethPriceUsd
+          );
+          if (native) allAssets.push(native);
+        }
+        continue;
+      }
+
       const contractType = await this.detectEvmContractType(client, contractAddress);
 
       if (contractType === 'ERC721' && filter !== 'tokens') {
@@ -3257,6 +3363,80 @@ export class TaptoolsService {
     }
 
     return this.buildEvmPaginatedResponse(walletAddress, allAssets, page, limit, search);
+  }
+
+  /**
+   * Native gas token (ETH on Robinhood, USDC on Arc). The contribute whitelist
+   * stores it as address(0); it is not an ERC-20 so balanceOf() would miss it.
+   */
+  private async getNativeAsset(
+    client: any,
+    chain: EvmChainConfig,
+    walletAddress: string,
+    customPriceMap: CustomPriceMap,
+    chainlinkFeeds: EvmPriceFeedsMap,
+    adaPriceUsd: number,
+    ethPriceUsd: number
+  ): Promise<AssetValueDto | null> {
+    try {
+      const rawBalanceBigInt: bigint = await client.getBalance({ address: walletAddress as Address });
+      if (rawBalanceBigInt <= 0n) return null;
+
+      const decimals = chain.nativeCurrency.decimals;
+      const decimalAdjustedBalance = Number(formatUnits(rawBalanceBigInt, decimals));
+      if (!Number.isFinite(decimalAdjustedBalance) || decimalAdjustedBalance <= 0) return null;
+
+      let priceAda = await this.getEvmPriceAda(
+        EVM_NATIVE_ASSET,
+        customPriceMap,
+        chainlinkFeeds,
+        false,
+        adaPriceUsd,
+        client
+      );
+      if (priceAda === null && chain.nativeUsdPrice === 'usd-stable' && adaPriceUsd > 0) {
+        priceAda = 1 / adaPriceUsd;
+      }
+      if (priceAda === null && chain.nativeUsdPrice === 'eth' && ethPriceUsd > 0 && adaPriceUsd > 0) {
+        priceAda = ethPriceUsd / adaPriceUsd;
+      }
+      if (priceAda === null) return null;
+
+      const priceUsd = priceAda * adaPriceUsd;
+      const priceEth = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
+      const name = chain.nativeCurrency.name;
+      const ticker = chain.nativeCurrency.symbol;
+
+      return plainToInstance(
+        AssetValueDto,
+        {
+          tokenId: EVM_NATIVE_ASSET,
+          name,
+          displayName: name,
+          ticker,
+          quantity: decimalAdjustedBalance,
+          rawQuantity: rawBalanceBigInt.toString(10),
+          decimals,
+          isNft: false,
+          isFungibleToken: true,
+          priceAda,
+          priceUsd,
+          priceEth,
+          valueAda: +(decimalAdjustedBalance * priceAda).toFixed(6),
+          valueUsd: +(decimalAdjustedBalance * priceUsd).toFixed(6),
+          valueEth: +(decimalAdjustedBalance * priceEth).toFixed(6),
+          metadata: {
+            policyId: EVM_NATIVE_ASSET,
+            decimals,
+            onchainMetadata: { tokenType: 'NATIVE' },
+          },
+        },
+        { excludeExtraneousValues: true }
+      );
+    } catch (err: any) {
+      this.logger.warn(`Failed to fetch native ${chain.nativeCurrency.symbol} for ${walletAddress}: ${err.message}`);
+      return null;
+    }
   }
 
   /** Shared helper: search + paginate + wrap into PaginatedWalletSummaryDto. */

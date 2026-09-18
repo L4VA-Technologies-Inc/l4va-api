@@ -3,7 +3,6 @@ import { Expose, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsEnum,
   IsIn,
   IsNotEmpty,
   IsObject,
@@ -13,7 +12,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { ChainType } from '@/types/vault.types';
+import { ChainType, VAULT_CREATION_CHAIN_TYPES } from '@/types/vault.types';
 
 export const MAX_HISTORY_MESSAGES = 30;
 export const MAX_MESSAGE_LENGTH = 4000;
@@ -41,8 +40,8 @@ export class VaultAssistantMessageReq {
   @Expose()
   messages: AssistantChatMessage[];
 
-  @ApiProperty({ enum: [ChainType.cardano, ChainType.robinhood] })
-  @IsEnum(ChainType)
+  @ApiProperty({ enum: [...VAULT_CREATION_CHAIN_TYPES] })
+  @IsIn([...VAULT_CREATION_CHAIN_TYPES])
   @Expose()
   chain: ChainType;
 

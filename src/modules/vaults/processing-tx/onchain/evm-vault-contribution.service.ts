@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { keccak256, parseEther, toBytes, type Address, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
@@ -14,9 +14,11 @@ import { VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { EvmChainConfig } from '@/modules/evm-chains/evm-chains.config';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 /**
  * Numeric values mirror the on-chain enum in
@@ -116,9 +118,6 @@ const CONTRIBUTION_TYPES = {
 export class EvmVaultContributionService {
   private readonly logger = new Logger(EvmVaultContributionService.name);
 
-  private readonly chainId: number;
-  private readonly mintingSignerPrivateKey: Hex;
-  private readonly mintingSignerAddress: Address;
   /** Validity window for issued authorization signatures. */
   private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour
 
@@ -129,23 +128,18 @@ export class EvmVaultContributionService {
     private readonly configService: ConfigService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly contractReader: EvmContractReader,
-    private readonly vaultEventReconciler: EvmVaultEventReconciler
-  ) {
-    this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly evmChains: EvmChainsService
+  ) {}
 
-    const privateKey = this.configService.get<string>('EVM_MINTING_SIGNER_PRIVATE_KEY');
-    if (!privateKey) {
+  /** Minting key of the vault's chain — each chain signs with its own. */
+  private mintingSigner(chain: EvmChainConfig): PrivateKeyAccount {
+    if (!chain.mintingSignerPrivateKey) {
       throw new Error(
-        'EVM_MINTING_SIGNER_PRIVATE_KEY is not configured. Add it to .env to enable EVM contribution signing.'
+        `No minting signer key for ${chain.chainType} (${chain.chainType.toUpperCase()}_MINTING_SIGNER_PRIVATE_KEY).`
       );
     }
-    this.mintingSignerPrivateKey = privateKey as Hex;
-
-    const signerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS');
-    if (!signerAddress) {
-      throw new Error('EVM_MINTING_SIGNER_ADDRESS is not configured.');
-    }
-    this.mintingSignerAddress = signerAddress as Address;
+    return privateKeyToAccount(chain.mintingSignerPrivateKey);
   }
 
   // --------------------------------------------------------------------------
@@ -165,14 +159,16 @@ export class EvmVaultContributionService {
 
     const vault = await this.vaultsRepository.findOne({ where: { id: transaction.vault_id } });
     if (!vault) throw new NotFoundException('Vault not found');
-    if (vault.chain_type !== ChainType.robinhood) {
-      throw new BadRequestException('Vault is not an EVM (Robinhood) vault');
+    if (!isEvmChain(vault.chain_type)) {
+      throw new BadRequestException('Vault is not an EVM vault');
     }
     if (!vault.contract_address) {
       throw new BadRequestException('Vault contract address is not set — the vault may not yet be created on-chain');
     }
 
-    const isPaused = (await this.contractReader.publicClient.readContract({
+    const isPaused = (await (
+      await this.contractReader.clientFor(vault.contract_address as Address, vault.chain_id ?? undefined)
+    ).readContract({
       address: vault.contract_address as Address,
       abi: VAULT_ABI,
       functionName: 'paused',
@@ -192,6 +188,8 @@ export class EvmVaultContributionService {
     }
 
     const vaultAddress = vault.contract_address as Address;
+    // The authorization is bound to this vault's chain: its id goes into the EIP-712 domain.
+    const chain = this.evmChains.forVault(vault);
     const deadline = Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS;
 
     // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
@@ -220,7 +218,7 @@ export class EvmVaultContributionService {
         deadline,
       };
 
-      const signature = await this.signAuthorization(vaultAddress, authorization);
+      const signature = await this.signAuthorization(chain, vaultAddress, authorization);
 
       calls.push({
         assetIndex: i,
@@ -235,8 +233,8 @@ export class EvmVaultContributionService {
     return {
       txId,
       vaultAddress,
-      chainId: this.chainId,
-      mintingSigner: this.mintingSignerAddress,
+      chainId: chain.chainId,
+      mintingSigner: chain.mintingSignerAddress as Address,
       calls,
     };
   }
@@ -280,13 +278,17 @@ export class EvmVaultContributionService {
       await this.transactionsService.updateTransactionHash(txId, txHash);
       this.logger.log(`EVM contribution confirmed — txId=${txId} txHash=${txHash}`);
 
-      // The Alchemy webhook almost always fires before this endpoint is called
-      // (block confirmed → Alchemy fires → frontend calls /confirm). By the time
-      // we persist the tx_hash above, the webhook has already tried and failed
-      // to find the TX. Immediately check whether the receipt is already
-      // on-chain and apply the confirmation side-effects (lock assets, reward
-      // event) right now instead of waiting for the next health-check cron.
-      this.applyReceiptIfAlreadyMined(txHash).catch(err =>
+      // Alchemy webhooks only index Robinhood. For Arc (and as a race-fix on
+      // Robinhood) look the receipt up on the vault's own chain immediately.
+      const vault = await this.vaultsRepository.findOne({
+        where: { id: transaction.vault_id },
+        select: ['id', 'chain_id', 'chain_type'],
+      });
+      const chainId = vault ? this.evmChains.forVault(vault).chainId : undefined;
+      if (chainId && !transaction.chain_id) {
+        await this.transactionRepository.update({ id: txId }, { chain_id: chainId });
+      }
+      this.applyReceiptIfAlreadyMined(txHash, chainId).catch(err =>
         this.logger.warn(`Post-confirm catch-up failed for ${txHash}: ${(err as Error).message}`)
       );
 
@@ -308,10 +310,10 @@ export class EvmVaultContributionService {
    * 5-minute health-check cron. This closes the race where the Alchemy
    * webhook arrives before the frontend calls /confirm.
    */
-  private async applyReceiptIfAlreadyMined(txHash: string): Promise<void> {
+  private async applyReceiptIfAlreadyMined(txHash: string, chainId?: number): Promise<void> {
     let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>;
     try {
-      receipt = await this.contractReader.getTransactionReceipt(txHash as `0x${string}`);
+      receipt = await this.contractReader.getTransactionReceipt(txHash as `0x${string}`, chainId);
     } catch {
       // Receipt not found or RPC error — health-check cron will retry.
       return;
@@ -321,7 +323,8 @@ export class EvmVaultContributionService {
     const status = receipt.status === 'success' ? 1 : receipt.status === 'reverted' ? 0 : null;
     if (status === null) return;
 
-    const logs: { topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
+    const logs: { address?: string; topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
+      address: String(l.address ?? ''),
       topics: (l.topics ?? []) as string[],
       data: String(l.data ?? '0x'),
     }));
@@ -347,7 +350,7 @@ export class EvmVaultContributionService {
         logIndex: typeof l.logIndex === 'number' ? l.logIndex : null,
       }));
       try {
-        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs, chainId);
         this.logger.debug(
           `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
         );
@@ -358,13 +361,16 @@ export class EvmVaultContributionService {
     }
   }
 
-  private async signAuthorization(vaultAddress: Address, auth: EvmContributionAuthorization): Promise<Hex> {
-    const account = privateKeyToAccount(this.mintingSignerPrivateKey);
-    return account.signTypedData({
+  private async signAuthorization(
+    chain: EvmChainConfig,
+    vaultAddress: Address,
+    auth: EvmContributionAuthorization
+  ): Promise<Hex> {
+    return this.mintingSigner(chain).signTypedData({
       domain: {
         name: DOMAIN_NAME,
         version: DOMAIN_VERSION,
-        chainId: this.chainId,
+        chainId: chain.chainId,
         verifyingContract: vaultAddress,
       },
       types: CONTRIBUTION_TYPES,
@@ -392,14 +398,19 @@ export class EvmVaultContributionService {
       if (upper === 'ERC20') return EvmAssetKind.ERC20;
       if (upper === 'ERC721') return EvmAssetKind.ERC721;
       if (upper === 'ERC1155') return EvmAssetKind.ERC1155;
-      if (upper === 'NATIVE' || upper === 'ETH') return EvmAssetKind.Native;
+      if (upper === 'NATIVE' || upper === 'ETH' || upper === 'USDC') return EvmAssetKind.Native;
     }
 
     // Fall back to legacy AssetType.
     if (asset.type === AssetType.ADA || asset.type === 'ada') return EvmAssetKind.Native;
-    // AcquireModal (EVM branch) sends { type: 'ETH', ... } — treat as Native.
-    if (asset.type === 'ETH' || asset.type === 'eth') return EvmAssetKind.Native;
-    if (asset.type === AssetType.FT || asset.type === 'ft') return EvmAssetKind.ERC20;
+    // AcquireModal (EVM branch) sends { type: 'ETH' | 'native' | 'usdc', ... }.
+    const type = String(asset.type || '').toLowerCase();
+    if (type === 'eth' || type === 'native' || type === 'usdc') return EvmAssetKind.Native;
+    if (asset.type === AssetType.FT || asset.type === 'ft') {
+      const policyId = String(asset.policyId || asset.metadata?.policyId || '').toLowerCase();
+      if (policyId === '0x0000000000000000000000000000000000000000') return EvmAssetKind.Native;
+      return EvmAssetKind.ERC20;
+    }
     if (asset.type === AssetType.NFT || asset.type === 'nft') return EvmAssetKind.ERC721;
 
     throw new BadRequestException(`Cannot resolve EVM AssetKind for asset: ${JSON.stringify(asset)}`);

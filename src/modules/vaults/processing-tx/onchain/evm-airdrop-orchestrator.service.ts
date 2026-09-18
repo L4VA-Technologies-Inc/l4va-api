@@ -15,7 +15,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { EVM_CHAIN_TYPES, isEvmChain } from '@/types/vault.types';
 
 /**
  * Solidity `MAX_BATCH_SIZE = 20` (see `Vault.sol#L71`). Keeps `claimAllocations`
@@ -89,7 +89,7 @@ export class EvmAirdropOrchestrator {
         'alloc.vault_id = snap.vault_id AND alloc.cycle_id = snap.cycle_id AND alloc.claimed_at IS NULL'
       )
       .where('snap.status = :confirmed', { confirmed: EvmSnapshotStatus.confirmed })
-      .andWhere('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
+      .andWhere('vault.chain_type IN (:...evmChains)', { evmChains: EVM_CHAIN_TYPES })
       .andWhere('vault.contract_address IS NOT NULL')
       .select('snap.vault_id', 'vault_id')
       .addSelect('snap.cycle_id', 'cycle_id')
@@ -124,7 +124,7 @@ export class EvmAirdropOrchestrator {
   async pushOneBatchForVault(vaultId: string, cycleId: bigint): Promise<PushResult> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {

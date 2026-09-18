@@ -3,7 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import NodeCache from 'node-cache';
 
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { NexusClient } from '@/modules/nexus/nexus.client';
+import { ChainType } from '@/types/vault.types';
 
 @Injectable()
 export class PriceService {
@@ -16,7 +18,8 @@ export class PriceService {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly nexusClient: NexusClient
+    private readonly nexusClient: NexusClient,
+    private readonly evmChains: EvmChainsService
   ) {
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
@@ -98,6 +101,16 @@ export class PriceService {
       this.logger.warn(`Using fallback ADA price: $${fallbackPrice}`);
       return fallbackPrice;
     }
+  }
+
+  /**
+   * USD price of a chain's native gas token: ETH spot on Robinhood, but exactly $1 on
+   * Arc, where the native token IS USDC. Pricing Arc's native as ETH made 0.03 USDC
+   * read as ~$73.
+   */
+  async getNativeUsdPrice(chainRef?: ChainType | number | string | null): Promise<number> {
+    if (this.evmChains.find(chainRef)?.nativeUsdPrice === 'usd-stable') return 1;
+    return this.getEthPrice();
   }
 
   async getEthPrice(): Promise<number> {

@@ -60,7 +60,7 @@ import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
 /*
@@ -558,7 +558,7 @@ export class GovernanceService {
     });
 
     // EVM vault: create a fresh snapshot on-demand if none exists yet.
-    if (!latestSnapshot && vault.chain_type === ChainType.robinhood) {
+    if (!latestSnapshot && isEvmChain(vault.chain_type)) {
       try {
         latestSnapshot = await this.evmSnapshotService.createSnapshot(vaultId);
       } catch (err) {
@@ -630,7 +630,7 @@ export class GovernanceService {
     // Check for only 1 active market action proposal for the same asset at a time
     // EVM vaults skip all Cardano-specific marketplace action validation —
     // asset IDs are ERC-20 addresses, not DB UUIDs.
-    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION && vault.chain_type !== ChainType.robinhood) {
+    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION && !isEvmChain(vault.chain_type)) {
       const requestedActions = createProposalReq.marketplaceActions || [];
 
       if (requestedActions.length > 0) {
@@ -792,7 +792,7 @@ export class GovernanceService {
         // lovelace; EVM reserves funds inside the vault contract in 18-decimal
         // base units and holders claim trustlessly. Routing both through the
         // Cardano validator is what made this proposal type unusable on RH.
-        if (vault.chain_type === ChainType.robinhood) {
+        if (isEvmChain(vault.chain_type)) {
           const asset = createProposalReq.distributionAsset || ZERO_ADDRESS;
           const amount = createProposalReq.distributionAmount;
 
@@ -1008,7 +1008,7 @@ export class GovernanceService {
         const actions = createProposalReq.marketplaceActions || [];
 
         // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
-        if (vault.chain_type === ChainType.robinhood) {
+        if (isEvmChain(vault.chain_type)) {
           proposal.metadata.marketplaceActions = actions;
           break;
         }
@@ -1565,7 +1565,7 @@ export class GovernanceService {
         } = createProposalReq;
 
         // ── EVM expansion ────────────────────────────────────────────────────
-        if (vault.chain_type === ChainType.robinhood) {
+        if (isEvmChain(vault.chain_type)) {
           if (!expansionEvmAssets || expansionEvmAssets.length === 0) {
             throw new BadRequestException(
               'At least one ERC-20/ERC-721 contract address must be selected for expansion'
@@ -1949,7 +1949,7 @@ export class GovernanceService {
         }
 
         // ── EVM acquire expansion ─────────────────────────────────────────────
-        if (vault.chain_type === ChainType.robinhood) {
+        if (isEvmChain(vault.chain_type)) {
           if (acquireExpansionPriceType === 'limit') {
             if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
               throw new BadRequestException('Limit price is required when using limit pricing');
@@ -2142,7 +2142,7 @@ export class GovernanceService {
     // Check if governance fee is required for this proposal type.
     // Cardano fees are lovelace and built server-side; EVM fees are wei and paid
     // by the user's own wallet as a native transfer (see EvmGovernanceFeeService).
-    const isEvmVault = vault.chain_type === ChainType.robinhood;
+    const isEvmVault = isEvmChain(vault.chain_type);
     const feeAmount = isEvmVault
       ? this.evmGovernanceFeeService.getProposalFeeWei(createProposalReq.type).toString()
       : this.governanceFeeService.getProposalFee(createProposalReq.type);
@@ -2804,7 +2804,7 @@ export class GovernanceService {
     userId: string,
     voterAddress: string
   ): Promise<void> {
-    const isEvmVault = proposal.vault?.chain_type === ChainType.robinhood;
+    const isEvmVault = isEvmChain(proposal.vault?.chain_type);
     const feeAmount = isEvmVault
       ? this.evmGovernanceFeeService.getVotingFeeWei().toString()
       : this.governanceFeeService.getVotingFee();
@@ -2907,7 +2907,7 @@ export class GovernanceService {
     }
 
     // Legacy UNPAID rows predate the `chain` marker and are all Cardano.
-    const isEvmPayment = pendingPayment.chain === 'evm' || proposal.vault?.chain_type === ChainType.robinhood;
+    const isEvmPayment = pendingPayment.chain === 'evm' || isEvmChain(proposal.vault?.chain_type);
 
     // EVM: the user already broadcast the transfer, so verify it up front —
     // before any state is mutated and before a fee Transaction row exists.
@@ -4188,7 +4188,7 @@ export class GovernanceService {
           where: { id: vaultId },
           select: ['id', 'chain_type', 'vault_status'],
         });
-        if (vaultForChainCheck?.chain_type === ChainType.robinhood) {
+        if (isEvmChain(vaultForChainCheck?.chain_type)) {
           try {
             snapshot = await this.evmSnapshotService.createSnapshot(vaultId);
           } catch {

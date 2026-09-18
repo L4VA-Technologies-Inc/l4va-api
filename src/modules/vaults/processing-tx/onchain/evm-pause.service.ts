@@ -10,7 +10,7 @@ import { VAULT_ABI } from './vault.abi';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 @Injectable()
 export class EvmPauseService {
@@ -36,7 +36,9 @@ export class EvmPauseService {
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
-    const paused = (await this.contractReader.publicClient.readContract({
+    const paused = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'paused',
@@ -50,7 +52,9 @@ export class EvmPauseService {
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
-    const paused = (await this.contractReader.publicClient.readContract({
+    const paused = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'paused',
@@ -68,12 +72,13 @@ export class EvmPauseService {
     );
   }
 
-  isPaused(vaultAddress: Address): Promise<boolean> {
-    return this.contractReader.publicClient.readContract({
+  async isPaused(vaultAddress: Address): Promise<boolean> {
+    const client = await this.contractReader.clientFor(vaultAddress);
+    return (await client.readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'paused',
-    }) as Promise<boolean>;
+    })) as boolean;
   }
 
   private async _send(
@@ -157,7 +162,7 @@ export class EvmPauseService {
   private async _requireEvmVault(vaultId: string): Promise<Vault> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {

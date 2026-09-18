@@ -12,6 +12,7 @@ import { RewardEstimateProxy } from './services/reward-estimate-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { UsersModule } from '@/modules/users/users.module';
 
@@ -27,7 +28,7 @@ import { UsersModule } from '@/modules/users/users.module';
  * Cardano tx building now lives entirely in l4va-rewards (ClaimTxBuilderService).
  */
 @Module({
-  imports: [HttpModule, ConfigModule, UsersModule, TypeOrmModule.forFeature([RewardEventOutbox, Vault])],
+  imports: [HttpModule, ConfigModule, UsersModule, TypeOrmModule.forFeature([RewardEventOutbox, Vault, User])],
   controllers: [RewardsController, RewardAdminController, RewardEstimateAdminController],
   providers: [RewardEventProducer, RewardClaimProxy, RewardEpochConfigProxy, RewardEstimateProxy],
   exports: [RewardEventProducer],

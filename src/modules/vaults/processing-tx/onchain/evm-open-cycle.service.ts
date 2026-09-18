@@ -11,7 +11,7 @@ import { EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 
 export interface EvmCycleWindowConfig {
   start: bigint;
@@ -53,7 +53,7 @@ export class EvmOpenCycleService {
   async openCycleForVault(vaultId: string, cfg: EvmOpenCycleConfig): Promise<OpenCycleResult> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {
@@ -63,7 +63,9 @@ export class EvmOpenCycleService {
     const vaultAddress = vault.contract_address as Address;
 
     // Preflight: on-chain status must be Locked or Cancelled.
-    const onchainStatus = (await this.contractReader.publicClient.readContract({
+    const onchainStatus = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'status',
@@ -162,7 +164,7 @@ export class EvmOpenCycleService {
 
   async closeAssetWindowForVault(vaultId: string): Promise<void> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
-    if (!vault?.contract_address || vault.chain_type !== ChainType.robinhood) return;
+    if (!vault?.contract_address || !isEvmChain(vault.chain_type)) return;
 
     const vaultAddress = vault.contract_address as Address;
     try {

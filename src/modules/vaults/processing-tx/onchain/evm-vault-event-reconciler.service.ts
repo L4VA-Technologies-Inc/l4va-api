@@ -21,6 +21,7 @@ import { AssetStatus } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ExpectedEventSpec, TransactionStatus } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 export interface VaultLogInput {
   address: string;
@@ -80,7 +81,7 @@ export class EvmVaultEventReconciler {
   ) {}
 
   /** Process a batch of vault-emitted logs. Unknown events are ignored. */
-  async reconcileLogs(logs: VaultLogInput[]): Promise<ReconcileStats> {
+  async reconcileLogs(logs: VaultLogInput[], chainId?: number): Promise<ReconcileStats> {
     let processed = 0;
     let skipped = 0;
     let errors = 0;
@@ -102,20 +103,30 @@ export class EvmVaultEventReconciler {
       outcome(hash).errors.push(msg);
     };
 
-    // Pre-resolve vault records by contract address in one query.
+    // Pre-resolve vault records by contract address in one query. Address is
+    // only unique per chain — an Arc webhook must not hit the Robinhood vault
+    // at the same address.
     const distinctAddresses = Array.from(new Set(logs.map(l => l.address.toLowerCase())));
-    const vaults = distinctAddresses.length
-      ? await this.vaultsRepository
-          .createQueryBuilder('v')
-          .where('LOWER(v.contract_address) IN (:...addrs)', { addrs: distinctAddresses })
-          .getMany()
-      : [];
-    const vaultByAddress = new Map<string, Vault>();
-    for (const v of vaults) if (v.contract_address) vaultByAddress.set(v.contract_address.toLowerCase(), v);
+    const vaultQuery = this.vaultsRepository
+      .createQueryBuilder('v')
+      .where('LOWER(v.contract_address) IN (:...addrs)', { addrs: distinctAddresses });
+    if (chainId != null) {
+      vaultQuery.andWhere('v.chain_id = :chainId', { chainId });
+    }
+    const vaults = distinctAddresses.length ? await vaultQuery.getMany() : [];
+    const vaultsByAddress = new Map<string, Vault[]>();
+    for (const v of vaults) {
+      if (!v.contract_address) continue;
+      const key = v.contract_address.toLowerCase();
+      const group = vaultsByAddress.get(key) ?? [];
+      group.push(v);
+      vaultsByAddress.set(key, group);
+    }
 
     for (const log of logs) {
       try {
-        const vault = vaultByAddress.get(log.address.toLowerCase());
+        const matches = vaultsByAddress.get(log.address.toLowerCase()) ?? [];
+        const vault = matches.length === 1 ? matches[0] : undefined;
         if (!vault) {
           skipped++;
           continue;
@@ -458,6 +469,8 @@ export class EvmVaultEventReconciler {
           .createQueryBuilder()
           .update(Vault)
           .set({
+            vault_status: VaultStatus.locked,
+            locked_at: () => 'COALESCE("locked_at", CURRENT_TIMESTAMP)',
             evm_current_cycle_id: cycleId,
             evm_allocation_root: allocationRoot,
             evm_close_cycle_tx_hash: snapshot.submit_tx_hash ?? log.txHash,
@@ -578,21 +591,29 @@ export class EvmVaultEventReconciler {
    * contribution (see useEvmContributeTransaction.js).
    */
   private async findParentTransactionForContribution(vaultId: string, txHash: string): Promise<Transaction | null> {
-    const direct = await this.transactionsRepository.findOne({
-      where: { tx_hash: txHash, vault_id: vaultId },
-      relations: ['user'],
-    });
+    const normalizedHash = txHash.toLowerCase();
+    const direct = await this.transactionsRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.user', 'user')
+      .where('t.vault_id = :vaultId', { vaultId })
+      .andWhere('LOWER(t.tx_hash) = :txHash', { txHash: normalizedHash })
+      .getOne();
     if (direct) return direct;
 
-    // Fallback: JSONB `@>` containment. Wraps the tx hash in a JSON array so
-    // Postgres will find it inside `metadata.evmChildTxHashes: [...]`.
+    // Fallback: child hashes stored when the user submitted approvals + N
+    // contribute() calls under one Transaction row. Compare case-insensitively
+    // because wallets mix checksummed and lowercase hex.
     return this.transactionsRepository
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.user', 'user')
       .where('t.vault_id = :vaultId', { vaultId })
-      .andWhere(`t.metadata -> 'evmChildTxHashes' @> :hashArray::jsonb`, {
-        hashArray: JSON.stringify([txHash]),
-      })
+      .andWhere(
+        `EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(COALESCE(t.metadata -> 'evmChildTxHashes', '[]'::jsonb)) AS h
+          WHERE LOWER(h) = :txHash
+        )`,
+        { txHash: normalizedHash }
+      )
       .getOne();
   }
 

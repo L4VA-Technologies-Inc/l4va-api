@@ -37,4 +37,11 @@ export class CreateVaultRes {
   @Expose()
   @ApiProperty({ description: 'Full VaultConfig struct to pass to VaultFactory.createVault', required: false })
   evmVaultConfig?: Record<string, unknown>;
+  @Expose()
+  @ApiProperty({ description: 'EVM chain id the admin signature is bound to', required: false })
+  chainId?: number;
+
+  @Expose()
+  @ApiProperty({ description: 'VaultFactory address on that chain', required: false })
+  factoryAddress?: string;
 }

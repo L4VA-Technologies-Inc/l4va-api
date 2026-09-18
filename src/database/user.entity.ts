@@ -8,6 +8,7 @@ import {
   BeforeInsert,
   BeforeUpdate,
   JoinColumn,
+  Index,
 } from 'typeorm';
 
 import { transformImageToUrl } from '../helpers';
@@ -19,6 +20,7 @@ import { LinkEntity } from './link.entity';
 import { Vault } from './vault.entity';
 
 @Entity('users')
+@Index('IDX_users_address_chain', ['address', 'chain_type'], { unique: true })
 export class User {
   @Expose({ name: 'id' })
   @PrimaryGeneratedColumn('uuid')
@@ -57,8 +59,9 @@ export class User {
   @Column({ name: 'email_verification_sent_at', type: 'timestamptz', nullable: true, select: false })
   email_verification_sent_at: Date | null;
 
+  /** Unique per chain: one EVM address can be a user on Robinhood and on Arc. */
   @Expose({ name: 'address' })
-  @Column({ unique: true })
+  @Column()
   address: string;
 
   @Expose({ name: 'stakeAddress' })

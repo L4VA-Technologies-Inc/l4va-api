@@ -33,7 +33,7 @@ import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -300,7 +300,7 @@ export class GovernanceExecutionService {
    * Implements retry limits and exponential backoff to prevent indefinite retries
    * Also handles distribution batch retries for DISTRIBUTION proposals
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async retryPassedProposals(): Promise<void> {
     try {
       // Find all proposals in PASSED status with metadata for retry tracking
@@ -351,6 +351,12 @@ export class GovernanceExecutionService {
 
           // Check if max retries exceeded
           if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+            // Silently skipping made an exhausted proposal look like it was still
+            // executing — the UI shows "execution in progress" until it is retried.
+            this.logger.warn(
+              `Proposal ${proposal.id} (${proposal.title}) exhausted ${this.MAX_EXECUTION_RETRIES} execution ` +
+                `attempts and will not be retried automatically; clear metadata._executionRetry to resume.`
+            );
             continue;
           }
 
@@ -747,7 +753,7 @@ export class GovernanceExecutionService {
     }
 
     // EVM vaults: delegate entirely to the EVM execution service.
-    if (vault.chain_type === ChainType.robinhood) {
+    if (isEvmChain(vault.chain_type)) {
       return this.evmGovernanceExecutionService.executeProposal(proposal, vault);
     }
 

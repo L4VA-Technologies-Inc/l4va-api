@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createPublicClient, http, PublicClient } from 'viem';
+import { PublicClient } from 'viem';
 
 import { BlockchainWebhookService } from '../onchain/blockchain-webhook.service';
 import { EvmContributionBackfillService } from '../onchain/evm-contribution-backfill.service';
@@ -13,13 +13,14 @@ import { EvmVaultEventReconciler, VaultLogInput } from '../onchain/evm-vault-eve
 import { TransactionsService } from './transactions.service';
 
 import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
 export class TransactionHealthService {
   private readonly logger = new Logger(TransactionHealthService.name);
   private readonly blockfrost: BlockFrostAPI;
-  private readonly evmClient?: PublicClient;
   private readonly STUCK_TRANSACTION_TIMEOUT_MINUTES = 1;
   private readonly MAX_RECONCILIATION_ATTEMPTS = 12;
   private readonly RECONCILIATION_BATCH_SIZE = 50;
@@ -27,23 +28,18 @@ export class TransactionHealthService {
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
     private readonly transactionsService: TransactionsService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly configService: ConfigService,
     private readonly vaultEventReconciler: EvmVaultEventReconciler,
-    private readonly evmContributionBackfillService: EvmContributionBackfillService
+    private readonly evmContributionBackfillService: EvmContributionBackfillService,
+    private readonly evmChains: EvmChainsService
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-
-    // Initialize EVM client
-    const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
-    if (evmRpcUrl) {
-      this.evmClient = createPublicClient({
-        transport: http(evmRpcUrl),
-      }) as PublicClient;
-    }
   }
 
   /**
@@ -139,18 +135,42 @@ export class TransactionHealthService {
   }
 
   /**
+   * Older contribute rows were persisted without chain_id. Fall back to the
+   * vault's chain and backfill the column so later sweeps don't miss it.
+   */
+  private async resolveEvmChainId(transaction: Transaction): Promise<number | null> {
+    if (transaction.chain_id != null) return Number(transaction.chain_id);
+    if (!transaction.vault_id) return null;
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: transaction.vault_id },
+      select: ['id', 'chain_id'],
+    });
+    const chainId = vault?.chain_id != null ? Number(vault.chain_id) : null;
+    if (chainId == null) return null;
+
+    await this.transactionRepository.update(transaction.id, { chain_id: chainId });
+    transaction.chain_id = chainId;
+    return chainId;
+  }
+
+  /**
    * Verify EVM transaction on-chain and update its status
    * @param transaction EVM transaction to verify
    */
   private async verifyEvmTransaction(transaction: Transaction): Promise<void> {
-    if (!this.evmClient) {
-      this.logger.error('EVM client not initialized. Please set EVM_RPC_URL in config');
+    // Each EVM transaction carries its chain; without a webhook on that chain this
+    // sweep is what confirms it and fills in vault contract addresses.
+    const chainId = await this.resolveEvmChainId(transaction);
+    const client = this.evmChains.find(chainId) ? (this.evmChains.publicClient(chainId) as PublicClient) : undefined;
+    if (!client) {
+      this.logger.error(`No EVM chain configured for chain_id=${chainId} (tx ${transaction.tx_hash}); cannot verify.`);
       return;
     }
 
     try {
       // Get transaction receipt from EVM chain
-      const receipt = await this.evmClient.getTransactionReceipt({
+      const receipt = await client.getTransactionReceipt({
         hash: transaction.tx_hash as `0x${string}`,
       });
 
@@ -166,7 +186,11 @@ export class TransactionHealthService {
             transaction.tx_hash,
             Number(receipt.transactionIndex),
             TransactionStatus.confirmed,
-            receipt.logs.map(log => ({ topics: (log as any).topics ?? [], data: log.data }))
+            receipt.logs.map(log => ({
+              address: (log as { address?: string }).address,
+              topics: (log as { topics?: string[] }).topics ?? [],
+              data: log.data,
+            }))
           );
 
           // Update block_number if not already set
@@ -202,15 +226,46 @@ export class TransactionHealthService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorName = error instanceof Error ? error.name : '';
 
-      if (errorMessage.includes('not found') || errorName === 'TransactionNotFoundError') {
+      // viem raises TransactionReceiptNotFoundError ("could not be found") for both a
+      // still-pending transaction and one that never made it into a block, so the
+      // mempool has to decide between them: a replaced or dropped transaction (the
+      // wallet's speed-up reuses the nonce) is gone for good and must be failed,
+      // while a pending one is left alone for the next sweep.
+      const isMissing =
+        errorMessage.includes('not found') ||
+        errorMessage.includes('could not be found') ||
+        errorName === 'TransactionNotFoundError' ||
+        errorName === 'TransactionReceiptNotFoundError';
+
+      if (isMissing) {
+        if (await this.isStillPending(client, transaction.tx_hash)) {
+          this.logger.warn(
+            `EVM transaction ${transaction.tx_hash} is still pending in the mempool, leaving as submitted`
+          );
+          return;
+        }
         this.logger.error(
-          `EVM transaction ${transaction.tx_hash} not found on-chain after ${this.STUCK_TRANSACTION_TIMEOUT_MINUTES} minutes, marking as failed`
+          `EVM transaction ${transaction.tx_hash} not found on-chain after ${this.STUCK_TRANSACTION_TIMEOUT_MINUTES} minutes (dropped or replaced), marking as failed`
         );
         await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       } else {
         this.logger.error(`Error verifying EVM transaction ${transaction.tx_hash}:`, errorMessage);
         throw error;
       }
+    }
+  }
+
+  /**
+   * Is the hash still known to the node? `null` means the transaction was never
+   * broadcast, or was evicted after a same-nonce replacement — either way it can
+   * never confirm under this hash.
+   */
+  private async isStillPending(client: PublicClient, txHash: string): Promise<boolean> {
+    try {
+      await client.getTransaction({ hash: txHash as `0x${string}` });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -312,7 +367,7 @@ export class TransactionHealthService {
    * retry path complementing the Alchemy webhook.
    */
   private async sweepEvmReconciliation(): Promise<void> {
-    if (!this.evmClient) return;
+    if (this.evmChains.all.length === 0) return;
 
     const pending = await this.transactionRepository
       .createQueryBuilder('transaction')
@@ -341,10 +396,14 @@ export class TransactionHealthService {
    * Used by the sweep for retries.
    */
   private async reconcileEvmTransactionByHash(transaction: Transaction): Promise<void> {
-    if (!this.evmClient) return;
+    if (!this.evmChains.find(transaction.chain_id)) {
+      this.logger.warn(`No EVM chain configured for chain_id=${transaction.chain_id} (tx ${transaction.tx_hash})`);
+      return;
+    }
+    const client = this.evmChains.publicClient(transaction.chain_id) as PublicClient;
 
     try {
-      const receipt = await this.evmClient.getTransactionReceipt({
+      const receipt = await client.getTransactionReceipt({
         hash: transaction.tx_hash as `0x${string}`,
       });
       if (!receipt) {
@@ -413,7 +472,10 @@ export class TransactionHealthService {
 
     let stats: Awaited<ReturnType<EvmVaultEventReconciler['reconcileLogs']>>;
     try {
-      stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+      stats = await this.vaultEventReconciler.reconcileLogs(
+        vaultLogs,
+        transaction.chain_id != null ? Number(transaction.chain_id) : undefined
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await this.recordReconciliationAttempt(transaction, EvmReconciliationStatus.pending, `reconciler threw: ${msg}`);

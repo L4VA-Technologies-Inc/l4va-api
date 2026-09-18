@@ -36,7 +36,7 @@ import {
   AssetBuySellDto,
   GetTerminationAssetsDto,
 } from '@/modules/vaults/phase-management/governance/dto/get-assets.dto';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -233,7 +233,7 @@ export class GovernanceController {
       where: { id: vaultId },
       select: ['id', 'chain_type'],
     });
-    if (vault?.chain_type === ChainType.robinhood) {
+    if (isEvmChain(vault?.chain_type)) {
       return this.evmDistributionService.getDistributionInfo(vaultId, asset);
     }
     return this.distributionService.getDistributionInfo(vaultId);

@@ -97,12 +97,7 @@ export class UniswapTradingService {
     return this.post('/quote', payload, headers);
   }
 
-  async checkApproval(body: {
-    walletAddress: string;
-    token: string;
-    amount: string;
-    tokenOut?: string;
-  }) {
+  async checkApproval(body: { walletAddress: string; token: string; amount: string; tokenOut?: string }) {
     this.assertApiKey();
     this.validateAddresses(body.token, body.walletAddress);
     if (!body.amount || !/^\d+$/.test(body.amount)) {
@@ -116,9 +111,7 @@ export class UniswapTradingService {
         token: body.token,
         amount: body.amount,
         chainId: this.chainId,
-        ...(body.tokenOut
-          ? { tokenOut: body.tokenOut, tokenOutChainId: this.chainId }
-          : {}),
+        ...(body.tokenOut ? { tokenOut: body.tokenOut, tokenOutChainId: this.chainId } : {}),
       },
       this.tradingHeaders()
     );
@@ -215,8 +208,7 @@ export class UniswapTradingService {
         throw new UnauthorizedException(data?.detail || data?.message || 'Invalid Uniswap API key');
       }
       if (status >= 400) {
-        const detail =
-          data?.detail || data?.message || data?.error || `Uniswap Trading API error (${status})`;
+        const detail = data?.detail || data?.message || data?.error || `Uniswap Trading API error (${status})`;
         this.logger.warn(`Uniswap ${path} failed: ${status} ${JSON.stringify(data)?.slice(0, 400)}`);
         throw new BadRequestException(typeof detail === 'string' ? detail : JSON.stringify(detail));
       }

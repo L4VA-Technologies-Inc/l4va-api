@@ -14,7 +14,7 @@ import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { isEvmChain, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AcquireService {
@@ -53,10 +53,11 @@ export class AcquireService {
     // Acquire UI sends native ETH in wei already. Preserve that contract for
     // prepareContribution() so it does not parseEther() the amount again.
     acquireReq.assets = acquireReq.assets.map(asset => {
-      const isEthType = String(asset.type || '').toLowerCase() === 'eth';
-      const isNativeEthAddress =
+      const type = String(asset.type || '').toLowerCase();
+      const isNativeType = type === 'eth' || type === 'native' || type === 'usdc';
+      const isNativeAddress =
         String(asset.policyId || '').toLowerCase() === '0x0000000000000000000000000000000000000000';
-      if (!isEthType && !isNativeEthAddress) {
+      if (!isNativeType && !isNativeAddress) {
         return asset;
       }
 
@@ -177,6 +178,7 @@ export class AcquireService {
       fee: this.systemSettingsService.protocolAcquiresFee,
       is_expansion: vault.vault_status === VaultStatus.acquire_expansion,
       expansion_proposal_id: expansionProposalId,
+      chain_id: isEvmChain(vault.chain_type) ? vault.chain_id : undefined,
       metadata: {
         assets: acquireReq.assets,
       },

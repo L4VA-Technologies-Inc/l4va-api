@@ -8,6 +8,7 @@ import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
 import { EvmVaultEventReconciler, VaultLogInput, PerTxOutcome } from './evm-vault-event-reconciler.service';
 
+import { EvmChainsService } from '@/modules/evm-chains/evm-chains.service';
 import { TransactionStatus } from '@/types/transaction.types';
 
 /**
@@ -19,14 +20,27 @@ import { TransactionStatus } from '@/types/transaction.types';
 @Injectable()
 export class EvmWebhookService {
   private readonly logger = new Logger(EvmWebhookService.name);
-  private readonly signingKey: string;
-
   constructor(
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly configService: ConfigService,
-    private readonly vaultEventReconciler: EvmVaultEventReconciler
-  ) {
-    this.signingKey = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly evmChains: EvmChainsService
+  ) {}
+
+  /**
+   * Each chain has its own Alchemy app, so its webhook signs with its own key
+   * (`ARC_ALCHEMY_WEBHOOK_SIGNING_KEY`, …). The legacy unprefixed key stays
+   * valid so the existing Robinhood webhook keeps working unchanged.
+   */
+  private signingKeyEntries(): { chainId?: number; key: string }[] {
+    const entries: { chainId?: number; key: string }[] = this.evmChains.all
+      .filter(chain => !!chain.alchemyWebhookSigningKey)
+      .map(chain => ({ chainId: chain.chainId, key: chain.alchemyWebhookSigningKey as string }));
+    const legacy = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
+    if (legacy && !entries.some(entry => entry.key === legacy)) {
+      entries.push({ chainId: this.evmChains.find('robinhood')?.chainId, key: legacy });
+    }
+    return entries;
   }
 
   /**
@@ -39,7 +53,7 @@ export class EvmWebhookService {
    * @returns Per-transaction summary of updated local transaction ids
    */
   async handleEvmEvent(rawBody: string, signatureHeader: string): Promise<WebhookTxSummaryDto[]> {
-    this.verifySignature(rawBody, signatureHeader);
+    const keyChainId = this.verifySignature(rawBody, signatureHeader);
 
     let event: EvmWebhookDto;
     try {
@@ -53,6 +67,15 @@ export class EvmWebhookService {
       this.logger.debug(`Ignoring non-GRAPHQL EVM webhook type: ${event.type}`);
       return [];
     }
+
+    const networkChainId = this.chainIdFromAlchemyNetwork(event?.event?.network);
+    if (keyChainId != null && networkChainId != null && keyChainId !== networkChainId) {
+      this.logger.error(
+        `Webhook chain mismatch: signing key is chain ${keyChainId} but payload network is ${event?.event?.network}`
+      );
+      throw new UnauthorizedException('Webhook chain mismatch');
+    }
+    const chainId = networkChainId ?? keyChainId;
 
     const block = event?.event?.data?.block;
     const logs = block?.logs ?? [];
@@ -78,7 +101,11 @@ export class EvmWebhookService {
     for (const tx of txByHash.values()) {
       const txLogs = logs
         .filter(log => log?.transaction?.hash === tx.hash)
-        .map(log => ({ topics: log.topics ?? [], data: log.data ?? '0x' }));
+        .map(log => ({
+          address: log.account?.address,
+          topics: log.topics ?? [],
+          data: log.data ?? '0x',
+        }));
 
       const localTxId = await this.blockchainWebhookService.applyEvmTransactionStatus(
         tx.hash,
@@ -110,7 +137,7 @@ export class EvmWebhookService {
       }));
     if (vaultLogs.length > 0) {
       try {
-        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs, chainId);
         this.logger.debug(
           `Vault event reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
         );
@@ -179,21 +206,37 @@ export class EvmWebhookService {
    * Verify the Alchemy webhook signature.
    * Alchemy signs the raw request body with HMAC-SHA256 using the webhook's
    * signing key and sends the hex digest in the `x-alchemy-signature` header.
+   *
+   * @returns chain id bound to the matching key, when it is unique
    */
-  private verifySignature(rawBody: string, signatureHeader: string): void {
-    if (!this.signingKey) {
-      this.logger.warn('ALCHEMY_WEBHOOK_SIGNING_KEY is not configured — skipping signature verification');
-      return;
+  private verifySignature(rawBody: string, signatureHeader: string): number | undefined {
+    const entries = this.signingKeyEntries();
+    if (entries.length === 0) {
+      this.logger.warn('No Alchemy webhook signing key configured — skipping signature verification');
+      return undefined;
     }
 
-    const digest = createHmac('sha256', this.signingKey).update(rawBody, 'utf8').digest('hex');
-
     const provided = Buffer.from(signatureHeader ?? '', 'utf8');
-    const expected = Buffer.from(digest, 'utf8');
+    const matchesKey = (key: string): boolean => {
+      const expected = Buffer.from(createHmac('sha256', key).update(rawBody, 'utf8').digest('hex'), 'utf8');
+      return provided.length === expected.length && timingSafeEqual(provided, expected);
+    };
 
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    const matching = entries.filter(entry => matchesKey(entry.key));
+    if (matching.length === 0) {
       this.logger.error('Invalid Alchemy webhook signature');
       throw new UnauthorizedException('Invalid webhook signature');
     }
+
+    const chainIds = [...new Set(matching.map(entry => entry.chainId).filter((id): id is number => id != null))];
+    return chainIds.length === 1 ? chainIds[0] : undefined;
+  }
+
+  /** Map Alchemy's `event.network` (e.g. ROBINHOOD_TESTNET, ARC_TESTNET) to a configured chain. */
+  private chainIdFromAlchemyNetwork(network?: string): number | undefined {
+    if (!network) return undefined;
+    const normalized = network.toUpperCase().replace(/-/g, '_');
+    const hits = this.evmChains.all.filter(chain => normalized.includes(chain.chainType.toUpperCase()));
+    return hits.length === 1 ? hits[0].chainId : undefined;
   }
 }

@@ -279,7 +279,7 @@ export class BlockchainWebhookService {
     txHash: string,
     txIndex: number,
     status: TransactionStatus,
-    logs: { topics: string[]; data: string }[]
+    logs: { address?: string; topics: string[]; data: string }[]
   ): Promise<string | null> {
     // Parse VaultCreated events first so vault contract addresses are set
     // before handleCreateVaultConfirmation is called inside applyTransactionStatus
@@ -287,7 +287,7 @@ export class BlockchainWebhookService {
       const topics = log.topics ?? [];
       if (topics[0]?.toLowerCase() === this.vaultCreatedTopic) {
         try {
-          await this.evmVaultSignerService.updateVaultFromCreatedEvent(txHash, topics, log.data);
+          await this.evmVaultSignerService.updateVaultFromCreatedEvent(txHash, log);
         } catch (error) {
           this.logger.error(
             `WH: Failed to update vault from VaultCreated event in tx ${txHash}: ${(error as Error).message}`

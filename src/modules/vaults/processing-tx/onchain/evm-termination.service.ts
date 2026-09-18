@@ -21,7 +21,7 @@ import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { AssetStatus } from '@/types/asset.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+import { VaultStatus, isEvmChain } from '@/types/vault.types';
 
 const NATIVE = '0x0000000000000000000000000000000000000000' as const;
 
@@ -68,11 +68,26 @@ export class EvmTerminationService {
    * Phase 4 step 1: require Locked/Cancelled, no open positions, no NFTs held.
    * Transitions on-chain vault → TerminationPreparing.
    */
+  /** On-chain vault status, so callers can tell a fresh termination from a stalled one. */
+  async getOnchainStatus(vaultId: string): Promise<number> {
+    const vault = await this._requireEvmVault(vaultId);
+    const vaultAddress = vault.contract_address as Address;
+    return (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'status',
+    })) as number;
+  }
+
   async beginTerminationPreparing(vaultId: string): Promise<{ txHash: Hex }> {
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
-    const onchainStatus = (await this.contractReader.publicClient.readContract({
+    const onchainStatus = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'status',
@@ -84,7 +99,9 @@ export class EvmTerminationService {
       );
     }
 
-    const activePositions = (await this.contractReader.publicClient.readContract({
+    const activePositions = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'activeExternalPositionCount',
@@ -129,7 +146,8 @@ export class EvmTerminationService {
    * so reading `custodyTokens()` is required, not a cleanup.
    */
   async buildCustodyPlan(vaultAddress: Address): Promise<CustodyPlan> {
-    const client = this.contractReader.publicClient;
+    // The vault, its token and every custody asset live on the vault's own chain.
+    const client = await this.contractReader.clientFor(vaultAddress);
 
     const vtAddress = (await client.readContract({
       address: vaultAddress,
@@ -189,7 +207,9 @@ export class EvmTerminationService {
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
-    const onchainStatus = (await this.contractReader.publicClient.readContract({
+    const onchainStatus = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'status',
@@ -414,7 +434,9 @@ export class EvmTerminationService {
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
-    const deadline = (await this.contractReader.publicClient.readContract({
+    const deadline = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'terminationDeadline',
@@ -483,7 +505,7 @@ export class EvmTerminationService {
 
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
-    const client = this.contractReader.publicClient;
+    const client = await this.contractReader.clientFor(vaultAddress, vault.chain_id ?? undefined);
 
     const read = <T>(functionName: string, args: unknown[] = []): Promise<T> =>
       client.readContract({
@@ -569,7 +591,9 @@ export class EvmTerminationService {
    * clean 400 instead of a burned admin transaction.
    */
   private async _requireTerminating(vaultAddress: Address): Promise<void> {
-    const onchainStatus = (await this.contractReader.publicClient.readContract({
+    const onchainStatus = (await (
+      await this.contractReader.clientFor(vaultAddress)
+    ).readContract({
       address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'status',
@@ -781,7 +805,7 @@ export class EvmTerminationService {
   private async _requireEvmVault(vaultId: string): Promise<Vault> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {

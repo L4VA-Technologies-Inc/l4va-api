@@ -16,6 +16,7 @@ import {
 } from '../../processing-tx/onchain/evm-position.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
 import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
+import { EvmVaultOnchainStatus } from '../../processing-tx/onchain/vault.abi';
 
 import { EvmDistributionService } from './evm-distribution.service';
 
@@ -570,9 +571,20 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   private async executeTermination(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     let prepared = false;
     try {
-      await this.terminationService.beginTerminationPreparing(vault.id);
-      prepared = true;
-      this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted (preflight passed)`);
+      // A previous run may have completed step 1 and failed on the commit, leaving the
+      // vault in TerminationPreparing — step 1 would now revert. Resume from step 2
+      // instead, so the cron heals a stalled termination without an operator call.
+      const onchainStatus = await this.terminationService.getOnchainStatus(vault.id);
+      if (onchainStatus === EvmVaultOnchainStatus.TerminationPreparing) {
+        prepared = true;
+        this.logger.log(
+          `Proposal ${proposal.id}: vault already in TerminationPreparing — resuming at beginTermination`
+        );
+      } else {
+        await this.terminationService.beginTerminationPreparing(vault.id);
+        prepared = true;
+        this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted (preflight passed)`);
+      }
 
       const result = await this.terminationService.beginTermination(vault.id);
       this.logger.log(

@@ -13,7 +13,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { ProposalStatus } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceRefundService {
@@ -83,7 +83,15 @@ export class GovernanceRefundService {
       return { refunded: false };
     }
 
-    const isEvmVault = proposal.vault?.chain_type === ChainType.robinhood;
+    const isEvmVault = isEvmChain(proposal.vault?.chain_type);
+    const vaultChainId = proposal.vault?.chain_id != null ? Number(proposal.vault.chain_id) : undefined;
+    if (isEvmVault && !vaultChainId) {
+      this.logger.error(`Cannot refund proposal ${proposalId}: vault has no chain_id`);
+      if (throwOnFailure) {
+        throw new Error(`Vault for proposal ${proposalId} has no chain_id for refund`);
+      }
+      return { refunded: false };
+    }
     // transaction.amount is read back through parseFloat, which rounds wei above
     // 2^53. The metadata copy is written as an exact decimal string, so it — not
     // the column — is authoritative for EVM refunds.
@@ -138,6 +146,7 @@ export class GovernanceRefundService {
           { id: existingRefundTx.id },
           {
             status: TransactionStatus.created,
+            ...(isEvmVault ? { chain_id: vaultChainId } : {}),
             metadata: {
               ...(existingRefundTx.metadata || {}),
               kind: 'governance_creation_fee_refund',
@@ -154,6 +163,7 @@ export class GovernanceRefundService {
           assets: [],
           amount: isEvmVault ? exactFeeAmount : feeAmount,
           userId: proposal.creatorId,
+          chain_id: isEvmVault ? vaultChainId : undefined,
           metadata: {
             kind: 'governance_creation_fee_refund',
             refundOfProposalId: proposalId,
@@ -173,6 +183,7 @@ export class GovernanceRefundService {
             proposalId,
             toAddress: creatorAddress,
             weiAmount: BigInt(exactFeeAmount),
+            chainId: vaultChainId!,
           })
         : await this.submitAdminRefundTx({
             proposalId,
@@ -239,10 +250,13 @@ export class GovernanceRefundService {
     proposalId: string;
     toAddress: string;
     weiAmount: bigint;
+    chainId: number;
   }): Promise<string> {
-    const { proposalId, toAddress, weiAmount } = config;
+    const { proposalId, toAddress, weiAmount, chainId } = config;
 
-    const { hash } = await this.evmAdminSigner.sendNativeAndConfirm(toAddress as `0x${string}`, weiAmount);
+    const { hash } = await this.evmAdminSigner.sendNativeAndConfirm(toAddress as `0x${string}`, weiAmount, {
+      chainId,
+    });
 
     this.logger.log(`Refunded ${weiAmount} wei to ${toAddress} for proposal ${proposalId} (tx ${hash})`);
     return hash;

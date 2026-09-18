@@ -10,7 +10,7 @@ import { VAULT_ABI } from './vault.abi';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { isEvmChain } from '@/types/vault.types';
 
 export interface OpenPositionParams {
   operationId: Hex;
@@ -392,7 +392,7 @@ export class EvmPositionService {
   /** Units of an NFT slot that still back a refundable contribution. */
   async slotRefundableUnits(vaultId: string, nftContract: Address, tokenId: bigint): Promise<bigint> {
     const vault = await this._requireEvmVault(vaultId);
-    return this.contractReader.publicClient.readContract({
+    return (await this.contractReader.clientFor(vault.contract_address as Address)).readContract({
       address: vault.contract_address as Address,
       abi: VAULT_ABI,
       functionName: 'slotRefundableUnits',
@@ -403,7 +403,7 @@ export class EvmPositionService {
   private async _requireEvmVault(vaultId: string): Promise<Vault> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
-    if (vault.chain_type !== ChainType.robinhood) {
+    if (!isEvmChain(vault.chain_type)) {
       throw new BadRequestException(`Vault ${vaultId} is not an EVM vault`);
     }
     if (!vault.contract_address) {

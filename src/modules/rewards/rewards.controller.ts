@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -27,11 +27,13 @@ import {
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { WalletLinkService } from '@/modules/users/wallet-link.service';
 import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
+import { ChainType } from '@/types/vault.types';
 
 /**
  * Public rewards controller for l4va-api.
@@ -49,8 +51,21 @@ export class RewardsController {
     private readonly rewardClaimProxy: RewardClaimProxy,
     private readonly walletLinkService: WalletLinkService,
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>
   ) {}
+
+  /**
+   * l4va-rewards keys wallets by address only, so an Arc user would claim the rewards of the
+   * same wallet's Robinhood user. Arc has no rewards yet.
+   */
+  private async assertClaimsAvailable(userId: string): Promise<void> {
+    const user = await this.userRepository.findOne({ where: { id: userId }, select: ['id', 'chain_type'] });
+    if (user?.chain_type === ChainType.arc) {
+      throw new BadRequestException('Rewards claims are not available on Arc yet');
+    }
+  }
 
   /**
    * POST /rewards/widget-swap
@@ -264,7 +279,20 @@ export class RewardsController {
     return Promise.all(
       wallets.map(async wallet => ({
         ...wallet,
-        claims: await this.rewardClaimProxy.getAvailableClaims(wallet.address),
+        // Same reason as assertClaimsAvailable: an Arc wallet would show its Robinhood twin's rewards.
+        claims:
+          wallet.chainType === ChainType.arc
+            ? {
+                walletAddress: wallet.address,
+                totalClaimable: 0,
+                immediateClaimable: 0,
+                vestedClaimable: 0,
+                totalClaimed: 0,
+                pendingClaims: 0,
+                lastClaimDate: null,
+                availableRewards: [],
+              }
+            : await this.rewardClaimProxy.getAvailableClaims(wallet.address),
       }))
     );
   }
@@ -312,6 +340,7 @@ export class RewardsController {
       claimVested?: boolean;
     }
   ): Promise<PrepareClaimResponseDto> {
+    await this.assertClaimsAvailable(req.user.sub);
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.prepareClaim(walletAddress, body);
   }
@@ -330,6 +359,7 @@ export class RewardsController {
     @Request() req: AuthRequest,
     @Body() body: { reservationId: string; txCbor: string; userWitness: string }
   ): Promise<SubmitClaimResponseDto> {
+    await this.assertClaimsAvailable(req.user.sub);
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.submitClaim(walletAddress, body.reservationId, body.txCbor, body.userWitness);
   }
@@ -352,7 +382,7 @@ export class RewardsController {
 
   /**
    * POST /rewards/me/claims/evm
-   * Robinhood Chain claim. Fully server-side: reserve + treasury ERC-20 transfer.
+   * EVM (Robinhood Chain) claim. Fully server-side: reserve + treasury ERC-20 transfer.
    * Unlike Cardano, the user does not sign a transaction.
    */
   @UseGuards(AuthGuard)
@@ -366,6 +396,7 @@ export class RewardsController {
       claimVested?: boolean;
     }
   ): Promise<SubmitClaimResponseDto> {
+    await this.assertClaimsAvailable(req.user.sub);
     return this.rewardClaimProxy.claimEvm(req.user.address, body);
   }
 

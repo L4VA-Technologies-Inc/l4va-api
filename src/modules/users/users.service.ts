@@ -4,6 +4,7 @@ import { classToPlain, instanceToPlain, plainToInstance } from 'class-transforme
 import { Brackets, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
+import { ChainType } from '../../types/vault.types';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { PriceService } from '../price/price.service';
 
@@ -49,10 +50,11 @@ export class UsersService {
     });
   }
 
-  async findByAddress(address: string): Promise<User | undefined> {
+  async findByAddress(address: string, chainType: ChainType): Promise<User | undefined> {
     return this.usersRepository.findOne({
       where: {
-        address: address,
+        address,
+        chain_type: chainType,
       },
       relations: ['profile_image', 'banner_image', 'social_links'],
     });
@@ -93,14 +95,14 @@ export class UsersService {
               { userId }
             )
             .orWhere(
-              `EXISTS (
+              `(vault.chain_type = :userChainType AND EXISTS (
               SELECT 1 FROM snapshot
               WHERE snapshot.vault_id = vault.id 
               AND snapshot.address_balances -> :userAddress IS NOT NULL
               ORDER BY snapshot.created_at DESC
               LIMIT 1
-            )`,
-              { userAddress: user.address }
+            ))`,
+              { userAddress: user.address, userChainType: user.chain_type }
             );
         })
       )
@@ -154,14 +156,14 @@ export class UsersService {
               { userId }
             )
             .orWhere(
-              `EXISTS (
+              `(vault.chain_type = :userChainType AND EXISTS (
               SELECT 1 FROM snapshot
               WHERE snapshot.vault_id = vault.id 
               AND snapshot.address_balances -> :userAddress IS NOT NULL
               ORDER BY snapshot.created_at DESC
               LIMIT 1
-            )`,
-              { userAddress: user.address }
+            ))`,
+              { userAddress: user.address, userChainType: user.chain_type }
             );
         })
       )
