@@ -40,15 +40,20 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
+import { EvmContractReader } from './processing-tx/onchain/evm-contract-reader.service';
+import { EvmContributionBackfillService } from './processing-tx/onchain/evm-contribution-backfill.service';
+import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
+import { EvmVaultOnchainStatus, VAULT_ABI } from './processing-tx/onchain/vault.abi';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { EvmContribution } from '@/database/evm-contribution.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -206,6 +211,8 @@ export class VaultsService {
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(TokenVerification)
     private readonly tokenVerificationRepository: Repository<TokenVerification>,
+    @InjectRepository(EvmContribution)
+    private readonly evmContributionsRepository: Repository<EvmContribution>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -218,7 +225,10 @@ export class VaultsService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly claimsService: ClaimsService,
-    private readonly evmVaultSignerService: EvmVaultSignerService
+    private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly evmCycleCloseService: EvmCycleCloseService,
+    private readonly evmContractReader: EvmContractReader,
+    private readonly evmContributionBackfillService: EvmContributionBackfillService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -2592,6 +2602,10 @@ export class VaultsService {
 
     const hasRefundableFlows = contribCount > 0 || acquireCount > 0;
 
+    if (vault.chain_type === ChainType.robinhood) {
+      return this.cancelEvmVaultByOwner(vault, hasRefundableFlows);
+    }
+
     if (hasRefundableFlows) {
       const response = await this.vaultContractService.updateVaultMetadataTx({
         vault,
@@ -2611,6 +2625,96 @@ export class VaultsService {
       return { success: true };
     }
 
+    vault.deleted = true;
+    vault.deactivated_at = new Date();
+    await this.vaultsRepository.save(vault);
+
+    return { success: true };
+  }
+
+  /**
+   * EVM (Robinhood) owner cancel.
+   *
+   * The DB can lag behind the chain (webhook/receipt not processed yet), so the
+   * "delete vs refund" decision is made from on-chain state, not from DB rows:
+   *   1. Freeze the vault: admin `cancelCurrentCycle()` while the cycle is Active.
+   *      After this no new contribution can land.
+   *   2. Materialize any contributions the DB hasn't seen yet (backfill from logs),
+   *      so EvmRefundOrchestrator can refund them.
+   *   3. Soft-delete only when the chain confirms zero contributions; otherwise mark
+   *      the vault failed and let the refund cron return the assets.
+   */
+  private async cancelEvmVaultByOwner(vault: Vault, hasRefundableFlows: boolean): Promise<{ success: boolean }> {
+    if (!vault.contract_address) {
+      if (hasRefundableFlows) {
+        throw new BadRequestException('Vault contract is not synced yet. Please try again later.');
+      }
+      return this.softDeleteCancelledVault(vault);
+    }
+
+    const vaultAddress = vault.contract_address as Address;
+    let cancelTxHash: string | undefined = vault.evm_cancel_cycle_tx_hash;
+
+    if (!cancelTxHash && (await this.readEvmVaultStatus(vaultAddress)) === EvmVaultOnchainStatus.Active) {
+      try {
+        const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(vault.id, 'Cancelled by owner');
+        cancelTxHash = txHash;
+        vault.evm_cancel_cycle_tx_hash = txHash;
+      } catch (err) {
+        this.logger.error(`Owner cancel: cancelCurrentCycle failed for vault ${vault.id}: ${(err as Error).message}`);
+        throw new BadRequestException('Failed to cancel vault on-chain. Please try again later.');
+      }
+    }
+
+    let onChainContributions: bigint;
+    try {
+      await this.evmContributionBackfillService.backfillVault(vault.id);
+      onChainContributions = await this.evmContractReader.totalContributions(vaultAddress);
+    } catch (err) {
+      // Cycle may already be cancelled here; the vault stays listed and the owner can retry.
+      this.logger.error(`Owner cancel: contribution sync failed for vault ${vault.id}: ${(err as Error).message}`);
+      throw new BadRequestException('Failed to verify vault contributions on-chain. Please try again later.');
+    }
+
+    if (onChainContributions === 0n && !hasRefundableFlows) {
+      return this.softDeleteCancelledVault(vault);
+    }
+
+    const inDb = await this.evmContributionsRepository.count({ where: { vault_id: vault.id } });
+    if (BigInt(inDb) < onChainContributions) {
+      // Contributors can still self-refund on-chain since the cycle is Cancelled.
+      this.logger.warn(
+        `Owner cancel: vault ${vault.id} has ${onChainContributions} on-chain contributions but only ${inDb} in DB`
+      );
+    }
+
+    vault.vault_status = VaultStatus.failed;
+    vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+    vault.last_update_tx_hash = cancelTxHash;
+    vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
+    vault.failure_details = { message: 'Cancelled by owner', chainType: ChainType.robinhood };
+    vault.deactivated_at = new Date();
+    await this.vaultsRepository.save(vault);
+
+    return { success: true };
+  }
+
+  private async readEvmVaultStatus(vaultAddress: Address): Promise<EvmVaultOnchainStatus> {
+    try {
+      return Number(
+        await this.evmContractReader.publicClient.readContract({
+          address: vaultAddress,
+          abi: VAULT_ABI,
+          functionName: 'status',
+        })
+      ) as EvmVaultOnchainStatus;
+    } catch (err) {
+      this.logger.error(`Owner cancel: status read failed for ${vaultAddress}: ${(err as Error).message}`);
+      throw new BadRequestException('Failed to read vault state on-chain. Please try again later.');
+    }
+  }
+
+  private async softDeleteCancelledVault(vault: Vault): Promise<{ success: boolean }> {
     vault.deleted = true;
     vault.deactivated_at = new Date();
     await this.vaultsRepository.save(vault);
@@ -2646,6 +2750,20 @@ export class VaultsService {
             'Vault can only be cancelled within 24 hours after the contribution phase has started'
           );
         }
+      }
+    }
+
+    if (vault.chain_type === ChainType.robinhood) {
+      // A broadcast contribution may not have produced asset rows yet.
+      const hasInFlightTx = await this.transactionRepository.exists({
+        where: {
+          vault_id: vault.id,
+          type: In([TransactionType.contribute, TransactionType.acquire]),
+          status: In([TransactionStatus.pending, TransactionStatus.submitted]),
+        },
+      });
+      if (hasInFlightTx) {
+        throw new BadRequestException('Vault cannot be cancelled while a contribution is being processed');
       }
     }
 
