@@ -40,6 +40,7 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
+import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
@@ -218,7 +219,8 @@ export class VaultsService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly claimsService: ClaimsService,
-    private readonly evmVaultSignerService: EvmVaultSignerService
+    private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly evmCycleCloseService: EvmCycleCloseService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -2592,6 +2594,10 @@ export class VaultsService {
 
     const hasRefundableFlows = contribCount > 0 || acquireCount > 0;
 
+    if (vault.chain_type === ChainType.robinhood) {
+      return this.cancelEvmVaultByOwner(vault, hasRefundableFlows);
+    }
+
     if (hasRefundableFlows) {
       const response = await this.vaultContractService.updateVaultMetadataTx({
         vault,
@@ -2605,6 +2611,50 @@ export class VaultsService {
       vault.last_update_tx_hash = response.txHash;
       vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
       vault.failure_details = { message: 'Cancelled by owner' };
+      vault.deactivated_at = new Date();
+      await this.vaultsRepository.save(vault);
+
+      return { success: true };
+    }
+
+    vault.deleted = true;
+    vault.deactivated_at = new Date();
+    await this.vaultsRepository.save(vault);
+
+    return { success: true };
+  }
+
+  /**
+   * EVM (Robinhood) owner cancel. Broadcasts admin `cancelCurrentCycle()` when the
+   * vault's cycle is live on-chain. Owner's own contributions are then refunded by
+   * EvmRefundOrchestrator (it picks up vaults with `evm_cancel_cycle_tx_hash`).
+   * Without contributions the vault is just soft-deleted, same as Cardano.
+   */
+  private async cancelEvmVaultByOwner(vault: Vault, hasRefundableFlows: boolean): Promise<{ success: boolean }> {
+    let cancelTxHash: string | undefined;
+
+    if (vault.contract_address && !vault.evm_cancel_cycle_tx_hash) {
+      try {
+        const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(vault.id, 'Cancelled by owner');
+        cancelTxHash = txHash;
+        vault.evm_cancel_cycle_tx_hash = txHash;
+      } catch (err) {
+        // Contributions sit on-chain — they can't be refunded without a cancelled cycle.
+        if (hasRefundableFlows) {
+          this.logger.error(`Owner cancel: cancelCurrentCycle failed for vault ${vault.id}: ${(err as Error).message}`);
+          throw new BadRequestException('Failed to cancel vault on-chain. Please try again later.');
+        }
+        // Empty vault: nothing to refund, backend never signs contributions for a deleted vault.
+        this.logger.warn(`Owner cancel: skipping on-chain cancel for empty vault ${vault.id}: ${(err as Error).message}`);
+      }
+    }
+
+    if (hasRefundableFlows) {
+      vault.vault_status = VaultStatus.failed;
+      vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+      vault.last_update_tx_hash = cancelTxHash ?? vault.evm_cancel_cycle_tx_hash;
+      vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
+      vault.failure_details = { message: 'Cancelled by owner', chainType: ChainType.robinhood };
       vault.deactivated_at = new Date();
       await this.vaultsRepository.save(vault);
 
