@@ -18,7 +18,8 @@ export class PresaleController {
   @Get('state')
   @ApiDoc({
     summary: 'Cached presale contract state',
-    description: 'Phase, caps, prices and per-wallet limits. uint256 values are decimal strings.',
+    description:
+      'Phase, the four-tranche price ladder, ETH contribution bands and the sale window. uint256 values are decimal strings.',
     status: 200,
   })
   @Header('Cache-Control', 'public, max-age=5, stale-while-revalidate=30')
@@ -28,7 +29,7 @@ export class PresaleController {
 
   @Get('purchases')
   @ApiDoc({
-    summary: 'Recent TokensPurchased events',
+    summary: 'Recent Purchased events',
     description: 'Most recent purchases (capped) plus all-time L4VA/ETH totals.',
     status: 200,
   })
