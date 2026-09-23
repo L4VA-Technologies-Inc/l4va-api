@@ -92,6 +92,13 @@ import { VoteType } from '@/types/vote.types';
 /** `address(0)` — native asset sentinel on EVM vaults. */
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+/**
+ * How long an unpaid index re-weight keeps the vault's single re-weight slot.
+ * Long enough to cover paying the governance fee, short enough that a proposal
+ * nobody ever pays for does not block the vault.
+ */
+const UNPAID_REWEIGHT_GRACE_MS = 60 * 60_000;
+
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
@@ -2150,16 +2157,10 @@ export class GovernanceService {
         }
 
         const indexVault = await this.indexVaultService.requireIndexVault(vaultId);
-        const activeReweight = await this.proposalRepository.findOne({
-          where: {
-            vaultId,
-            proposalType: ProposalType.INDEX_REWEIGHT,
-            status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING, ProposalStatus.PASSED]),
-          },
-        });
-        if (activeReweight) {
+        const openReweight = await this.findOpenReweight(vaultId);
+        if (openReweight) {
           throw new BadRequestException(
-            `Only one re-weight proposal can be open at a time. Wait for "${activeReweight.title}" to finish.`
+            `Only one re-weight proposal can be open at a time. Wait for "${openReweight.title}" to finish.`
           );
         }
 
@@ -2937,6 +2938,20 @@ export class GovernanceService {
       throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
     }
 
+    // Re-check the one-open-re-weight invariant before the fee is taken: the
+    // proposal may have been created while nothing else was open, and another
+    // re-weight may have gone live since. Checked ahead of payment verification
+    // so the caller is refused before anything of theirs is consumed.
+    if (proposal.proposalType === ProposalType.INDEX_REWEIGHT) {
+      const openReweight = await this.findOpenReweight(proposal.vaultId);
+      if (openReweight && openReweight.id !== proposalId) {
+        throw new BadRequestException(
+          `Another re-weight proposal ("${openReweight.title}") is already open for this vault. ` +
+            'Delete this proposal or wait for that one to finish.'
+        );
+      }
+    }
+
     // Get pending payment metadata
     const pendingPayment = proposal.metadata?._pendingPayment;
     if (!pendingPayment) {
@@ -3144,6 +3159,28 @@ export class GovernanceService {
       message: 'Payment submitted and proposal activated successfully',
       txHash,
     };
+  }
+
+  /**
+   * The one re-weight a vault may have in flight, if any.
+   *
+   * Index re-weights carry an EVM governance fee, so a proposal sits in UNPAID
+   * until it is paid for. Those count as open too — otherwise a caller could
+   * stack several unpaid re-weights and pay them all into ACTIVE, and the
+   * vault would trade to two different baskets. An unpaid row stops blocking
+   * once its payment window has passed, so an abandoned draft cannot freeze
+   * re-weights for the vault forever.
+   */
+  private async findOpenReweight(vaultId: string): Promise<Proposal | null> {
+    const open = await this.proposalRepository.find({
+      where: {
+        vaultId,
+        proposalType: ProposalType.INDEX_REWEIGHT,
+        status: In([ProposalStatus.UNPAID, ProposalStatus.ACTIVE, ProposalStatus.UPCOMING, ProposalStatus.PASSED]),
+      },
+    });
+    const unpaidCutoff = Date.now() - UNPAID_REWEIGHT_GRACE_MS;
+    return open.find(p => p.status !== ProposalStatus.UNPAID || new Date(p.createdAt).getTime() > unpaidCutoff) ?? null;
   }
 
   /**

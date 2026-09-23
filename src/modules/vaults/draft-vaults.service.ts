@@ -21,6 +21,7 @@ import { TokenVerification } from '@/database/token-verification.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetValuationMethod } from '@/types/asset.types';
+import { VaultArchetype } from '@/types/index-vault.types';
 
 @Injectable()
 export class DraftVaultsService {
@@ -238,7 +239,12 @@ export class DraftVaultsService {
       if (data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation;
       if (data.isExpandableAssetWhitelist !== undefined)
         vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist;
-      if (data.vaultArchetype) vaultData.vault_archetype = data.vaultArchetype;
+      // An explicit null clears the archetype back to standard; leaving it set
+      // while `indexBasket: null` wipes index_config below would save a draft
+      // that claims to be an index vault with no basket.
+      if (data.vaultArchetype !== undefined) {
+        vaultData.vault_archetype = data.vaultArchetype ?? VaultArchetype.standard;
+      }
       if (data.indexBasket !== undefined) {
         // Unvalidated draft basket (version 0); launch re-resolves it from scratch.
         vaultData.index_config = data.indexBasket

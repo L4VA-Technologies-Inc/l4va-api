@@ -33,6 +33,17 @@ export interface SwapResult {
   fee: bigint;
 }
 
+/** Decoded `Vault.Swapped` payload. */
+interface SwappedArgs {
+  operationId: Hex;
+  adapter: Address;
+  assetIn: Address;
+  amountIn: bigint;
+  assetOut: Address;
+  grossOut: bigint;
+  fee: bigint;
+}
+
 const PROTOCOL_FEE_CONFIG_ABI = [
   {
     type: 'function',
@@ -91,11 +102,15 @@ export class EvmSwapService {
     );
 
     let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
+    // Set only once writeContract returned a hash: a failure before that point
+    // never reached the chain and must not be left for the health sweep.
+    const broadcast: { hash?: Hex } = {};
     try {
       result = await this.adminSigner.sendAndConfirm(
         { address: vaultAddress, abi: VAULT_ABI, functionName: 'swap', args: [params] },
         ['Swapped'],
         async hash => {
+          broadcast.hash = hash;
           await this.transactionsRepository.update(
             { id: adminTx.id },
             { tx_hash: hash, status: TransactionStatus.submitted }
@@ -103,14 +118,15 @@ export class EvmSwapService {
         }
       );
     } catch (err) {
-      await this.handleBroadcastError(adminTx.id, err);
+      await this.handleBroadcastError(adminTx.id, err, broadcast.hash);
       throw err;
     }
 
-    const evt = result.decodedEvents.find(
-      e => e.eventName === 'Swapped' && e.address.toLowerCase() === vaultAddress.toLowerCase()
-    );
-    const args = evt?.args as { grossOut: bigint; fee: bigint } | undefined;
+    // A successful receipt is not proof this swap happened: the signer decodes
+    // generically and leaves every argument for the caller to check. Without
+    // a matching `Swapped` we would record a confirmed trade with zero output
+    // and let the rebalance move on as if the leg had filled.
+    const args = await this.requireSwappedEvent(adminTx.id, result, vaultAddress, params);
 
     await this.transactionsRepository.update(
       { id: adminTx.id },
@@ -124,9 +140,54 @@ export class EvmSwapService {
 
     this.logger.log(
       `swap confirmed vault=${vaultId} ${params.assetIn}→${params.assetOut} in=${params.amountIn} ` +
-        `grossOut=${args?.grossOut} fee=${args?.fee} tx=${result.hash}`
+        `grossOut=${args.grossOut} fee=${args.fee} tx=${result.hash}`
     );
-    return { txHash: result.hash, grossOut: args?.grossOut ?? 0n, fee: args?.fee ?? 0n };
+    return { txHash: result.hash, grossOut: args.grossOut, fee: args.fee };
+  }
+
+  /**
+   * Find the vault's own `Swapped` log for exactly the payload we broadcast.
+   * Every field the vault echoes is compared, so a log from another operation
+   * in the same transaction (or from a contract that merely shares the ABI)
+   * can never be mistaken for this leg.
+   */
+  private async requireSwappedEvent(
+    adminTxId: string,
+    result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>,
+    vaultAddress: Address,
+    params: SwapParams
+  ): Promise<SwappedArgs> {
+    const sameAddress = (a: unknown, b: string): boolean => String(a).toLowerCase() === b.toLowerCase();
+
+    const match = result.decodedEvents.find(e => {
+      if (e.eventName !== 'Swapped' || !sameAddress(e.address, vaultAddress)) return false;
+      const a = e.args as Partial<SwappedArgs>;
+      return (
+        sameAddress(a.operationId, params.operationId) &&
+        sameAddress(a.adapter, params.adapter) &&
+        sameAddress(a.assetIn, params.assetIn) &&
+        sameAddress(a.assetOut, params.assetOut) &&
+        a.amountIn === params.amountIn
+      );
+    });
+
+    if (!match) {
+      const reason =
+        `tx ${result.hash} succeeded without a Swapped event matching operationId=${params.operationId} ` +
+        `adapter=${params.adapter} ${params.assetIn}→${params.assetOut} in=${params.amountIn}`;
+      await this.transactionsRepository.update(
+        { id: adminTxId },
+        {
+          status: TransactionStatus.confirmed,
+          reconciliation_status: EvmReconciliationStatus.manual_review_required,
+          reconciliation_last_error: reason.slice(0, 500),
+        }
+      );
+      this.logger.error(`swap event check failed: ${reason}`);
+      throw new Error(reason);
+    }
+
+    return match.args as unknown as SwappedArgs;
   }
 
   async isOperationIdUsed(vaultAddress: Address, operationId: Hex): Promise<boolean> {
@@ -166,7 +227,7 @@ export class EvmSwapService {
     return vault;
   }
 
-  private async handleBroadcastError(adminTxId: string, err: unknown): Promise<void> {
+  private async handleBroadcastError(adminTxId: string, err: unknown, broadcastHash?: Hex): Promise<void> {
     if (err instanceof TxRevertedError) {
       await this.transactionsRepository.update(
         { id: adminTxId },
@@ -177,11 +238,30 @@ export class EvmSwapService {
           reconciliation_last_error: `swap reverted: ${err.message.slice(0, 500)}`,
         }
       );
-    } else {
+      return;
+    }
+
+    const message = (err as Error).message?.slice(0, 500);
+    if (!broadcastHash) {
+      // Simulation / nonce / RPC failure before the transaction existed. The
+      // health sweep only follows rows that carry a hash, so leaving this one
+      // `pending` would orphan it forever; nothing is on chain to reconcile.
       await this.transactionsRepository.update(
         { id: adminTxId },
-        { reconciliation_last_error: `broadcast/receipt: ${(err as Error).message?.slice(0, 500)}` }
+        {
+          status: TransactionStatus.failed,
+          reconciliation_status: EvmReconciliationStatus.failed,
+          reconciliation_last_error: `swap not broadcast: ${message}`,
+        }
       );
+      return;
     }
+
+    // Broadcast but no receipt yet (timeout). Stays `submitted` with its hash
+    // so the health sweep can settle it from chain.
+    await this.transactionsRepository.update(
+      { id: adminTxId },
+      { reconciliation_last_error: `broadcast/receipt: ${message}` }
+    );
   }
 }

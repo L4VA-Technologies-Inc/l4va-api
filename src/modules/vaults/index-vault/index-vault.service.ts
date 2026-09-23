@@ -245,14 +245,11 @@ export class IndexVaultService {
   }> {
     const vault = await this.requireIndexVault(vaultId);
     if (!vault.contract_address) throw new BadRequestException('Vault is not deployed yet');
-    const error = validateWeights({
-      weightsBps: items.map(i => Number(i.weightBps)),
-      maxAssets: INDEX_MAX_ASSETS,
-      minWeightBps: INDEX_MIN_WEIGHT_BPS,
-    });
-    if (error) throw new BadRequestException(error);
 
-    const targets: WeightTarget[] = items.map(i => ({ asset: i.assetAddress.toLowerCase(), weightBps: i.weightBps }));
+    // Resolved exactly as a re-weight proposal would resolve it, so a basket
+    // that previews cleanly is a basket that can actually be submitted.
+    const resolved = await this.resolveBasket(items);
+    const targets: WeightTarget[] = resolved.map(t => ({ asset: t.assetAddress, weightBps: t.weightBps }));
     const opts = this.planOptions(vault.index_config, reserveBps);
     const state = await this.readState(
       vault.contract_address as Address,
@@ -510,32 +507,9 @@ export class IndexVaultService {
 
       // Runs of one vault must never interleave: each plans from the live
       // portfolio, so two concurrent runs would size trades against balances
-      // the other is changing. The in-process lock above only covers this replica.
-      const concurrent = await this.rebalanceRepository
-        .createQueryBuilder('r')
-        .where('r.vault_id = :vaultId AND r.id <> :id', { vaultId, id: run.id })
-        .andWhere('r.status = :executing AND r.updated_at >= :stale', {
-          executing: IndexRebalanceStatus.executing,
-          stale: new Date(Date.now() - STALE_EXECUTING_MS),
-        })
-        .getCount();
-      if (concurrent > 0) throw new Error(`Another rebalance is executing for vault ${vaultId}; retry later`);
-
-      // Cross-replica gate: only one worker may move a run into `executing`. A
-      // run stuck in `executing` past the stale window belonged to a crashed
-      // worker; its legs are settled against chain before anything re-trades.
-      const gate = await this.rebalanceRepository
-        .createQueryBuilder()
-        .update(EvmIndexRebalance)
-        .set({ status: IndexRebalanceStatus.executing, attempts: run.attempts + 1, last_error: null })
-        .where('id = :id', { id: run.id })
-        .andWhere('(status IN (:...open) OR (status = :executing AND updated_at < :stale))', {
-          open: [IndexRebalanceStatus.pending, IndexRebalanceStatus.failed],
-          executing: IndexRebalanceStatus.executing,
-          stale: new Date(Date.now() - STALE_EXECUTING_MS),
-        })
-        .execute();
-      if ((gate.affected ?? 0) === 0) return run;
+      // the other is changing. The in-process lock above only covers this
+      // replica, so the claim below is made under a vault-wide database lock.
+      if (!(await this.claimRebalanceSlot(run, vaultId))) return run;
       run.status = IndexRebalanceStatus.executing;
       run.attempts += 1;
 
@@ -629,6 +603,76 @@ export class IndexVaultService {
   }
 
   /**
+   * Move this run into `executing`, or refuse because the vault is busy.
+   *
+   * The whole decision — expire abandoned runs, look for a live one, take the
+   * slot — happens inside one transaction that holds a write lock on the vault
+   * row, so two replicas planning different runs of the same vault (an initial
+   * buy and a governance re-weight, say) can never both pass the check. A run
+   * left `executing` by a crashed worker no longer owns the vault once its
+   * stale window has passed; its legs are settled against chain by
+   * {@link settleStaleLegs} before anything re-trades.
+   *
+   * @returns false when the run is already finished or another worker took it.
+   */
+  private async claimRebalanceSlot(run: EvmIndexRebalance, vaultId: string): Promise<boolean> {
+    const staleBefore = new Date(Date.now() - STALE_EXECUTING_MS);
+    const queryRunner = this.rebalanceRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager
+        .createQueryBuilder(Vault, 'v')
+        .setLock('pessimistic_write')
+        .where('v.id = :vaultId', { vaultId })
+        .getOne();
+
+      await queryRunner.manager
+        .createQueryBuilder()
+        .update(EvmIndexRebalance)
+        .set({ status: IndexRebalanceStatus.failed, last_error: 'abandoned: worker stopped mid-run' })
+        .where('vault_id = :vaultId AND status = :executing AND updated_at < :staleBefore', {
+          vaultId,
+          executing: IndexRebalanceStatus.executing,
+          staleBefore,
+        })
+        .execute();
+
+      const live = await queryRunner.manager
+        .createQueryBuilder(EvmIndexRebalance, 'r')
+        .where('r.vault_id = :vaultId AND r.id <> :id AND r.status = :executing', {
+          vaultId,
+          id: run.id,
+          executing: IndexRebalanceStatus.executing,
+        })
+        .getCount();
+      if (live > 0) {
+        await queryRunner.commitTransaction();
+        throw new Error(`Another rebalance is executing for vault ${vaultId}; retry later`);
+      }
+
+      const claimed = await queryRunner.manager
+        .createQueryBuilder()
+        .update(EvmIndexRebalance)
+        .set({ status: IndexRebalanceStatus.executing, attempts: () => '"attempts" + 1', last_error: null })
+        .where('id = :id AND status IN (:...open)', {
+          id: run.id,
+          open: [IndexRebalanceStatus.pending, IndexRebalanceStatus.failed],
+        })
+        .execute();
+
+      await queryRunner.commitTransaction();
+      return (claimed.affected ?? 0) > 0;
+    } catch (err) {
+      if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
    * Before re-planning a phase, resolve legs left over from a previous attempt.
    * A leg the vault already consumed landed (receipt lost) and is adopted; an
    * unconsumed leg past its deadline can no longer trade and is superseded by
@@ -716,8 +760,15 @@ export class IndexVaultService {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  /**
+   * Every index route resolves its vault through here. Drafts and deleted rows
+   * are invisible: the basket of an unpublished draft is its owner's private
+   * configuration and is served only by the authenticated draft endpoint.
+   */
   async requireIndexVault(vaultId: string): Promise<Vault> {
-    const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId, deleted: false, vault_status: Not(VaultStatus.draft) },
+    });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
     if (vault.vault_archetype !== VaultArchetype.index_weighted) {
       throw new BadRequestException('This vault is not an index-weighted vault');

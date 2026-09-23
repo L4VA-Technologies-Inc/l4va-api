@@ -563,8 +563,10 @@ export class VaultsService {
         if (data.chainType !== ChainType.robinhood) {
           throw new BadRequestException('Index-weighted vaults are only available on Robinhood Chain');
         }
-        if (!data.isAcquireOnly) {
-          throw new BadRequestException('Index-weighted vaults must use the acquire-only preset');
+        if (!data.isAcquireOnly || Number(data.tokensForAcquires) !== 100) {
+          throw new BadRequestException(
+            'Index-weighted vaults must use the acquire-only preset with 100% of tokens for acquirers'
+          );
         }
         if (!data.indexBasket?.targets?.length) {
           throw new BadRequestException('Index-weighted vaults need a target basket');

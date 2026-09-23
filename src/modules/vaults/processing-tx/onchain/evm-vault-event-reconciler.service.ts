@@ -12,6 +12,7 @@ import { Claim } from '@/database/claim.entity';
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmExternalPosition, EvmPositionStatus } from '@/database/evm-external-position.entity';
+import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -20,6 +21,7 @@ import { Vault } from '@/database/vault.entity';
 import { AssetStatus } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { IndexLegStatus, IndexRebalanceStatus } from '@/types/index-vault.types';
 import { ExpectedEventSpec, TransactionStatus } from '@/types/transaction.types';
 
 export interface VaultLogInput {
@@ -74,6 +76,7 @@ export class EvmVaultEventReconciler {
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     @InjectRepository(Asset) private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(EvmExternalPosition) private readonly positionsRepository: Repository<EvmExternalPosition>,
+    @InjectRepository(EvmIndexRebalance) private readonly rebalancesRepository: Repository<EvmIndexRebalance>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly cycleCloseService: EvmCycleCloseService
@@ -159,6 +162,11 @@ export class EvmVaultEventReconciler {
             break;
           case 'PositionClosed':
             await this.handlePositionClosed(vault, log, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
+          case 'Swapped':
+            await this.handleSwapped(vault, log, decoded.args);
             recordApplied(log.txHash, decoded.eventName);
             processed++;
             break;
@@ -731,6 +739,48 @@ export class EvmVaultEventReconciler {
       .where('p.vault_id = :vaultId', { vaultId })
       .andWhere("p.metadata -> 'evmDistribution' ->> 'distributionId' = :did", { did: distributionId })
       .getOne();
+  }
+
+  /**
+   * Index-vault basket trade. The swap service is the primary writer; this is
+   * the durable path for a swap whose receipt never came back (RPC timeout
+   * after broadcast), which would otherwise leave the transaction row
+   * unreconciled forever with its `Swapped` expectation unmet.
+   *
+   * The leg is adopted only while no worker owns the run — an executing run
+   * rewrites the whole `legs` array as it plans, and a write from here could
+   * clobber it. An executing run's own retry re-adopts the leg from chain via
+   * `isSwapOperationIdUsed`, so nothing is lost by leaving it alone.
+   */
+  private async handleSwapped(vault: Vault, log: VaultLogInput, args: Record<string, unknown>): Promise<void> {
+    const operationId = String(args.operationId ?? '').toLowerCase();
+    if (!operationId) return;
+
+    const run = await this.rebalancesRepository
+      .createQueryBuilder('r')
+      .where('r.vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere('r.legs @> :probe::jsonb', { probe: JSON.stringify([{ operationId }]) })
+      .getOne();
+
+    if (!run) {
+      this.logger.log(`Vault ${vault.id}: Swapped ${operationId} matches no rebalance leg (tx=${log.txHash})`);
+      return;
+    }
+    if (run.status === IndexRebalanceStatus.executing) {
+      this.logger.log(`Vault ${vault.id}: Swapped ${operationId} left to the running rebalance ${run.id}`);
+      return;
+    }
+
+    const leg = run.legs.find(l => l.operationId?.toLowerCase() === operationId);
+    if (!leg || leg.status === IndexLegStatus.confirmed) return;
+
+    leg.status = IndexLegStatus.confirmed;
+    leg.txHash = log.txHash;
+    leg.grossOut = String(args.grossOut ?? '0');
+    leg.fee = String(args.fee ?? '0');
+    leg.error = 'adopted: Swapped reconciled from chain';
+    await this.rebalancesRepository.update({ id: run.id }, { legs: run.legs });
+    this.logger.log(`Vault ${vault.id}: adopted leg ${leg.index} of rebalance ${run.id} from ${log.txHash}`);
   }
 
   private async handleTerminationEvent(
