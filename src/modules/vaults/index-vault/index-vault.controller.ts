@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
-import { ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 import { IndexBasketReq } from './dto/index-basket.dto';
 import { IndexVaultService } from './index-vault.service';
 
 import { AdminGuard } from '@/modules/auth/admin.guard';
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
 @ApiTags('Index vaults')
 @Controller('vaults')
@@ -21,7 +22,13 @@ export class IndexVaultController {
   }
 
   @Post(':id/index/preview')
-  @ApiOperation({ summary: 'Estimate the trades a re-weight to this basket would make' })
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Estimate the trades a re-weight to this basket would make',
+    description:
+      'Resolves every basket asset on chain and reads the live portfolio, so it is restricted to authenticated callers.',
+  })
   previewReweight(
     @Param('id', ParseUUIDPipe) vaultId: string,
     @Body() body: IndexBasketReq
