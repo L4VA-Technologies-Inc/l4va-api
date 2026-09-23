@@ -1,6 +1,7 @@
 import { Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { NftFlagsResponseDto } from './dto/nft-flags-response.dto';
 import { SystemSettingsResponseDto } from './dto/settings-response.dto';
 import { VlrmFeeResponseDto } from './dto/vlrm-fee-response.dto';
 import { SystemSettingsService } from './system-settings.service';
@@ -30,6 +31,24 @@ export class SystemSettingsController {
     return {
       vlrm_creator_fee: this.systemSettingsService.vlrmCreatorFee / 10000,
       vlrm_creator_fee_enabled: this.systemSettingsService.vlrmCreatorFeeEnabled,
+    };
+  }
+
+  @Get('nft-flags')
+  @UseGuards(AuthGuard)
+  @ApiDoc({
+    summary: 'Get NFT asset feature flags',
+    description: 'Returns whether NFT assets are enabled on EVM (Robinhood-chain) vaults',
+    status: 200,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'NFT feature flags',
+    type: NftFlagsResponseDto,
+  })
+  getNftFlags(): NftFlagsResponseDto {
+    return {
+      evm_nft_assets_enabled: this.systemSettingsService.evmNftAssetsEnabled,
     };
   }
 

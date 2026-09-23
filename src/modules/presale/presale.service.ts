@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { createPublicClient, defineChain, http, getAddress, type Address } from 'viem';
 
-import { PRESALE_ABI } from './presale.abi';
+import { PRESALE_ABI, TRANCHE_COUNT } from './presale.abi';
 
 const MULTICALL3_ADDRESS: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
 const LOG_CHUNK_BLOCKS = 50_000n;
@@ -11,43 +11,69 @@ const MAX_FEED_ROWS = 50;
 /** Cap the first-run backfill so a bad deploy-block can't trigger a full-chain walk. */
 const MAX_LOOKBACK_BLOCKS = 500_000n;
 
+/**
+ * Scalar reads batched into one multicall. `trancheState` returns a tuple of
+ * arrays rather than a single word, so it is appended separately below.
+ */
 const STATE_FIELDS = [
   'phase',
   'totalSold',
   'hardCapL4va',
   'remainingL4va',
   'ethUsdPrice',
-  'usdPriceWl',
-  'usdPricePublic',
-  'maxPerWalletWl',
-  'maxPerWalletPublic',
-  'minPerPurchaseWl',
-  'minPerPurchasePublic',
-  'wlEndsAt',
-  'publicEndsAt',
+  'currentTranche',
+  'remainingInCurrentTranche',
+  'wlDiscountBps',
+  'minEthTranche1',
+  'maxEthTranche1',
+  'minEthLate',
+  'maxEthLate',
+  'saleEndsAt',
+  'saleDuration',
 ] as const;
 
 type StateField = (typeof STATE_FIELDS)[number];
+
+/** Fields that are small enums/indices and stay as JS numbers, not strings. */
+const NUMERIC_FIELDS = new Set<StateField>(['phase', 'currentTranche']);
+
+/** One rung of the price ladder. All uint256 values are decimal strings. */
+export interface TrancheRow {
+  index: number;
+  /** USD per 1 L4VA, 1e18-scaled. $0.0027 is "2700000000000". */
+  priceUsd: string;
+  /** L4VA offered in this tranche (raw 18-dec units). */
+  supply: string;
+  /** L4VA already sold out of this tranche. */
+  sold: string;
+}
 
 export interface PresaleState {
   configured: boolean;
   address: string | null;
   chainId: number;
+  /** 0 = INACTIVE, 1 = ACTIVE, 2 = ENDED. */
   phase: number;
   /** uint256 values as decimal strings (wei / 1e18-scaled USD). */
   totalSold: string;
   hardCapL4va: string;
   remainingL4va: string;
   ethUsdPrice: string;
-  usdPriceWl: string;
-  usdPricePublic: string;
-  maxPerWalletWl: string;
-  maxPerWalletPublic: string;
-  minPerPurchaseWl: string;
-  minPerPurchasePublic: string;
-  /** Unix seconds; "0" means the phase closes manually rather than on a clock. */
-  wlEndsAt: string;
-  publicEndsAt: string;
+  /** 0-based index of the tranche currently being filled. */
+  currentTranche: number;
+  remainingInCurrentTranche: string;
+  /** Whitelist discount in basis points; applies in every tranche. */
+  wlDiscountBps: string;
+  tranches: TrancheRow[];
+  /** ETH contribution band while tranche 1 is active (wei). */
+  minEthTranche1: string;
+  maxEthTranche1: string;
+  /** ETH contribution band from tranche 2 onwards (wei). */
+  minEthLate: string;
+  maxEthLate: string;
+  /** Unix seconds; "0" means the sale closes manually rather than on a clock. */
+  saleEndsAt: string;
+  saleDuration: string;
   updatedAt: number | null;
 }
 
@@ -58,6 +84,11 @@ export interface PurchaseRow {
   buyer: string;
   l4vaAmount: string;
   ethPaid: string;
+  /** Tranche the fill started and finished in; they differ on a cross-tranche buy. */
+  startTranche: number;
+  endTranche: number;
+  /** Whether the buyer was whitelisted (and so discounted) at purchase time. */
+  whitelisted: boolean;
   /** Block timestamp in ms, resolved lazily; null until known. */
   timestamp: number | null;
 }
@@ -161,7 +192,7 @@ export class PresaleService implements OnModuleInit {
   async refreshState(): Promise<void> {
     if (!this.address) return;
     try {
-      const contracts = STATE_FIELDS.map(functionName => ({
+      const contracts = [...STATE_FIELDS, 'trancheState'].map(functionName => ({
         address: this.address as Address,
         abi: PRESALE_ABI,
         functionName,
@@ -176,12 +207,24 @@ export class PresaleService implements OnModuleInit {
         const r = results[i];
         if (r?.status === 'success' && r.result !== undefined && r.result !== null) {
           anyOk = true;
-          nextRecord[field] = field === 'phase' ? Number(r.result) : (r.result as bigint).toString();
+          nextRecord[field] = NUMERIC_FIELDS.has(field)
+            ? Number(r.result)
+            : (r.result as bigint).toString();
         } else if (this.state.updatedAt) {
           // Keep the last good value for a field that reverted this round.
           nextRecord[field] = prevRecord[field];
         }
       });
+
+      // `trancheState` is the last entry, decoded out of band because it
+      // returns three uint256[4] arrays rather than a single word.
+      const ladder = results[STATE_FIELDS.length];
+      if (ladder?.status === 'success' && ladder.result) {
+        anyOk = true;
+        next.tranches = this.toTranches(ladder.result as [bigint[], bigint[], bigint[], number]);
+      } else if (this.state.updatedAt) {
+        next.tranches = this.state.tranches;
+      }
 
       if (!anyOk) {
         this.logger.warn('Presale state multicall returned no successful reads; keeping previous snapshot.');
@@ -232,6 +275,9 @@ export class PresaleService implements OnModuleInit {
             buyer: log.args?.buyer ?? '0x',
             l4vaAmount: (log.args?.l4vaAmount ?? 0n).toString(),
             ethPaid: (log.args?.ethPaid ?? 0n).toString(),
+            startTranche: Number(log.args?.startTranche ?? 0),
+            endTranche: Number(log.args?.endTranche ?? 0),
+            whitelisted: Boolean(log.args?.whitelisted),
             timestamp: null,
           });
         }
@@ -336,6 +382,26 @@ export class PresaleService implements OnModuleInit {
     }
   }
 
+  /** Zip the contract's parallel price/supply/sold arrays into one row each. */
+  private toTranches(result: [bigint[], bigint[], bigint[], number]): TrancheRow[] {
+    const [prices, supplies, sold] = result;
+    return Array.from({ length: TRANCHE_COUNT }, (_, index) => ({
+      index,
+      priceUsd: (prices?.[index] ?? 0n).toString(),
+      supply: (supplies?.[index] ?? 0n).toString(),
+      sold: (sold?.[index] ?? 0n).toString(),
+    }));
+  }
+
+  private emptyTranches(): TrancheRow[] {
+    return Array.from({ length: TRANCHE_COUNT }, (_, index) => ({
+      index,
+      priceUsd: '0',
+      supply: '0',
+      sold: '0',
+    }));
+  }
+
   private emptyState(): PresaleState {
     return {
       configured: !!this.address,
@@ -346,14 +412,16 @@ export class PresaleService implements OnModuleInit {
       hardCapL4va: '0',
       remainingL4va: '0',
       ethUsdPrice: '0',
-      usdPriceWl: '0',
-      usdPricePublic: '0',
-      maxPerWalletWl: '0',
-      maxPerWalletPublic: '0',
-      minPerPurchaseWl: '0',
-      minPerPurchasePublic: '0',
-      wlEndsAt: '0',
-      publicEndsAt: '0',
+      currentTranche: 0,
+      remainingInCurrentTranche: '0',
+      wlDiscountBps: '0',
+      tranches: this.emptyTranches(),
+      minEthTranche1: '0',
+      maxEthTranche1: '0',
+      minEthLate: '0',
+      maxEthLate: '0',
+      saleEndsAt: '0',
+      saleDuration: '0',
       updatedAt: null,
     };
   }

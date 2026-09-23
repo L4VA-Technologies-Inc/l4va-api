@@ -18,6 +18,7 @@ import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { EvmContribution } from '@/database/evm-contribution.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -67,6 +68,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
       Proposal,
       Snapshot,
       TokenVerification,
+      EvmContribution,
     ]),
     HttpModule,
   ],
