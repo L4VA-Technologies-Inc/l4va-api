@@ -13,6 +13,7 @@ import { ResolvedVaultCreationSpec } from '@/modules/ai/spec/spec.types';
  */
 export const USER_SUPPLIED_NEEDS: Record<string, string> = {
   assetsWhitelist: 'the real asset collection to allow',
+  indexBasket: 'the tokens the index should hold and their weights',
   vaultImage: 'a vault image',
   ftTokenImg: 'a vault image',
   contributorWhitelist: 'the contributor whitelist',

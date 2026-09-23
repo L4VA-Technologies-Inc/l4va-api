@@ -3,12 +3,14 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 
 import { NftFlagsResponseDto } from './dto/nft-flags-response.dto';
 import { SystemSettingsResponseDto } from './dto/settings-response.dto';
+import { VaultCreationFlagsResponseDto } from './dto/vault-creation-flags-response.dto';
 import { VlrmFeeResponseDto } from './dto/vlrm-fee-response.dto';
 import { SystemSettingsService } from './system-settings.service';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
+import { ChainType } from '@/types/vault.types';
 
 @ApiTags('System Settings')
 @Controller('system-settings')
@@ -49,6 +51,29 @@ export class SystemSettingsController {
   getNftFlags(): NftFlagsResponseDto {
     return {
       evm_nft_assets_enabled: this.systemSettingsService.evmNftAssetsEnabled,
+    };
+  }
+
+  @Get('vault-creation-flags')
+  @UseGuards(AuthGuard)
+  @ApiDoc({
+    summary: 'Get the vault-creation feature flags',
+    description:
+      'What the create-vault flows may offer: NFT assets on EVM, and the vault archetypes available per chain.',
+    status: 200,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault creation flags',
+    type: VaultCreationFlagsResponseDto,
+  })
+  getVaultCreationFlags(): VaultCreationFlagsResponseDto {
+    return {
+      evm_nft_assets_enabled: this.systemSettingsService.evmNftAssetsEnabled,
+      vault_archetypes_enabled: {
+        [ChainType.cardano]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.cardano),
+        [ChainType.robinhood]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.robinhood),
+      },
     };
   }
 

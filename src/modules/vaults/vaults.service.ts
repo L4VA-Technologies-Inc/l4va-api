@@ -558,6 +558,17 @@ export class VaultsService {
       // Index-weighted vaults raise native only and buy the basket at lock, so
       // the basket is resolved (decimals, tradeability) before anything is saved.
       const isIndexVault = data.vaultArchetype === VaultArchetype.index_weighted;
+      const archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
+      // Which vault types a chain offers is operational policy, not a code
+      // constant: Robinhood is index-only until RWA and NFT vaults land there.
+      const chainType = data.chainType === ChainType.robinhood ? ChainType.robinhood : ChainType.cardano;
+      if (!this.systemSettingsService.isVaultArchetypeEnabled(chainType, archetype)) {
+        throw new BadRequestException(
+          `${archetype === VaultArchetype.index_weighted ? 'Index-weighted' : 'Standard'} vaults are not available on ` +
+            `${chainType === ChainType.robinhood ? 'Robinhood Chain' : 'Cardano'} right now`
+        );
+      }
+
       let indexConfig: IndexConfig | null = null;
       if (isIndexVault) {
         if (data.chainType !== ChainType.robinhood) {

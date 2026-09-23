@@ -1,3 +1,4 @@
+import { VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
 export type SpecChain = ChainType.cardano | ChainType.robinhood;
@@ -44,6 +45,18 @@ export interface ChainProfile {
   rules?: string[];
 }
 
+/**
+ * What changes when the vault is of a given archetype. An index-weighted vault
+ * raises native only and buys a basket, so several fields it shares with a
+ * standard vault are fixed rather than chosen.
+ */
+export interface ArchetypeProfile {
+  /** One line naming the product, rendered into the prompt's context block. */
+  summary: string;
+  fields?: Record<string, VaultFieldOverride>;
+  rules?: string[];
+}
+
 export interface VaultCreationSpec {
   /** Bump whenever fields or bounds change so clients can detect a stale cache. */
   version: string;
@@ -51,12 +64,16 @@ export interface VaultCreationSpec {
   fields: Record<string, VaultFieldSpec>;
   networkOverrides: Record<SpecNetwork, Record<string, VaultFieldOverride>>;
   chainProfiles: Record<SpecChain, ChainProfile>;
+  archetypeProfiles: Record<VaultArchetype, ArchetypeProfile>;
 }
 
 export interface ResolvedVaultCreationSpec {
   version: string;
   chain: SpecChain;
   network: SpecNetwork;
+  /** The only vault type this chain currently offers; the assistant never picks it. */
+  archetype: VaultArchetype;
+  archetypeSummary: string;
   currency: string;
   assetIdentifier: string;
   rules: string[];
