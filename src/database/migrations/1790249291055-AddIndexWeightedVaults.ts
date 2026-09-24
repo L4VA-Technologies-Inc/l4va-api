@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddIndexWeightedVaults1789500000000 implements MigrationInterface {
-  name = 'AddIndexWeightedVaults1789500000000';
+export class AddIndexWeightedVaults1790249291055 implements MigrationInterface {
+  name = 'AddIndexWeightedVaults1790249291055';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vaults" ADD "vault_archetype" character varying NOT NULL DEFAULT 'standard'`);
