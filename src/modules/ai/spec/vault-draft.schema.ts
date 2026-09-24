@@ -94,7 +94,7 @@ export function buildVaultDraftJsonSchema(
         description:
           'Two or three quick replies when the turn ends on a constrained decision, otherwise null. ' +
           'label is what the user sees; value is the reply sent on their behalf, or one of the reserved ' +
-          'UI actions "choose_assets" / "generate_image".',
+          'UI actions "choose_assets" / "choose_basket" / "generate_image" / "upload_image".',
         items: {
           type: 'object',
           additionalProperties: false,

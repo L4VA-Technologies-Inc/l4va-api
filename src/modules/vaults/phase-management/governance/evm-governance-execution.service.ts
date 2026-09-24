@@ -22,6 +22,7 @@ import { EvmDistributionService } from './evm-distribution.service';
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
+import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -63,6 +64,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly adapterRegistryService: EvmAdapterRegistryService,
     private readonly uniswapQuoteService: UniswapQuoteService,
     private readonly evmOpenCycleService: EvmOpenCycleService,
+    private readonly indexVaultService: IndexVaultService,
     configService: ConfigService
   ) {
     this.isTestnet = configService.get<string>('CARDANO_NETWORK') !== 'mainnet';
@@ -122,6 +124,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
       case ProposalType.ACQUIRE_EXPANSION:
         return this.executeEvmAcquireExpansion(proposal, vault);
+
+      case ProposalType.INDEX_REWEIGHT:
+        return this.indexVaultService.executeReweightProposal(proposal);
 
       default:
         this.logger.warn(`Proposal ${proposal.id}: unknown type ${proposal.proposalType} for EVM execution`);

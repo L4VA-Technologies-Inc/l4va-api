@@ -16,8 +16,10 @@ import { buildVaultDraftJsonSchema } from './spec/vault-draft.schema';
 import { VaultAiToolRegistry } from './tools/vault-ai-tool.registry';
 import { VaultAiToolContext } from './tools/vault-ai-tool.types';
 
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PresetsService } from '@/modules/presets/presets.service';
+import { VaultArchetype } from '@/types/index-vault.types';
 
 interface AssistantCompletion {
   message?: unknown;
@@ -78,7 +80,8 @@ export class VaultAssistantService {
     private readonly openAiClient: OpenAiClient,
     private readonly presetsService: PresetsService,
     private readonly storageService: GoogleCloudStorageService,
-    private readonly toolRegistry: VaultAiToolRegistry
+    private readonly toolRegistry: VaultAiToolRegistry,
+    private readonly systemSettingsService: SystemSettingsService
   ) {}
 
   async respond(userId: string, request: VaultAssistantMessageReq): Promise<VaultAssistantMessageRes> {
@@ -260,7 +263,12 @@ export class VaultAssistantService {
   }
 
   private async buildTurnContext(userId: string, request: VaultAssistantMessageReq): Promise<AssistantTurnContext> {
-    const spec = resolveVaultCreationSpec(request.chain as SpecChain, request.network);
+    // The assistant does not pick a vault type: it builds the one the chain
+    // currently offers. Robinhood is index-only until RWA and NFT vaults land,
+    // and that is operational config, not a constant.
+    const chain = request.chain as SpecChain;
+    const [archetype = VaultArchetype.standard] = this.systemSettingsService.vaultArchetypesEnabled(chain);
+    const spec = resolveVaultCreationSpec(chain, request.network, archetype);
 
     const presets = await this.presetsService.getAllPresets(userId);
     const presetContext: PresetContext[] = presets.map(preset => ({

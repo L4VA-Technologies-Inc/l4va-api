@@ -1,5 +1,6 @@
 import { VaultCreationSpec } from './spec.types';
 
+import { VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
 const DAY_MS = 86_400_000;
@@ -43,7 +44,7 @@ export const VAULT_TAGS = [
  * feeds the errors back for correction, so a stale spec costs an extra turn, not a bad vault.
  */
 export const VAULT_CREATION_SPEC: VaultCreationSpec = {
-  version: '1.2.0',
+  version: '1.3.0',
 
   rules: [
     'Percentages are whole-number percents (0-100), not basis points.',
@@ -185,6 +186,14 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       requiredWhen: 'isAcquireOnly is false',
       notApplicableIf: [{ field: 'isAcquireOnly', equals: true }],
       description: 'Allowed collections. Must be picked from verified collections in the form — never generated.',
+      aiEditable: false,
+    },
+    indexBasket: {
+      type: 'string',
+      step: 3,
+      description:
+        'Tokens an index-weighted vault buys when the acquire window locks, with their target weights. ' +
+        'Picked by the user from real tokens — never generated.',
       aiEditable: false,
     },
 
@@ -428,6 +437,34 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       rules: [
         'Robinhood Chain vaults are always public — never propose "private" or "semi-private".',
         'minAcquireThreshold is entered in ETH and may be fractional.',
+      ],
+    },
+  },
+
+  archetypeProfiles: {
+    [VaultArchetype.standard]: {
+      summary: 'Standard vault: contributors bring assets and acquirers fund it under the chosen preset.',
+    },
+    [VaultArchetype.index_weighted]: {
+      summary:
+        'Index-weighted vault: acquirers fund it in the native currency and, when the acquire window ' +
+        'locks, the vault buys a basket of tokens at the target weights the creator set.',
+      fields: {
+        // An index vault raises native and buys its own assets, so the shape of
+        // the raise is fixed: there is nothing for a contributor to bring.
+        isAcquireOnly: { default: true, description: 'Always true for an index vault.', aiEditable: false },
+        tokensForAcquires: { default: 100, description: 'Always 100 for an index vault.', aiEditable: false },
+        assetsWhitelist: { required: false, notApplicableIf: [{ field: 'isAcquireOnly', equals: true }] },
+        indexBasket: { required: true },
+        type: { values: ['cnt'], default: 'cnt', description: 'Always "cnt": the vault holds fungible tokens.' },
+      },
+      rules: [
+        'This is an index-weighted vault: it is always acquire-only with 100% of vault tokens for acquirers, ' +
+          'and it never has an asset contribution window or an asset whitelist. Never propose otherwise.',
+        'The basket — which tokens the vault buys and at what weights — is chosen by the user in the UI. ' +
+          'Never invent token addresses, symbols or weights, and offer the "choose_basket" option when it is ' +
+          'still missing.',
+        'Describe the vault in terms of the basket it will buy, not the assets people contribute.',
       ],
     },
   },

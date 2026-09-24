@@ -23,6 +23,7 @@ import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
 import { EvmPositionService } from './evm-position.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
+import { EvmSwapService } from './evm-swap.service';
 import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
 import { EvmTerminationService } from './evm-termination.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
@@ -41,6 +42,7 @@ import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContributionValuation } from '@/database/evm-contribution-valuation.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
+import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -74,6 +76,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
       EvmAllocation,
       EvmAssetPriceFeedEntity,
       EvmExternalPosition,
+      EvmIndexRebalance,
     ]),
   ],
   controllers: [BlockchainController],
@@ -97,6 +100,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmOpenCycleService,
     EvmFeeWithdrawService,
     EvmPositionService,
+    EvmSwapService,
     EvmTerminationPreflightService,
     EvmTerminationService,
     EvmAdapterRegistryService,
@@ -123,6 +127,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmOpenCycleService,
     EvmFeeWithdrawService,
     EvmPositionService,
+    EvmSwapService,
     EvmTerminationPreflightService,
     EvmTerminationService,
     EvmAdapterRegistryService,

@@ -20,6 +20,7 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import {
   EmptyAllocationError,
@@ -40,6 +41,7 @@ import { EvmCycleStatus, VAULT_ABI } from '@/modules/vaults/processing-tx/onchai
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -93,7 +95,8 @@ export class LifecycleService {
     private readonly evmAllocationService: EvmAllocationService,
     private readonly evmLockTimePricingService: EvmLockTimePricingService,
     private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
-    private readonly evmTerminationService: EvmTerminationService
+    private readonly evmTerminationService: EvmTerminationService,
+    private readonly indexVaultService: IndexVaultService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -121,6 +124,7 @@ export class LifecycleService {
       await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
       await this.handleEvmFeeWithdraw(); // EVM: sweep accrued protocol fees to treasury
       await this.handleEvmFinalizeTerminating(); // EVM: call finalizeTermination when all VT has been redeemed
+      await this.handleEvmIndexInitialBuys(); // EVM: buy the target basket for index vaults whose cycle just locked
     } finally {
       this.isRunning = false;
     }
@@ -2979,7 +2983,9 @@ export class LifecycleService {
       relations: ['assets_whitelist'],
     });
 
-    if (!vault || !vault.assets_whitelist?.length) {
+    // An index vault's whitelist lists the basket it will BUY after lock; nothing
+    // is ever contributed against it, so contribution caps do not apply.
+    if (!vault || !vault.assets_whitelist?.length || vault.vault_archetype === VaultArchetype.index_weighted) {
       return {
         isValid: true,
         thresholdViolations: [],
@@ -3099,6 +3105,21 @@ export class LifecycleService {
    * FALSE so the cron does nothing until pricing, reconciliation, and
    * webhook handlers are all wired up.
    */
+  /**
+   * Index-weighted vaults raise native and then buy their basket. Runs after
+   * `closeCycle` confirms, for the initial cycle and every acquire-expansion
+   * cycle alike; the rebalance is keyed per cycle, so a vault is invested once
+   * per cycle no matter how often this ticks.
+   */
+  private async handleEvmIndexInitialBuys(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      await this.indexVaultService.runPendingInitialBuys();
+    } catch (err) {
+      this.logger.error(`EVM index initial-buy sweep failed: ${(err as Error).message}`);
+    }
+  }
+
   private isEvmCycleAutomationEnabled(): boolean {
     const raw = process.env.EVM_CYCLE_AUTOMATION_ENABLED;
     return raw === undefined || raw === '' || raw === 'true' || raw === '1';

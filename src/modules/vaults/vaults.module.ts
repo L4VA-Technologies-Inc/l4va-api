@@ -30,6 +30,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
@@ -52,6 +53,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
     WayUpPricingModule,
     DexHunterModule,
     ClaimsModule,
+    IndexVaultModule,
     TypeOrmModule.forFeature([
       Vault,
       User,

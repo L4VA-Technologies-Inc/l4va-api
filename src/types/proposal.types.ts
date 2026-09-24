@@ -26,6 +26,8 @@ export enum ProposalType {
   EXPANSION = 'expansion',
   ACQUIRE_EXPANSION = 'acquire_expansion',
   ASSET_WHITELIST_UPDATE = 'asset_whitelist_update',
+  /** Index-weighted EVM vaults: replace the target basket and trade to it. */
+  INDEX_REWEIGHT = 'index_reweight',
 }
 
 export enum MarketplaceAction {

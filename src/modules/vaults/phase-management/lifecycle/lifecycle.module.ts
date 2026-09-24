@@ -17,6 +17,7 @@ import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { MarketModule } from '@/modules/market/market.module';
 import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { ContributionModule } from '@/modules/vaults/phase-management/contribution/contribution.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
@@ -48,6 +49,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     ]),
     ScheduleModule.forRoot(),
     BlockchainModule,
+    IndexVaultModule,
   ],
   providers: [LifecycleService],
   exports: [LifecycleService],

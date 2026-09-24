@@ -28,6 +28,9 @@ import { ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLi
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 
+import { IndexBasketItemDto } from '@/modules/vaults/index-vault/dto/index-basket.dto';
+import { VaultArchetype } from '@/types/index-vault.types';
+
 export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
@@ -429,4 +432,22 @@ export class SaveDraftReq {
   @IsBoolean()
   @Expose()
   isExpandableAssetWhitelist?: boolean | null;
+
+  @ApiProperty({ enum: VaultArchetype, required: false, nullable: true })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsEnum(VaultArchetype)
+  @Expose()
+  vaultArchetype?: VaultArchetype | null;
+
+  @ApiProperty({
+    description: 'Work-in-progress index basket. Validated only when the vault is launched.',
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsObject()
+  @Expose()
+  indexBasket?: { targets: IndexBasketItemDto[]; reserveBps: number } | null;
 }

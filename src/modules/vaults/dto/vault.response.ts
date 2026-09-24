@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
+import { IndexConfig, VaultArchetype } from '../../../types/index-vault.types';
 import {
   VaultPrivacy,
   VaultStatus,
@@ -205,6 +206,20 @@ export class VaultShortResponse {
     expose: { name: 'chainType' },
   })
   chainType: ChainType;
+
+  @ApiProperty({ description: 'Product archetype of the vault', enum: VaultArchetype })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'vaultArchetype' },
+  })
+  vaultArchetype: VaultArchetype;
+
+  @ApiProperty({ description: 'Target basket of an index-weighted vault', required: false, nullable: true })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'indexConfig' },
+  })
+  indexConfig?: IndexConfig | null;
 }
 
 export class VaultFullResponse extends VaultShortResponse {

@@ -37,6 +37,7 @@ import {
   VaultActivityItem,
 } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
@@ -69,6 +70,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -226,6 +228,7 @@ export class VaultsService {
     private readonly dexHunterService: DexHunterService,
     private readonly claimsService: ClaimsService,
     private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly indexVaultService: IndexVaultService,
     private readonly evmCycleCloseService: EvmCycleCloseService,
     private readonly evmContractReader: EvmContractReader,
     private readonly evmContributionBackfillService: EvmContributionBackfillService
@@ -552,6 +555,37 @@ export class VaultsService {
       const acquireOpenWindowTimeForDb = skipsAcquirePhase ? null : acquireOpenWindowTime;
       const contributionOpenWindowTimeForDb = data.isAcquireOnly ? null : contributionOpenWindowTime;
 
+      // Index-weighted vaults raise native only and buy the basket at lock, so
+      // the basket is resolved (decimals, tradeability) before anything is saved.
+      const isIndexVault = data.vaultArchetype === VaultArchetype.index_weighted;
+      const archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
+      // Which vault types a chain offers is operational policy, not a code
+      // constant: Robinhood is index-only until RWA and NFT vaults land there.
+      const chainType = data.chainType === ChainType.robinhood ? ChainType.robinhood : ChainType.cardano;
+      if (!this.systemSettingsService.isVaultArchetypeEnabled(chainType, archetype)) {
+        throw new BadRequestException(
+          `${archetype === VaultArchetype.index_weighted ? 'Index-weighted' : 'Standard'} vaults are not available on ` +
+            `${chainType === ChainType.robinhood ? 'Robinhood Chain' : 'Cardano'} right now`
+        );
+      }
+
+      let indexConfig: IndexConfig | null = null;
+      if (isIndexVault) {
+        if (data.chainType !== ChainType.robinhood) {
+          throw new BadRequestException('Index-weighted vaults are only available on Robinhood Chain');
+        }
+        if (!data.isAcquireOnly || Number(data.tokensForAcquires) !== 100) {
+          throw new BadRequestException(
+            'Index-weighted vaults must use the acquire-only preset with 100% of tokens for acquirers'
+          );
+        }
+        if (!data.indexBasket?.targets?.length) {
+          throw new BadRequestException('Index-weighted vaults need a target basket');
+        }
+        const targets = await this.indexVaultService.resolveBasket(data.indexBasket.targets);
+        indexConfig = this.indexVaultService.buildConfig(targets, data.indexBasket.reserveBps);
+      }
+
       if (data.chainType === ChainType.robinhood) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
         evmVaultId = keccak256(
@@ -582,6 +616,10 @@ export class VaultsService {
         delete vaultData.tags;
         delete vaultData.acquirer_whitelist_csv;
         delete vaultData.contributor_whitelist_csv;
+        delete vaultData.index_basket;
+        // Set after the snake-case transform, which would otherwise rewrite the config's own keys.
+        vaultData.vault_archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
+        vaultData.index_config = indexConfig;
         newVault = await this.vaultsRepository.save(vaultData as Vault);
       } else {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
@@ -1724,6 +1762,7 @@ export class VaultsService {
       reserveMet,
       isOfficialPartner,
       chainType,
+      vaultArchetype,
       search,
       page = 1,
       limit = 10,
@@ -1992,6 +2031,10 @@ export class VaultsService {
 
     if (chainType) {
       queryBuilder.andWhere('vault.chain_type = :chainType', { chainType });
+    }
+
+    if (vaultArchetype) {
+      queryBuilder.andWhere('vault.vault_archetype = :vaultArchetype', { vaultArchetype });
     }
 
     // Apply sorting

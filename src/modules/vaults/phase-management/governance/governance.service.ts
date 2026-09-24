@@ -51,6 +51,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
+import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -90,6 +91,13 @@ import { VoteType } from '@/types/vote.types';
 
 /** `address(0)` — native asset sentinel on EVM vaults. */
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/**
+ * How long an unpaid index re-weight keeps the vault's single re-weight slot.
+ * Long enough to cover paying the governance fee, short enough that a proposal
+ * nobody ever pays for does not block the vault.
+ */
+const UNPAID_REWEIGHT_GRACE_MS = 60 * 60_000;
 
 @Injectable()
 export class GovernanceService {
@@ -158,7 +166,8 @@ export class GovernanceService {
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
     private readonly evmSnapshotService: EvmSnapshotService,
-    private readonly uniswapQuoteService: UniswapQuoteService
+    private readonly uniswapQuoteService: UniswapQuoteService,
+    private readonly indexVaultService: IndexVaultService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -2137,6 +2146,35 @@ export class GovernanceService {
 
         break;
       }
+
+      case ProposalType.INDEX_REWEIGHT: {
+        const reweight = createProposalReq.indexReweight;
+        if (vault.chain_type !== ChainType.robinhood) {
+          throw new BadRequestException('Index re-weight proposals are only available on Robinhood vaults');
+        }
+        if (!reweight?.targets?.length) {
+          throw new BadRequestException('A re-weight proposal needs the new target basket');
+        }
+
+        const indexVault = await this.indexVaultService.requireIndexVault(vaultId);
+        const openReweight = await this.findOpenReweight(vaultId);
+        if (openReweight) {
+          throw new BadRequestException(
+            `Only one re-weight proposal can be open at a time. Wait for "${openReweight.title}" to finish.`
+          );
+        }
+
+        // Resolved now, not at execution: holders vote on exact assets and
+        // decimals, and a basket the adapter cannot trade is rejected up front.
+        const targets = await this.indexVaultService.resolveBasket(reweight.targets);
+        proposal.metadata.indexReweight = {
+          targets,
+          reserveBps: reweight.reserveBps,
+          previousTargets: indexVault.index_config?.targets ?? [],
+          previousReserveBps: indexVault.index_config?.reserveBps ?? null,
+        };
+        break;
+      }
     }
 
     // Check if governance fee is required for this proposal type.
@@ -2900,6 +2938,20 @@ export class GovernanceService {
       throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
     }
 
+    // Re-check the one-open-re-weight invariant before the fee is taken: the
+    // proposal may have been created while nothing else was open, and another
+    // re-weight may have gone live since. Checked ahead of payment verification
+    // so the caller is refused before anything of theirs is consumed.
+    if (proposal.proposalType === ProposalType.INDEX_REWEIGHT) {
+      const openReweight = await this.findOpenReweight(proposal.vaultId);
+      if (openReweight && openReweight.id !== proposalId) {
+        throw new BadRequestException(
+          `Another re-weight proposal ("${openReweight.title}") is already open for this vault. ` +
+            'Delete this proposal or wait for that one to finish.'
+        );
+      }
+    }
+
     // Get pending payment metadata
     const pendingPayment = proposal.metadata?._pendingPayment;
     if (!pendingPayment) {
@@ -3107,6 +3159,28 @@ export class GovernanceService {
       message: 'Payment submitted and proposal activated successfully',
       txHash,
     };
+  }
+
+  /**
+   * The one re-weight a vault may have in flight, if any.
+   *
+   * Index re-weights carry an EVM governance fee, so a proposal sits in UNPAID
+   * until it is paid for. Those count as open too — otherwise a caller could
+   * stack several unpaid re-weights and pay them all into ACTIVE, and the
+   * vault would trade to two different baskets. An unpaid row stops blocking
+   * once its payment window has passed, so an abandoned draft cannot freeze
+   * re-weights for the vault forever.
+   */
+  private async findOpenReweight(vaultId: string): Promise<Proposal | null> {
+    const open = await this.proposalRepository.find({
+      where: {
+        vaultId,
+        proposalType: ProposalType.INDEX_REWEIGHT,
+        status: In([ProposalStatus.UNPAID, ProposalStatus.ACTIVE, ProposalStatus.UPCOMING, ProposalStatus.PASSED]),
+      },
+    });
+    const unpaidCutoff = Date.now() - UNPAID_REWEIGHT_GRACE_MS;
+    return open.find(p => p.status !== ProposalStatus.UNPAID || new Date(p.createdAt).getTime() > unpaidCutoff) ?? null;
   }
 
   /**

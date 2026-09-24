@@ -4,6 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { SystemSettings } from '@/database/systemSettings.entity';
+import { VaultArchetype } from '@/types/index-vault.types';
+import { ChainType } from '@/types/vault.types';
 
 export interface SystemSettingsData {
   protocol_enabled: boolean;
@@ -29,6 +31,13 @@ export interface SystemSettingsData {
   // Allows disabling NFT (ERC721/ERC1155) assets on EVM (Robinhood-chain) vaults
   // without a contract change; Cardano NFT support is unaffected.
   evm_nft_assets_enabled: boolean;
+  /**
+   * Vault archetypes a creator may choose, per chain. Robinhood is limited to
+   * index-weighted vaults until RWA and NFT support lands there; Cardano has no
+   * index vaults at all. Both the create endpoint and the AI assistant read
+   * this, so a chain can be reopened without a deploy.
+   */
+  vault_archetypes_enabled: Record<string, VaultArchetype[]>;
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: number;
   governance_fee_proposal_distribution: number;
@@ -94,6 +103,10 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   acquire_enabled: true,
   governance_enabled: true,
   evm_nft_assets_enabled: false,
+  vault_archetypes_enabled: {
+    [ChainType.cardano]: [VaultArchetype.standard],
+    [ChainType.robinhood]: [VaultArchetype.index_weighted],
+  },
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: 5000000, // 5 ADA
   governance_fee_proposal_distribution: 5000000, // 5 ADA
@@ -422,6 +435,20 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   /**
+   * Archetypes a creator may pick on this chain, never empty: a chain with no
+   * configured entry falls back to standard vaults rather than to nothing,
+   * which would take vault creation down.
+   */
+  vaultArchetypesEnabled(chainType: ChainType): VaultArchetype[] {
+    const configured = this.settings.vault_archetypes_enabled?.[chainType];
+    return Array.isArray(configured) && configured.length > 0 ? configured : [VaultArchetype.standard];
+  }
+
+  isVaultArchetypeEnabled(chainType: ChainType, archetype: VaultArchetype): boolean {
+    return this.vaultArchetypesEnabled(chainType).includes(archetype);
+  }
+
+  /**
    * Get the fee for a specific proposal type
    * @param proposalType - The type of proposal
    * @returns Fee amount in lovelace
@@ -446,6 +473,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalExpansion;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdate;
+      case 'index_reweight':
+        return this.governanceFeeProposalMarketplaceAction;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;
@@ -478,6 +507,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalExpansionEvm;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdateEvm;
+      case 'index_reweight':
+        return this.governanceFeeProposalMarketplaceActionEvm;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return '0';

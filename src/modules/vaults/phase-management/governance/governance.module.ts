@@ -44,6 +44,7 @@ import { RedisModule } from '@/modules/redis/redis.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
@@ -78,6 +79,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     RewardsModule,
     WayUpPricingModule,
     TapToolsPricingModule,
+    IndexVaultModule,
   ],
   controllers: [GovernanceController, TerminationController],
   providers: [

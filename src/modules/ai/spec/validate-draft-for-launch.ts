@@ -1,6 +1,7 @@
 import { sanitizeVaultDraft } from './sanitize-draft';
 import { FieldCondition, ResolvedVaultCreationSpec } from './spec.types';
 
+import { BPS, INDEX_MAX_ASSETS, INDEX_MIN_WEIGHT_BPS, VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
 /** A single reason the vault cannot be launched, in a shape the assistant can act on directly. */
@@ -12,10 +13,11 @@ export interface LaunchBlocker {
   /**
    * Reserved UI action that resolves this blocker, if any:
    * - `choose_assets` — open the verified-collection picker
+   * - `choose_basket` — open the index basket editor
    * - `generate_image` / `upload_image` — the single vault image
    * A `null` action means the user has to resolve it in the manual vault form.
    */
-  action: 'choose_assets' | 'generate_image' | 'upload_image' | null;
+  action: 'choose_assets' | 'choose_basket' | 'generate_image' | 'upload_image' | null;
 }
 
 export interface LaunchValidationResult {
@@ -109,11 +111,47 @@ function isApplicable(conditions: readonly FieldCondition[] | undefined, view: R
  */
 const EXPLICITLY_CHECKED = new Set([
   'assetsWhitelist',
+  'indexBasket',
   'contributorWhitelist',
   'acquirerWhitelist',
   'vaultImage',
   'ftTokenImg',
 ]);
+
+/** Max share of the vault an index basket may hold back in native, in bps. */
+const INDEX_MAX_RESERVE_BPS = 5000;
+
+/**
+ * The same basket rules the client's `validateIndexBasket` and the create
+ * endpoint enforce, as a single user-facing sentence (or null when the basket
+ * can launch).
+ */
+export function describeIndexBasketProblem(value: unknown): string | null {
+  const basket = value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+  const targets = asRows(basket?.targets);
+  if (targets.length === 0) return 'The index basket needs at least one token.';
+  if (targets.length > INDEX_MAX_ASSETS) return `An index basket can hold at most ${INDEX_MAX_ASSETS} tokens.`;
+
+  const addresses = targets.map(target => (typeof target.assetAddress === 'string' ? target.assetAddress : ''));
+  if (addresses.some(address => !EVM_CONTRACT_ADDRESS.test(address.trim()))) {
+    return 'Every token in the index basket needs a valid contract address.';
+  }
+  const unique = new Set(addresses.map(address => address.toLowerCase()));
+  if (unique.size !== addresses.length) return 'The same token appears twice in the index basket.';
+
+  const weights = targets.map(target => Number(target.weightBps));
+  if (weights.some(weight => !Number.isFinite(weight) || weight < INDEX_MIN_WEIGHT_BPS)) {
+    return `Every token in the index basket needs a weight of at least ${INDEX_MIN_WEIGHT_BPS / 100}%.`;
+  }
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  if (total !== BPS) return `Index basket weights must add up to 100% (currently ${(total / 100).toFixed(2)}%).`;
+
+  const reserve = Number(basket?.reserveBps ?? 0);
+  if (!Number.isFinite(reserve) || reserve < 0 || reserve > INDEX_MAX_RESERVE_BPS) {
+    return 'The index cash reserve must be between 0% and 50%.';
+  }
+  return null;
+}
 
 /**
  * Server-side launch gate for an AI-built draft.
@@ -208,6 +246,19 @@ export function validateVaultDraftForLaunch(
         message: 'A vault can whitelist at most 10 asset collections.',
         action: 'choose_assets',
       });
+    }
+  }
+
+  // --- Index basket (index-weighted vaults only) ---------------------------
+  if (spec.archetype === VaultArchetype.index_weighted) {
+    const problem = describeIndexBasketProblem(view.indexBasket);
+    if (problem) {
+      if (!hasValue((view.indexBasket as Record<string, unknown>)?.targets)) {
+        missingFields.push('indexBasket');
+      } else {
+        errors.push(`indexBasket: ${problem}`);
+      }
+      addBlocker({ field: 'indexBasket', message: problem, action: 'choose_basket' });
     }
   }
 

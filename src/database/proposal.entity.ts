@@ -10,6 +10,7 @@ import {
   DistributionMetadata,
   EvmDistributionMetadata,
 } from '../modules/vaults/phase-management/governance/dto/distribution.dto';
+import { IndexTarget } from '../types/index-vault.types';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
 import { Claim } from './claim.entity';
@@ -135,6 +136,14 @@ export class Proposal {
       /** For limit: VT per 1 ADA */
       limitPrice?: number;
       currentAssetCount?: number; // Track progress
+    };
+
+    // Index re-weight: the basket holders vote on, frozen at proposal creation.
+    indexReweight?: {
+      targets: IndexTarget[];
+      reserveBps: number;
+      previousTargets: IndexTarget[];
+      previousReserveBps: number | null;
     };
 
     // Acquire Expansion data (ADA → VT minting)
