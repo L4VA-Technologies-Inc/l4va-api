@@ -30,12 +30,18 @@ const STATE_FIELDS = [
   'maxEthLate',
   'saleEndsAt',
   'saleDuration',
+  'autoOpenAt',
+  'saleOpenedAt',
+  'paused',
 ] as const;
 
 type StateField = (typeof STATE_FIELDS)[number];
 
 /** Fields that are small enums/indices and stay as JS numbers, not strings. */
 const NUMERIC_FIELDS = new Set<StateField>(['phase', 'currentTranche']);
+
+/** Fields the contract returns as `bool`, kept as booleans rather than strings. */
+const BOOLEAN_FIELDS = new Set<StateField>(['paused']);
 
 /** One rung of the price ladder. All uint256 values are decimal strings. */
 export interface TrancheRow {
@@ -74,6 +80,19 @@ export interface PresaleState {
   /** Unix seconds; "0" means the sale closes manually rather than on a clock. */
   saleEndsAt: string;
   saleDuration: string;
+  /**
+   * Scheduled opening time in unix seconds, "0" when the start is manual.
+   *
+   * The sale is live from this moment, but nothing writes `phase` until the
+   * first `buy()` opens it — so between the two the chain reports
+   * `phase == INACTIVE` while the contract's own `saleLive()` is already true.
+   * Clients must derive "live" from `autoOpenAt` + their own clock, never from
+   * `phase` alone, or the sale deadlocks: no buy form, so no buy, so no form.
+   */
+  autoOpenAt: string;
+  /** Unix seconds the sale actually opened; backdated to `autoOpenAt`. "0" until then. */
+  saleOpenedAt: string;
+  paused: boolean;
   updatedAt: number | null;
 }
 
@@ -214,14 +233,18 @@ export class PresaleService implements OnModuleInit {
       const results = await this.readClient.multicall({ contracts, allowFailure: true });
 
       const next = this.emptyState();
-      const nextRecord = next as unknown as Record<StateField, string | number>;
-      const prevRecord = this.state as unknown as Record<StateField, string | number>;
+      const nextRecord = next as unknown as Record<StateField, string | number | boolean>;
+      const prevRecord = this.state as unknown as Record<StateField, string | number | boolean>;
       let anyOk = false;
       STATE_FIELDS.forEach((field: StateField, i: number) => {
         const r = results[i];
         if (r?.status === 'success' && r.result !== undefined && r.result !== null) {
           anyOk = true;
-          nextRecord[field] = NUMERIC_FIELDS.has(field) ? Number(r.result) : (r.result as bigint).toString();
+          if (BOOLEAN_FIELDS.has(field)) {
+            nextRecord[field] = !!r.result;
+          } else {
+            nextRecord[field] = NUMERIC_FIELDS.has(field) ? Number(r.result) : (r.result as bigint).toString();
+          }
         } else if (this.state.updatedAt) {
           // Keep the last good value for a field that reverted this round.
           nextRecord[field] = prevRecord[field];
@@ -437,6 +460,9 @@ export class PresaleService implements OnModuleInit {
       maxEthLate: '0',
       saleEndsAt: '0',
       saleDuration: '0',
+      autoOpenAt: '0',
+      saleOpenedAt: '0',
+      paused: false,
       updatedAt: null,
     };
   }

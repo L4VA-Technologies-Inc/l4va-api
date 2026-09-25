@@ -51,6 +51,19 @@ export const PRESALE_ABI = [
   { name: 'saleEndsAt', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { name: 'saleDuration', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
 
+  // ── Scheduled start ───────────────────────────────────────────────────────
+  // `autoOpenAt` is the scheduled opening time; the sale is live from then on
+  // even though `phase` stays INACTIVE until the first buy() writes it, so the
+  // client must derive "live" from these rather than from `phase` alone.
+  // `saleOpenedAt` is backdated to `autoOpenAt` when that first buy lands.
+  { name: 'autoOpenAt', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { name: 'saleOpenedAt', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { name: 'paused', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'bool' }] },
+  // Read straight from the chain by the browser; deliberately not cached — a
+  // 10s-stale boolean is wrong exactly at the boundary that matters.
+  { name: 'saleLive', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'bool' }] },
+  { name: 'openIfScheduled', type: 'function', stateMutability: 'nonpayable', inputs: [], outputs: [] },
+
   // ── Per-wallet ────────────────────────────────────────────────────────────
   {
     name: 'purchased',
