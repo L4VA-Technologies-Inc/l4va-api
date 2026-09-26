@@ -23,6 +23,8 @@ async function bootstrap(): Promise<void> {
   // Configure CORS
   app.enableCors({
     origin: [
+      'https://l4va.org',
+      'https://www.l4va.org',
       'https://app.l4va.org',
       'https://admin.l4va.org',
       'https://testnet.l4va.org',
