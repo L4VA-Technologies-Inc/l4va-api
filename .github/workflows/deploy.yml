@@ -159,7 +159,7 @@ jobs:
           done
 
           sudo nginx -t
-          sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/testnet.l4va.org
+          sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/test-63473.l4va.org
           sudo nginx -s reload
 
           docker stop "$OLD_CONTAINER_NAME" || true
