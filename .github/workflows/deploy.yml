@@ -41,7 +41,7 @@ jobs:
           CONTAINER_PREFIX=l4va-testnet
           LOG_DIR="$APPS_ROOT/logs/l4va-api"
           sudo mkdir -p "$LOG_DIR"
-          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/test-63473.l4va.org)
           if [ "$ACTIVE_PORT" = "3100" ]; then
             ACTIVE_CONTAINER="$CONTAINER_PREFIX-api-blue"
           else
