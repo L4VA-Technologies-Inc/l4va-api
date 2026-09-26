@@ -30,12 +30,18 @@ const STATE_FIELDS = [
   'maxEthLate',
   'saleEndsAt',
   'saleDuration',
+  'autoOpenAt',
+  'saleOpenedAt',
+  'paused',
 ] as const;
 
 type StateField = (typeof STATE_FIELDS)[number];
 
 /** Fields that are small enums/indices and stay as JS numbers, not strings. */
 const NUMERIC_FIELDS = new Set<StateField>(['phase', 'currentTranche']);
+
+/** Fields read as booleans. */
+const BOOL_FIELDS = new Set<StateField>(['paused']);
 
 /** One rung of the price ladder. All uint256 values are decimal strings. */
 export interface TrancheRow {
@@ -74,6 +80,15 @@ export interface PresaleState {
   /** Unix seconds; "0" means the sale closes manually rather than on a clock. */
   saleEndsAt: string;
   saleDuration: string;
+  /**
+   * Scheduled start, unix seconds; "0" = none. Past it the sale is buyable even
+   * while `phase` still reads 0, because the first buy opens it. Clients should
+   * compare it to their own clock rather than trust a cached "live" flag.
+   */
+  autoOpenAt: string;
+  /** Unix seconds the sale opened (= autoOpenAt when opened late); "0" = never. */
+  saleOpenedAt: string;
+  paused: boolean;
   updatedAt: number | null;
 }
 
@@ -214,14 +229,18 @@ export class PresaleService implements OnModuleInit {
       const results = await this.readClient.multicall({ contracts, allowFailure: true });
 
       const next = this.emptyState();
-      const nextRecord = next as unknown as Record<StateField, string | number>;
-      const prevRecord = this.state as unknown as Record<StateField, string | number>;
+      const nextRecord = next as unknown as Record<StateField, string | number | boolean>;
+      const prevRecord = this.state as unknown as Record<StateField, string | number | boolean>;
       let anyOk = false;
       STATE_FIELDS.forEach((field: StateField, i: number) => {
         const r = results[i];
         if (r?.status === 'success' && r.result !== undefined && r.result !== null) {
           anyOk = true;
-          nextRecord[field] = NUMERIC_FIELDS.has(field) ? Number(r.result) : (r.result as bigint).toString();
+          nextRecord[field] = NUMERIC_FIELDS.has(field)
+            ? Number(r.result)
+            : BOOL_FIELDS.has(field)
+              ? (r.result as unknown as boolean)
+              : (r.result as bigint).toString();
         } else if (this.state.updatedAt) {
           // Keep the last good value for a field that reverted this round.
           nextRecord[field] = prevRecord[field];
@@ -437,6 +456,9 @@ export class PresaleService implements OnModuleInit {
       maxEthLate: '0',
       saleEndsAt: '0',
       saleDuration: '0',
+      autoOpenAt: '0',
+      saleOpenedAt: '0',
+      paused: false,
       updatedAt: null,
     };
   }
