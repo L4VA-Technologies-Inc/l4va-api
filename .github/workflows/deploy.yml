@@ -80,7 +80,7 @@ jobs:
 
           cd "$APP_DIR"
 
-          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/test-63473.l4va.org)
 
           if [ "$ACTIVE_PORT" = "3100" ]; then
             NEW_PORT=3101
