@@ -13,6 +13,47 @@ const MAX_LOOKBACK_BLOCKS = 500_000n;
 /** `Phase.ENDED` in L4VAPresale: the sale is over and cannot reopen. */
 const PHASE_ENDED = 2;
 
+interface PresaleChainDefaults {
+  /** The live sale: its state is served and buys go to it. */
+  address: Address;
+  deployBlock: bigint;
+  /**
+   * Successor presale used to extend a sale past its window, or null when there
+   * is none. Once set, the service serves it as soon as `address`'s sale ENDs.
+   */
+  nextAddress: Address | null;
+  nextDeployBlock: bigint;
+}
+
+/**
+ * Presale addresses per chain, so deploying a successor needs a release of this
+ * service rather than an edit to the env file on the server.
+ *
+ * Keyed by chain id on purpose: this one codebase runs against both networks, and
+ * a flat default would make the testnet deployment read mainnet's contract.
+ * `PRESALE_ADDRESS` / `PRESALE_NEXT_ADDRESS` (and their *_DEPLOY_BLOCK) still
+ * override these when set, so an urgent change can bypass a release.
+ */
+const PRESALE_DEFAULTS: Record<number, PresaleChainDefaults> = {
+  // ── Robinhood Chain mainnet ──────────────────────────────────────────────
+  4663: {
+    address: '0x2e324f59c7B5e94a0ac92D5A0E22894c58006B18',
+    deployBlock: 72615427n,
+    // TGE extension presale, deployed 2026-09-27 to carry the sale past the
+    // original 24h window. It reopens at $0.0028: the $0.0027 rung is retired
+    // along with whatever was left unsold in it.
+    nextAddress: '0x6702CAE3aB5Cb8b4E83BF5F0fF602Fc6A563aaa8',
+    nextDeployBlock: 74058802n,
+  },
+  // ── Robinhood Chain testnet ──────────────────────────────────────────────
+  46630: {
+    address: '0xdA27ab51AF6232e358B4b6DF5348674C1D7D7dBd',
+    deployBlock: 125192264n,
+    nextAddress: '0xB2b85C9E363e7AB5F693a138406E0820D10F4842',
+    nextDeployBlock: 125192480n,
+  },
+};
+
 /**
  * Scalar reads batched into one multicall. `trancheState` returns a tuple of
  * arrays rather than a single word, so it is appended separately below.
@@ -175,10 +216,15 @@ export class PresaleService implements OnModuleInit {
   private refreshingState = false;
 
   constructor(private readonly configService: ConfigService) {
-    // No testnet defaults: a missing chain id or RPC must leave the module
-    // unconfigured rather than silently reading another network.
+    // A missing chain id or RPC must leave the module unconfigured rather than
+    // silently reading another network, so the built-in addresses below are
+    // selected by chain id and never used as a blanket fallback.
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '0');
-    this.deployBlock = this.parseBigint(this.configService.get<string>('PRESALE_DEPLOY_BLOCK'), 0n);
+    const defaults = PRESALE_DEFAULTS[this.chainId] ?? null;
+    this.deployBlock = this.parseBigint(
+      this.configService.get<string>('PRESALE_DEPLOY_BLOCK'),
+      defaults?.deployBlock ?? 0n
+    );
     const chunk = this.parseBigint(
       this.configService.get<string>('PRESALE_LOG_CHUNK_BLOCKS'),
       DEFAULT_LOG_CHUNK_BLOCKS
@@ -189,27 +235,34 @@ export class PresaleService implements OnModuleInit {
     const log = this.resolveLogRpc();
     this.rpcLabel = `reads=${read?.label ?? 'none'}, logs=${log?.label ?? 'none'}`;
 
-    const validAddress = this.parseAddress(this.configService.get<string>('PRESALE_ADDRESS'));
+    // Env wins over the built-in address, so an urgent change can still bypass a
+    // release; with no env set, the chain's compiled-in address is used.
+    const validAddress =
+      this.parseAddress(this.configService.get<string>('PRESALE_ADDRESS')) ?? defaults?.address ?? null;
     this.address = validAddress && this.chainId > 0 && read && log ? validAddress : null;
     if (validAddress && !this.address) {
-      this.logger.warn(`PRESALE_ADDRESS set but EVM_CHAIN_ID or RPC missing (${this.rpcLabel}) — presale disabled.`);
+      this.logger.warn(`Presale address known but EVM_CHAIN_ID or RPC missing (${this.rpcLabel}) — presale disabled.`);
     }
 
     // The successor is only meaningful once the primary is usable.
-    const validNext = this.parseAddress(this.configService.get<string>('PRESALE_NEXT_ADDRESS'));
+    const validNext =
+      this.parseAddress(this.configService.get<string>('PRESALE_NEXT_ADDRESS')) ?? defaults?.nextAddress ?? null;
     this.nextAddress = this.address && validNext && validNext !== this.address ? validNext : null;
 
     // Scan both contracts for events, so the purchase feed and its all-time
     // totals survive the handover instead of restarting at the new contract.
     this.logAddresses = this.address ? [this.address, ...(this.nextAddress ? [this.nextAddress] : [])] : [];
     if (this.nextAddress) {
-      const nextBlock = this.parseBigint(this.configService.get<string>('PRESALE_NEXT_DEPLOY_BLOCK'), 0n);
+      const nextBlock = this.parseBigint(
+        this.configService.get<string>('PRESALE_NEXT_DEPLOY_BLOCK'),
+        defaults?.nextDeployBlock ?? 0n
+      );
       // Backfill from whichever contract came first, so neither one's history
       // is cut off. A missing block for either falls back to the lookback cap.
       if (this.deployBlock > 0n && nextBlock > 0n && nextBlock < this.deployBlock) {
         this.deployBlock = nextBlock;
       } else if (this.deployBlock > 0n && nextBlock === 0n) {
-        this.logger.warn('PRESALE_NEXT_ADDRESS set without PRESALE_NEXT_DEPLOY_BLOCK — using PRESALE_DEPLOY_BLOCK.');
+        this.logger.warn("Successor presale has no deploy block — backfilling from the primary's block instead.");
       }
     }
 
