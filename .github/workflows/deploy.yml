@@ -169,9 +169,14 @@ jobs:
       - name: Create .env for Mainnet
         env:
           MAINNET_ENV_VARS: ${{ secrets.MAINNET_ENV_VARS }}
+          PRESALE_REMINDER_RECIPIENTS: ${{ secrets.PRESALE_REMINDER_RECIPIENTS }}
         run: |
           echo "$MAINNET_ENV_VARS" > .env
           echo "Created MAINNET .env"
+          # Presale reminder list: its own secret, written to its own file (one
+          # address per line) that the image picks up with the rest of the app.
+          printf '%s' "$PRESALE_REMINDER_RECIPIENTS" | tr -s ' \r\t;,' '\n' > presale-reminder-recipients.txt
+          echo "Wrote $(grep -c @ presale-reminder-recipients.txt) presale reminder recipients"
 
       - name: Save logs before deploy
         run: |
