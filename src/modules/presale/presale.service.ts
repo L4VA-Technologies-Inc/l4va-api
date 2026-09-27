@@ -10,6 +10,49 @@ const DEFAULT_LOG_CHUNK_BLOCKS = 50_000n;
 const MAX_FEED_ROWS = 50;
 /** First-run backfill cap, used only when PRESALE_DEPLOY_BLOCK is unset. */
 const MAX_LOOKBACK_BLOCKS = 500_000n;
+/** `Phase.ENDED` in L4VAPresale: the sale is over and cannot reopen. */
+const PHASE_ENDED = 2;
+
+interface PresaleChainDefaults {
+  /** The live sale: its state is served and buys go to it. */
+  address: Address;
+  deployBlock: bigint;
+  /**
+   * Successor presale used to extend a sale past its window, or null when there
+   * is none. Once set, the service serves it as soon as `address`'s sale ENDs.
+   */
+  nextAddress: Address | null;
+  nextDeployBlock: bigint;
+}
+
+/**
+ * Presale addresses per chain, so deploying a successor needs a release of this
+ * service rather than an edit to the env file on the server.
+ *
+ * Keyed by chain id on purpose: this one codebase runs against both networks, and
+ * a flat default would make the testnet deployment read mainnet's contract.
+ * `PRESALE_ADDRESS` / `PRESALE_NEXT_ADDRESS` (and their *_DEPLOY_BLOCK) still
+ * override these when set, so an urgent change can bypass a release.
+ */
+const PRESALE_DEFAULTS: Record<number, PresaleChainDefaults> = {
+  // ── Robinhood Chain mainnet ──────────────────────────────────────────────
+  4663: {
+    address: '0x2e324f59c7B5e94a0ac92D5A0E22894c58006B18',
+    deployBlock: 72615427n,
+    // TGE extension presale, deployed 2026-09-27 to carry the sale past the
+    // original 24h window. It reopens at $0.0028: the $0.0027 rung is retired
+    // along with whatever was left unsold in it.
+    nextAddress: '0x6702CAE3aB5Cb8b4E83BF5F0fF602Fc6A563aaa8',
+    nextDeployBlock: 74058802n,
+  },
+  // ── Robinhood Chain testnet ──────────────────────────────────────────────
+  46630: {
+    address: '0xdA27ab51AF6232e358B4b6DF5348674C1D7D7dBd',
+    deployBlock: 125192264n,
+    nextAddress: '0xB2b85C9E363e7AB5F693a138406E0820D10F4842',
+    nextDeployBlock: 125192480n,
+  },
+};
 
 /**
  * Scalar reads batched into one multicall. `trancheState` returns a tuple of
@@ -135,7 +178,20 @@ export class PresaleService implements OnModuleInit {
   /** eth_getLogs — needs a wide block range, so never Alchemy free tier (10-block cap). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly logClient: any;
+  /**
+   * The contract whose state is served while the sale it runs is still open —
+   * i.e. today's live presale. Reads and buys target this until it ends.
+   */
   private readonly address: Address | null;
+  /**
+   * Successor presale, used to extend the sale past a window the contract
+   * cannot move (`setSaleEndsAt` only brings the deadline forward). Optional:
+   * while it is unset this service behaves exactly as a single-contract poller,
+   * which is what lets the wiring ship before the successor is deployed.
+   */
+  private readonly nextAddress: Address | null;
+  /** Every contract whose `Purchased` events belong in the feed, for eth_getLogs. */
+  private readonly logAddresses: Address[];
   private readonly chainId: number;
   private readonly deployBlock: bigint;
   private readonly logChunkBlocks: bigint;
@@ -143,6 +199,13 @@ export class PresaleService implements OnModuleInit {
 
   private state: PresaleState;
   private feed: PurchaseFeed;
+
+  /**
+   * Last good snapshot per contract, keyed by address. Kept separately from the
+   * served `state` so a field that reverts on one contract falls back to that
+   * same contract's previous value rather than the other contract's.
+   */
+  private readonly snapshots = new Map<string, PresaleState>();
 
   private lastScannedBlock: bigint | null = null;
   private totalL4vaAllTime = 0n;
@@ -153,10 +216,15 @@ export class PresaleService implements OnModuleInit {
   private refreshingState = false;
 
   constructor(private readonly configService: ConfigService) {
-    // No testnet defaults: a missing chain id or RPC must leave the module
-    // unconfigured rather than silently reading another network.
+    // A missing chain id or RPC must leave the module unconfigured rather than
+    // silently reading another network, so the built-in addresses below are
+    // selected by chain id and never used as a blanket fallback.
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '0');
-    this.deployBlock = this.parseBigint(this.configService.get<string>('PRESALE_DEPLOY_BLOCK'), 0n);
+    const defaults = PRESALE_DEFAULTS[this.chainId] ?? null;
+    this.deployBlock = this.parseBigint(
+      this.configService.get<string>('PRESALE_DEPLOY_BLOCK'),
+      defaults?.deployBlock ?? 0n
+    );
     const chunk = this.parseBigint(
       this.configService.get<string>('PRESALE_LOG_CHUNK_BLOCKS'),
       DEFAULT_LOG_CHUNK_BLOCKS
@@ -167,11 +235,35 @@ export class PresaleService implements OnModuleInit {
     const log = this.resolveLogRpc();
     this.rpcLabel = `reads=${read?.label ?? 'none'}, logs=${log?.label ?? 'none'}`;
 
-    const rawAddress = this.configService.get<string>('PRESALE_ADDRESS')?.trim();
-    const validAddress = rawAddress && /^0x[0-9a-fA-F]{40}$/.test(rawAddress) ? getAddress(rawAddress) : null;
+    // Env wins over the built-in address, so an urgent change can still bypass a
+    // release; with no env set, the chain's compiled-in address is used.
+    const validAddress =
+      this.parseAddress(this.configService.get<string>('PRESALE_ADDRESS')) ?? defaults?.address ?? null;
     this.address = validAddress && this.chainId > 0 && read && log ? validAddress : null;
     if (validAddress && !this.address) {
-      this.logger.warn(`PRESALE_ADDRESS set but EVM_CHAIN_ID or RPC missing (${this.rpcLabel}) — presale disabled.`);
+      this.logger.warn(`Presale address known but EVM_CHAIN_ID or RPC missing (${this.rpcLabel}) — presale disabled.`);
+    }
+
+    // The successor is only meaningful once the primary is usable.
+    const validNext =
+      this.parseAddress(this.configService.get<string>('PRESALE_NEXT_ADDRESS')) ?? defaults?.nextAddress ?? null;
+    this.nextAddress = this.address && validNext && validNext !== this.address ? validNext : null;
+
+    // Scan both contracts for events, so the purchase feed and its all-time
+    // totals survive the handover instead of restarting at the new contract.
+    this.logAddresses = this.address ? [this.address, ...(this.nextAddress ? [this.nextAddress] : [])] : [];
+    if (this.nextAddress) {
+      const nextBlock = this.parseBigint(
+        this.configService.get<string>('PRESALE_NEXT_DEPLOY_BLOCK'),
+        defaults?.nextDeployBlock ?? 0n
+      );
+      // Backfill from whichever contract came first, so neither one's history
+      // is cut off. A missing block for either falls back to the lookback cap.
+      if (this.deployBlock > 0n && nextBlock > 0n && nextBlock < this.deployBlock) {
+        this.deployBlock = nextBlock;
+      } else if (this.deployBlock > 0n && nextBlock === 0n) {
+        this.logger.warn("Successor presale has no deploy block — backfilling from the primary's block instead.");
+      }
     }
 
     const chain = defineChain({
@@ -200,7 +292,10 @@ export class PresaleService implements OnModuleInit {
       this.logger.warn('PRESALE_ADDRESS not configured — presale endpoints will report unconfigured.');
       return;
     }
-    this.logger.log(`Presale poller starting — contract ${this.address} on chain ${this.chainId} via ${this.rpcLabel}`);
+    const successor = this.nextAddress ? `, successor ${this.nextAddress}` : '';
+    this.logger.log(
+      `Presale poller starting — contract ${this.address}${successor} on chain ${this.chainId} via ${this.rpcLabel}`
+    );
     await Promise.allSettled([this.refreshState(), this.refreshPurchases()]);
   }
 
@@ -221,16 +316,65 @@ export class PresaleService implements OnModuleInit {
     if (!this.address || this.refreshingState) return;
     this.refreshingState = true;
     try {
+      // One multicall per contract. With no successor configured this is exactly
+      // the single call it has always been.
+      const [current, next] = await Promise.all([
+        this.readSnapshot(this.address),
+        this.nextAddress ? this.readSnapshot(this.nextAddress) : Promise.resolve(null),
+      ]);
+
+      const active = this.selectActive(current, next);
+      if (active) this.state = active;
+    } catch (err) {
+      this.logger.error(`refreshState failed: ${(err as Error).message}`);
+    } finally {
+      this.refreshingState = false;
+    }
+  }
+
+  /**
+   * Which contract's state the API serves. The live sale ending *is* the
+   * handover trigger, so there is nothing to coordinate: once the current
+   * presale is finished, the successor takes over — including the window
+   * before it opens, where it correctly reports INACTIVE plus its `autoOpenAt`
+   * so clients can count down to the reopening.
+   *
+   * Returns null only when there is nothing fresh to serve, leaving the last
+   * served snapshot in place.
+   */
+  private selectActive(current: PresaleState | null, next: PresaleState | null): PresaleState | null {
+    if (!next) return current;
+
+    const served = current ?? this.snapshots.get(this.address as string) ?? null;
+    if (!served) return next;
+
+    const endsAt = Number(served.saleEndsAt || '0');
+    const nowSec = Math.floor(Date.now() / 1000);
+    // PHASE_ENDED, or the deadline passed while `phase` still reads ACTIVE
+    // because nobody has synced it on-chain yet.
+    const finished = served.phase === PHASE_ENDED || (endsAt > 0 && nowSec >= endsAt);
+
+    return finished ? next : served;
+  }
+
+  /**
+   * Read one presale contract into a snapshot. Returns null when every read
+   * failed, so the caller can keep serving what it had.
+   */
+  private async readSnapshot(address: Address): Promise<PresaleState | null> {
+    try {
       const contracts = [...STATE_FIELDS, 'trancheState'].map(functionName => ({
-        address: this.address as Address,
+        address,
         abi: PRESALE_ABI,
         functionName,
       }));
       const results = await this.readClient.multicall({ contracts, allowFailure: true });
 
+      const previous = this.snapshots.get(address) ?? null;
       const next = this.emptyState();
+      next.address = address;
       const nextRecord = next as unknown as Record<StateField, string | number | boolean>;
-      const prevRecord = this.state as unknown as Record<StateField, string | number | boolean>;
+      const prevRecord = previous as unknown as Record<StateField, string | number | boolean> | null;
       let anyOk = false;
       STATE_FIELDS.forEach((field: StateField, i: number) => {
         const r = results[i];
@@ -241,8 +385,8 @@ export class PresaleService implements OnModuleInit {
             : BOOL_FIELDS.has(field)
               ? (r.result as unknown as boolean)
               : (r.result as bigint).toString();
-        } else if (this.state.updatedAt) {
-          // Keep the last good value for a field that reverted this round.
+        } else if (prevRecord && previous?.updatedAt) {
+          // Keep this contract's last good value for a field that reverted.
           nextRecord[field] = prevRecord[field];
         }
       });
@@ -253,20 +397,20 @@ export class PresaleService implements OnModuleInit {
       if (ladder?.status === 'success' && ladder.result) {
         anyOk = true;
         next.tranches = this.toTranches(ladder.result as [bigint[], bigint[], bigint[], number]);
-      } else if (this.state.updatedAt) {
-        next.tranches = this.state.tranches;
+      } else if (previous?.updatedAt) {
+        next.tranches = previous.tranches;
       }
 
       if (!anyOk) {
-        this.logger.warn('Presale state multicall returned no successful reads; keeping previous snapshot.');
-        return;
+        this.logger.warn(`Presale state multicall returned no successful reads for ${address}; keeping previous.`);
+        return previous;
       }
       next.updatedAt = Date.now();
-      this.state = next;
+      this.snapshots.set(address, next);
+      return next;
     } catch (err) {
-      this.logger.error(`refreshState failed: ${(err as Error).message}`);
-    } finally {
-      this.refreshingState = false;
+      this.logger.error(`readSnapshot(${address}) failed: ${(err as Error).message}`);
+      return this.snapshots.get(address) ?? null;
     }
   }
 
@@ -297,7 +441,7 @@ export class PresaleService implements OnModuleInit {
       while (cursor <= latest) {
         const to = cursor + this.logChunkBlocks - 1n > latest ? latest : cursor + this.logChunkBlocks - 1n;
         const logs = await this.logClient.getContractEvents({
-          address: this.address,
+          address: this.logAddresses,
           abi: PRESALE_ABI,
           eventName: 'Purchased',
           fromBlock: cursor,
@@ -404,6 +548,12 @@ export class PresaleService implements OnModuleInit {
     if (evmRpc && !/\.g\.alchemy\.com/.test(evmRpc)) return { url: evmRpc, label: 'EVM_RPC_URL' };
 
     return null;
+  }
+
+  /** Checksummed address, or null when unset/blank/malformed. */
+  private parseAddress(raw: string | undefined): Address | null {
+    const trimmed = raw?.trim();
+    return trimmed && /^0x[0-9a-fA-F]{40}$/.test(trimmed) ? getAddress(trimmed) : null;
   }
 
   private parseBigint(raw: string | undefined, fallback: bigint): bigint {
