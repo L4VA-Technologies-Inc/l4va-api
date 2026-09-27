@@ -104,6 +104,28 @@ export class NotificationService {
     );
   }
 
+  /**
+   * Trigger an email workflow for a bare address (subscriberId = email). Unlike
+   * the send* helpers this throws, so callers can tell a failed send apart.
+   * `idempotencyKey` makes Novu drop a repeat of the same trigger.
+   */
+  async triggerEmailWorkflow(
+    workflowId: string,
+    email: string,
+    payload: Record<string, unknown>,
+    idempotencyKey?: string
+  ): Promise<string | undefined> {
+    const res = await this.novu.trigger(
+      {
+        workflowId,
+        to: { subscriberId: email, email },
+        payload,
+      },
+      idempotencyKey
+    );
+    return res.result?.transactionId;
+  }
+
   async sendFailedEmailNotification(body: IEmailNotificationBody): Promise<EventsControllerTriggerResponse> {
     try {
       const res = await this.novu.trigger({

@@ -61,3 +61,6 @@ l4va-protocol-mainnet.json
 
 gcp-service-account.json
 gcp-bucket.json
+
+# Presale reminder list, written by the prod deploy from a secret
+presale-reminder-recipients.txt
