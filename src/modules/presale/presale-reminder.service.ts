@@ -13,11 +13,11 @@ import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 const HOUR_MS = 60 * 60 * 1000;
 
 /** Hours-left marks that each get one email to the whole list, largest first. */
-const MILESTONES_HOURS = [12, 6, 2] as const;
+const MILESTONES_HOURS = [6, 3, 1] as const;
 
 /**
  * A milestone only *starts* within this long after its mark, so a server that was
- * down at 12h left doesn't wake at 7h and announce "12 hours left". A batch that
+ * down at 6h left doesn't wake at 4h and announce "6 hours left". A batch that
  * already started keeps going past it (e.g. after a redeploy mid-send).
  */
 const START_GRACE_MS = HOUR_MS;
@@ -33,7 +33,7 @@ const KEY_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * Sends the "[hours] hours left in the $L4VA Presale" emails to the whitelist
- * group at 12, 6 and 2 hours before `saleEndsAt`.
+ * group at 6, 3 and 1 hours before `saleEndsAt`.
  *
  * Every minute it checks the cached presale state and, once a mark is crossed,
  * triggers the Novu workflow once per address with a pause between triggers.
@@ -133,7 +133,8 @@ export class PresaleReminderService {
         const transactionId = await this.notificationService.triggerEmailWorkflow(
           this.workflowId,
           email,
-          { hours, email },
+          // hoursLabel spares the template a plural rule: "1 hour", "6 hours".
+          { hours, hoursLabel: `${hours} ${hours === 1 ? 'hour' : 'hours'}`, email },
           key
         );
         await this.redis.set(key, transactionId || 'sent', 'EX', KEY_TTL_SECONDS);
