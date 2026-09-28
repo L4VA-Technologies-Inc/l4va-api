@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Not, Repository } from 'typeorm';
 import { encodeAbiParameters, isAddress, keccak256, parseAbi, type Address, type Hex } from 'viem';
@@ -60,6 +61,20 @@ export interface BasketItemInput {
   image?: string | null;
 }
 
+export interface IndexSupportedAsset {
+  assetAddress: string;
+  symbol: string;
+  name: string | null;
+  decimals: number;
+  image: string | null;
+}
+
+export interface IndexSupportedAssets {
+  /** When true, baskets may only hold `assets`; otherwise any adapter-quotable ERC-20 is accepted. */
+  restricted: boolean;
+  assets: IndexSupportedAsset[];
+}
+
 export interface IndexPortfolioAsset {
   assetAddress: string;
   symbol: string;
@@ -89,18 +104,54 @@ export class IndexVaultService {
   private readonly logger = new Logger(IndexVaultService.name);
   private readonly portfolioCache = new Map<string, { at: number; data: IndexPortfolio }>();
   private readonly running = new Set<string>();
+  /**
+   * `INDEX_BASKET_ALLOWED_ASSETS`: comma-separated token addresses. When set
+   * (testnet — the fixed-rate adapter's seeded tokens), baskets are limited to
+   * them; unset means any token the adapter can quote.
+   */
+  private readonly allowedAssets: Address[];
+  private supportedAssetsCache: Promise<IndexSupportedAsset[]> | null = null;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(EvmIndexRebalance) private readonly rebalanceRepository: Repository<EvmIndexRebalance>,
     private readonly contractReader: EvmContractReader,
     private readonly swapService: EvmSwapService,
-    private readonly routeService: IndexSwapRouteService
-  ) {}
+    private readonly routeService: IndexSwapRouteService,
+    configService: ConfigService
+  ) {
+    this.allowedAssets = (configService.get<string>('INDEX_BASKET_ALLOWED_ASSETS') ?? '')
+      .split(',')
+      .map(a => a.trim().toLowerCase())
+      .filter(a => isAddress(a)) as Address[];
+  }
 
   // ---------------------------------------------------------------------------
   // Basket definition
   // ---------------------------------------------------------------------------
+
+  /** Tokens a basket may hold, read from chain once and cached for the process lifetime. */
+  async getSupportedAssets(): Promise<IndexSupportedAssets> {
+    if (!this.allowedAssets.length) return { restricted: false, assets: [] };
+    this.supportedAssetsCache ??= Promise.all(
+      this.allowedAssets.map(async address => {
+        const read = (functionName: 'decimals' | 'symbol' | 'name'): Promise<unknown> =>
+          this.contractReader.publicClient.readContract({ address, abi: ERC20_METADATA_ABI, functionName });
+        const [decimals, symbol, name] = await Promise.all([read('decimals'), read('symbol'), read('name')]);
+        return {
+          assetAddress: address,
+          symbol: String(symbol),
+          name: String(name),
+          decimals: Number(decimals),
+          image: null,
+        };
+      })
+    ).catch(err => {
+      this.supportedAssetsCache = null;
+      throw err;
+    });
+    return { restricted: true, assets: await this.supportedAssetsCache };
+  }
 
   /**
    * Validate a basket and resolve each asset's decimals from chain. Symbol and
@@ -126,6 +177,9 @@ export class IndexVaultService {
       }
       if (seen.has(address)) throw new BadRequestException(`Asset ${address} appears twice in the basket`);
       seen.add(address);
+      if (this.allowedAssets.length && !this.allowedAssets.includes(address as Address)) {
+        throw new BadRequestException(`${item.symbol || address} is not a supported index basket asset`);
+      }
     }
 
     if (!this.routeService.adapter) {
