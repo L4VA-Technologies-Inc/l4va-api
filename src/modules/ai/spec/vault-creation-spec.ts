@@ -5,6 +5,21 @@ import { ChainType } from '@/types/vault.types';
 
 const DAY_MS = 86_400_000;
 
+/** Tags that describe NFT or real-world-asset vaults; an index vault buys fungible tokens only. */
+const NON_INDEX_TAGS = new Set([
+  'NFT',
+  'RWA',
+  'Real Estate',
+  'Insurance',
+  'Commodity',
+  'Precious Metal',
+  'Gem',
+  'PFP',
+  'Music',
+  'Art',
+  'Collectible',
+]);
+
 export const VAULT_TAGS = [
   'NFT',
   'FT',
@@ -457,6 +472,10 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
         assetsWhitelist: { required: false, notApplicableIf: [{ field: 'isAcquireOnly', equals: true }] },
         indexBasket: { required: true },
         type: { values: ['cnt'], default: 'cnt', description: 'Always "cnt": the vault holds fungible tokens.' },
+        tags: {
+          values: VAULT_TAGS.filter(tag => !NON_INDEX_TAGS.has(tag)),
+          description: 'Up to 5 discovery tags. Index vaults hold fungible tokens, so no NFT or RWA tags.',
+        },
       },
       rules: [
         'This is an index-weighted vault: it is always acquire-only with 100% of vault tokens for acquirers, ' +
@@ -465,6 +484,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
           'Never invent token addresses, symbols or weights, and offer the "choose_basket" option when it is ' +
           'still missing.',
         'Describe the vault in terms of the basket it will buy, not the assets people contribute.',
+        'Never offer or mention NFT or real-world-asset (RWA) vaults, or tags for them: only the index ' +
+          'acquire flow exists.',
       ],
     },
   },
