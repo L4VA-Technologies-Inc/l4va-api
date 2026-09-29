@@ -12,6 +12,15 @@ import { AuthGuard } from '@/modules/auth/auth.guard';
 export class IndexVaultController {
   constructor(private readonly indexVaultService: IndexVaultService) {}
 
+  @Get('index/assets')
+  @ApiOperation({
+    summary: 'Tokens an index basket may hold',
+    description: 'When `restricted` is false any token the swap adapter can quote is accepted.',
+  })
+  getSupportedAssets(): ReturnType<IndexVaultService['getSupportedAssets']> {
+    return this.indexVaultService.getSupportedAssets();
+  }
+
   @Get(':id/index')
   @ApiOperation({
     summary: 'Index-weighted vault basket, live allocation and rebalance history',
