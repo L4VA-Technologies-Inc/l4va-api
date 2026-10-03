@@ -7,7 +7,7 @@ import { PRESALE_ABI, TRANCHE_COUNT } from './presale.abi';
 
 const MULTICALL3_ADDRESS: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
 const DEFAULT_LOG_CHUNK_BLOCKS = 50_000n;
-const MAX_FEED_ROWS = 50;
+const MAX_FEED_ROWS = 1000;
 /** First-run backfill cap, used only when PRESALE_DEPLOY_BLOCK is unset. */
 const MAX_LOOKBACK_BLOCKS = 500_000n;
 /** `Phase.ENDED` in L4VAPresale: the sale is over and cannot reopen. */
