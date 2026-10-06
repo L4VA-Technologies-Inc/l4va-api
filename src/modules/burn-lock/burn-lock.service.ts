@@ -31,10 +31,11 @@ export type BurnRunResult =
  * Daily keeper for L4VABurnLock on Robinhood Chain.
  *
  * Contracts can't schedule themselves, so this calls the permissionless
- * `burn()` once the next day's allowance unlocks. It checks hourly rather
- * than at a fixed time of day: the contract's day boundary is `startTime`,
- * not midnight, and an hourly read is free. A burn tx goes out at most once
- * per day because `burnable()` is 0 in between.
+ * `burn()` once the next day's allowance unlocks. It checks every 2 hours
+ * rather than at a fixed time of day: the contract's day boundary is
+ * `startTime`, not midnight, and the check is a free read. Whether today's
+ * burn already happened is tracked on-chain — `burnable()` is 0 until the
+ * next day unlocks — so a burn tx goes out at most once per day.
  *
  * Safe to run on several instances: the loser of a race fails simulation
  * with `NothingToBurn` and skips without paying gas. Downtime is harmless
@@ -97,11 +98,11 @@ export class BurnLockService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     if (!this.enabled) return;
     this.logger.log(`Burn-lock keeper on ${this.address} as ${this.account?.address}`);
-    // Catch up straight away after a deploy/restart instead of waiting for the hour.
+    // Catch up straight away after a deploy/restart instead of waiting for the next tick.
     void this.runBurn();
   }
 
-  @Cron('0 1 * * * *', { name: 'burn-lock-daily-burn' })
+  @Cron('0 0 */2 * * *', { name: 'burn-lock-daily-burn' })
   async scheduledBurn(): Promise<void> {
     await this.runBurn();
   }
