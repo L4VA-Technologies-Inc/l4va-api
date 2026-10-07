@@ -43,6 +43,11 @@ export interface EvmAllocationFormulaParams {
   lpVtAmount?: bigint;
   /** Reserved native that will go to the LP contract (deferred; pass 0n for now). */
   lpNativeAmount?: bigint;
+  /**
+   * Contribution fee `closeCycle` accrues on the raise (`nativeCollected × bps`).
+   * It never reaches contributors, so it comes off their native before the LP.
+   */
+  nativeFee?: bigint;
 }
 
 export interface EvmAllocationFormulaRow {
@@ -66,6 +71,7 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
   const { rows, vtSupplyBaseUnits, assetsOfferedBps } = params;
   const lpVtAmount = params.lpVtAmount ?? 0n;
   const lpNativeAmount = params.lpNativeAmount ?? 0n;
+  const nativeFee = params.nativeFee ?? 0n;
 
   if (assetsOfferedBps < 0 || assetsOfferedBps > 10_000) {
     throw new Error(`assetsOfferedBps must be in [0, 10000]; got ${assetsOfferedBps}`);
@@ -94,8 +100,9 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
   const vtToAcquirers = (vtSupplyAvailable * BigInt(assetsOfferedBps)) / 10_000n;
   const vtToContributors = vtSupplyAvailable - vtToAcquirers;
 
-  // Native goes to contributors, minus LP carveout.
-  const nativeToContributors = totalNativeRaised > lpNativeAmount ? totalNativeRaised - lpNativeAmount : 0n;
+  // Native goes to contributors, minus the protocol fee and the LP carveout.
+  const nativeAfterFee = totalNativeRaised > nativeFee ? totalNativeRaised - nativeFee : 0n;
+  const nativeToContributors = nativeAfterFee > lpNativeAmount ? nativeAfterFee - lpNativeAmount : 0n;
 
   // Sort deterministically so claim_index is stable across recomputes.
   const sortedEntries = Array.from(merged.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -148,6 +155,8 @@ export interface EvmLpCarveoutParams {
   assetsOfferedBps: number;
   /** Vault `liquidity_pool_contribution`, in bips (0..10000). */
   lpBps: number;
+  /** Contribution fee accrued on the raise at close; the LP can only spend what is left. */
+  nativeFee?: bigint;
 }
 
 export interface EvmLpCarveout {
@@ -169,14 +178,15 @@ export interface EvmLpCarveout {
  *   lpVt         = supply * lp% / 2
  *   pool price   = lpNative / lpVt = fdv / supply
  *
- * If lpNative would exceed what was raised it is capped at the raise and lpVt
- * shrinks with it, so the pool price stays fdv / supply.
+ * If lpNative would exceed what is left of the raise after the Contribution fee,
+ * it is capped there and lpVt shrinks with it, so the pool price stays fdv / supply.
  *
  * Returns null when there is no pool to seed (LP 0%, nothing raised, or no
  * acquirers — without an acquire raise there is no native and no FDV anchor).
  */
 export function computeEvmLpCarveout(params: EvmLpCarveoutParams): EvmLpCarveout | null {
   const { vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps } = params;
+  const spendable = totalNativeRaised > (params.nativeFee ?? 0n) ? totalNativeRaised - (params.nativeFee ?? 0n) : 0n;
   if (lpBps < 0 || lpBps > 10_000) throw new Error(`lpBps must be in [0, 10000]; got ${lpBps}`);
   if (lpBps === 0 || assetsOfferedBps <= 0 || totalNativeRaised <= 0n || vtSupplyBaseUnits <= 0n) return null;
 
@@ -184,8 +194,8 @@ export function computeEvmLpCarveout(params: EvmLpCarveoutParams): EvmLpCarveout
   let lpNativeAmount = (fdvNative * BigInt(lpBps)) / 20_000n;
   let lpVtAmount = (vtSupplyBaseUnits * BigInt(lpBps)) / 20_000n;
 
-  if (lpNativeAmount > totalNativeRaised) {
-    lpNativeAmount = totalNativeRaised;
+  if (lpNativeAmount > spendable) {
+    lpNativeAmount = spendable;
     lpVtAmount = (lpNativeAmount * vtSupplyBaseUnits) / fdvNative;
   }
   if (lpNativeAmount === 0n || lpVtAmount === 0n) return null;

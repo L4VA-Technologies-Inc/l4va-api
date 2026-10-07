@@ -17,7 +17,8 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import {
   EvmLpStatus,
   getEvmLpMaxPriceDeviationBps,
-  getEvmLpV4PoolConfig,
+  getEvmLpV4PoolCandidates,
+  lpTechnicalCycleRoot,
   type EvmLpCarveoutRecord,
 } from './evm-lp.config';
 import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
@@ -177,6 +178,8 @@ export interface EvmVaultLpView {
 }
 
 const MAX_ATTEMPTS = 5;
+/** Vault-page view cache: the view costs several RPC reads and pages poll it. */
+const VIEW_TTL_MS = 30_000;
 const DEADLINE_SECONDS = 30 * 60;
 
 /**
@@ -205,6 +208,7 @@ const DEADLINE_SECONDS = 30 * 60;
 export class EvmLiquidityService {
   private readonly logger = new Logger(EvmLiquidityService.name);
   private readonly processing = new Set<string>();
+  private readonly viewCache = new Map<string, { at: number; view: EvmVaultLpView | null }>();
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -244,6 +248,14 @@ export class EvmLiquidityService {
    * seeded yet. Null when the vault has no LP carveout at all.
    */
   async getVaultLp(vaultId: string): Promise<EvmVaultLpView | null> {
+    const cached = this.viewCache.get(vaultId);
+    if (cached && Date.now() - cached.at < VIEW_TTL_MS) return cached.view;
+    const view = await this.loadVaultLp(vaultId);
+    this.viewCache.set(vaultId, { at: Date.now(), view });
+    return view;
+  }
+
+  private async loadVaultLp(vaultId: string): Promise<EvmVaultLpView | null> {
     const snap = await this.snapshotsRepository
       .createQueryBuilder('snap')
       .where('snap.vault_id = :vaultId', { vaultId })
@@ -391,7 +403,7 @@ export class EvmLiquidityService {
     );
 
     try {
-      const venue = await this.resolveVenue(vaultAddress, adapter);
+      const venue = await this.resolveVenue(vaultAddress, adapter, rate);
       const where = venue.protocol === 'uniswap-v4' ? { poolId: venue.poolId } : { pair: venue.pair };
       await this.saveLp(snap.id, { ...lp, protocol: venue.protocol, ...where });
 
@@ -468,12 +480,22 @@ export class EvmLiquidityService {
       const attempts = (lp.attempts ?? 0) + 1;
       const fresh = ((await this.snapshotsRepository.findOne({ where: { id: snap.id } }))?.lp_carveout ??
         lp) as unknown as EvmLpCarveoutRecord;
+      const giveUp = attempts >= MAX_ATTEMPTS;
       await this.saveLp(snap.id, {
         ...fresh,
         attempts,
         lastError: message,
-        status: attempts >= MAX_ATTEMPTS ? EvmLpStatus.failed : EvmLpStatus.pending,
+        status: giveUp ? EvmLpStatus.failed : EvmLpStatus.pending,
       });
+      // Never leave the vault parked in Active on our technical cycle: expansion,
+      // termination and every Locked-only flow would be blocked for good.
+      if (giveUp) {
+        await this.closeTechnicalCycleIfOpen(vaultAddress, raiseCycleId).catch(closeErr =>
+          this.logger.error(
+            `LP failed for vault ${vault.id} and its technical cycle could not be closed: ${(closeErr as Error).message}`
+          )
+        );
+      }
       throw err;
     }
   }
@@ -483,8 +505,10 @@ export class EvmLiquidityService {
    *  - v4: the adapter initializes the pool itself and books its own receipt
    *    token as the position; v4 keeps every pool's tokens in the PoolManager.
    *  - V2: the pair must exist before the call (the vault reads its balance first).
+   * `rate` is the LP price (VT per native, 1e18-scaled) used to skip v4 tiers
+   * someone initialized at another price.
    */
-  private async resolveVenue(vaultAddress: Address, adapter: Address): Promise<LpVenue> {
+  private async resolveVenue(vaultAddress: Address, adapter: Address, rate: bigint): Promise<LpVenue> {
     const client = this.contractReader.publicClient;
     const tag = (await client.readContract({
       address: adapter,
@@ -494,28 +518,47 @@ export class EvmLiquidityService {
     const maxDev = getEvmLpMaxPriceDeviationBps();
 
     if (tag === V4_TAG) {
-      const { fee, tickSpacing } = getEvmLpV4PoolConfig();
-      const protocolParams = encodeAbiParameters(
-        [{ type: 'uint24' }, { type: 'int24' }, { type: 'uint16' }],
-        [fee, tickSpacing, maxDev]
-      );
-      const [poolManager, vt] = (await Promise.all([
-        client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'poolManager' }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'vaultToken' }),
-      ])) as [Address, Address];
-      const key = (await client.readContract({
-        address: adapter,
-        abi: LP_ADAPTER_ABI,
-        functionName: 'poolKeyFor',
-        args: [vt, protocolParams],
-      })) as { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
-      const poolId = keccak256(
-        encodeAbiParameters(
-          [{ type: 'address' }, { type: 'address' }, { type: 'uint24' }, { type: 'int24' }, { type: 'address' }],
-          [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks]
-        )
-      );
-      return { protocol: 'uniswap-v4', positionAsset: adapter, vtPool: poolManager, protocolParams, poolId };
+      const [poolManager, stateView, vt] = await Promise.all([
+        client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'poolManager' }) as Promise<Address>,
+        client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'stateView' }) as Promise<Address>,
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'vaultToken' }) as Promise<Address>,
+      ]);
+
+      // First tier whose pool is uninitialized or trades at our price. v4 pools
+      // initialize once, so a tier someone pre-initialized elsewhere is skipped.
+      for (const { fee, tickSpacing } of getEvmLpV4PoolCandidates()) {
+        const protocolParams = encodeAbiParameters(
+          [{ type: 'uint24' }, { type: 'int24' }, { type: 'uint16' }],
+          [fee, tickSpacing, maxDev]
+        );
+        const key = (await client.readContract({
+          address: adapter,
+          abi: LP_ADAPTER_ABI,
+          functionName: 'poolKeyFor',
+          args: [vt, protocolParams],
+        })) as { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+        const poolId = keccak256(
+          encodeAbiParameters(
+            [{ type: 'address' }, { type: 'address' }, { type: 'uint24' }, { type: 'int24' }, { type: 'address' }],
+            [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks]
+          )
+        );
+        const [sqrtP] = (await client.readContract({
+          address: stateView,
+          abi: V4_STATE_VIEW_ABI,
+          functionName: 'getSlot0',
+          args: [poolId],
+        })) as readonly [bigint, number, number, number];
+
+        if (sqrtP === 0n || this.priceWithin(sqrtP, rate, maxDev)) {
+          if (sqrtP !== 0n) this.logger.log(`v4 pool ${poolId} (fee ${fee}) already exists at our price — joining it`);
+          return { protocol: 'uniswap-v4', positionAsset: adapter, vtPool: poolManager, protocolParams, poolId };
+        }
+        this.logger.warn(
+          `v4 pool ${poolId} (fee ${fee}/${tickSpacing}) was initialized at another price — trying next tier`
+        );
+      }
+      throw new Error(`every v4 fee tier for VT ${vt} is initialized at a foreign price`);
     }
 
     if (tag !== V2_TAG) throw new Error(`LP adapter ${adapter} has unknown protocol tag ${tag}`);
@@ -527,6 +570,13 @@ export class EvmLiquidityService {
       protocolParams: encodeAbiParameters([{ type: 'uint16' }], [maxDev]),
       pair,
     };
+  }
+
+  /** Pool price sqrtP (VT per native, X96) within maxDev bps of `rate` (1e18-scaled). */
+  private priceWithin(sqrtPriceX96: bigint, rate: bigint, maxDevBps: number): boolean {
+    const poolPrice = (sqrtPriceX96 * sqrtPriceX96 * 10n ** 18n) >> 192n; // 1e18-scaled
+    const diff = poolPrice > rate ? poolPrice - rate : rate - poolPrice;
+    return diff * 10_000n <= rate * BigInt(maxDevBps);
   }
 
   /** VT/WETH pair address, created through the adapter's factory if missing. */
@@ -626,9 +676,7 @@ export class EvmLiquidityService {
     }
 
     // Nobody contributed: the root commits to nothing and is never claimable.
-    const root = keccak256(
-      encodePacked(['string', 'address', 'uint256'], ['l4va-lp-technical-cycle', vaultAddress, current])
-    );
+    const root = lpTechnicalCycleRoot(vaultAddress, current);
     const valuationHash = keccak256(encodePacked(['string', 'bytes32'], ['l4va-lp-no-valuation', root]));
     await this.adminSigner.sendAndConfirm(
       { address: vaultAddress, abi: VAULT_ABI, functionName: 'closeCycle', args: [root, valuationHash, 0n, 0n] },

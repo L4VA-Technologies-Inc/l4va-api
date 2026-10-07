@@ -8,7 +8,7 @@ import { computeEvmAllocationRows, computeEvmLpCarveout, type EvmAllocationInput
 import { EvmContractReader } from './evm-contract-reader.service';
 import type { ContributionValueMap } from './evm-lock-time-pricing.service';
 import { EvmLpStatus, getEvmLpAdapterAddress, type EvmLpCarveoutRecord } from './evm-lp.config';
-import { EvmAssetKindOnchain } from './vault.abi';
+import { EvmAssetKindOnchain, VAULT_ABI } from './vault.abi';
 
 import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContributionValuation } from '@/database/evm-contribution-valuation.entity';
@@ -18,6 +18,19 @@ import { Vault } from '@/database/vault.entity';
 import { ChainType } from '@/types/vault.types';
 
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
+
+const PROTOCOL_FEE_CONFIG_ABI = [
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'feeFor',
+    inputs: [{ name: 'feeType', type: 'uint8' }],
+    outputs: [
+      { name: 'recipient', type: 'address' },
+      { name: 'bps', type: 'uint16' },
+    ],
+  },
+] as const;
 
 /** Nothing is distributable for this cycle — caller should cancel + refund. */
 export class EmptyAllocationError extends Error {
@@ -199,12 +212,14 @@ export class EvmAllocationService {
         : BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
     const assetsOfferedBps =
       expansionVtOverride && expansionVtOverride.size > 0 ? 0 : Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
+    const nativeFee = await this.contributionFeeFor(vault.contract_address as Address, cycleId);
     const lp = this.computeLpCarveout(
       vault,
       formulaRows,
       vtSupplyBaseUnits,
       assetsOfferedBps,
-      !!expansionVtOverride?.size
+      !!expansionVtOverride?.size,
+      nativeFee
     );
     const formulaResult = computeEvmAllocationRows({
       rows: formulaRows,
@@ -212,6 +227,7 @@ export class EvmAllocationService {
       assetsOfferedBps,
       lpVtAmount: lp ? BigInt(lp.lpVtAmount) : 0n,
       lpNativeAmount: lp ? BigInt(lp.lpNativeAmount) : 0n,
+      nativeFee,
     });
 
     if (formulaResult.perWallet.length === 0) {
@@ -437,6 +453,29 @@ export class EvmAllocationService {
   }
 
   /**
+   * Contribution fee `closeCycle` will accrue on this cycle: `nativeCollected × bps`
+   * (same floor rounding as `Vault._calculateFee`), with bps read from the vault's
+   * ProtocolFeeConfig at compute time.
+   */
+  private async contributionFeeFor(vaultAddress: Address, cycleId: bigint): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    const cycle = await this.contractReader.getCycle(vaultAddress, cycleId);
+    if (cycle.nativeCollected === 0n) return 0n;
+    const feeConfig = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'protocolFeeConfig',
+    })) as Address;
+    const [, bps] = (await client.readContract({
+      address: feeConfig,
+      abi: PROTOCOL_FEE_CONFIG_ABI,
+      functionName: 'feeFor',
+      args: [0], // FeeType.Contribution
+    })) as readonly [Address, number];
+    return (cycle.nativeCollected * BigInt(bps)) / 10_000n;
+  }
+
+  /**
    * LP carveout for the vault's first raise. Expansion cycles never seed a pool.
    * Null when LP is off (env), the vault has 0% LP, or nothing was raised.
    */
@@ -445,14 +484,15 @@ export class EvmAllocationService {
     rows: EvmAllocationInputRow[],
     vtSupplyBaseUnits: bigint,
     assetsOfferedBps: number,
-    isExpansion: boolean
+    isExpansion: boolean,
+    nativeFee: bigint
   ): EvmLpCarveoutRecord | null {
     const adapter = getEvmLpAdapterAddress();
     const lpBps = Math.round(Number(vault.liquidity_pool_contribution ?? 0) * 100);
     if (!adapter || isExpansion || lpBps <= 0) return null;
 
     const totalNativeRaised = rows.reduce((sum, r) => sum + r.nativeRaised, 0n);
-    const lp = computeEvmLpCarveout({ vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps });
+    const lp = computeEvmLpCarveout({ vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps, nativeFee });
     if (!lp) return null;
 
     this.logger.log(

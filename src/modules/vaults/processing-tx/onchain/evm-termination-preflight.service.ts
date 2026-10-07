@@ -19,10 +19,12 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
  * bypassed, misconfigured, or invalidated by pool movement afterwards.
  *
  * What it actually guards is wind-down QUALITY. There is no LP removal path in
- * the contract (`LiquidityPositionStatus.Closed` exists but is never assigned,
+ * the vault (`LiquidityPositionStatus.Closed` exists but is never assigned,
  * and `IVaultAdapter` has no removal surface), so a vault with meaningful
- * protocol-owned liquidity distributes LP tokens whose VT side is dying. This
- * blocks that case until LP removal ships.
+ * protocol-owned liquidity distributes LP tokens whose VT side is dying. For
+ * Uniswap v4 LP the vault authority unwinds through
+ * `UniswapV4LiquidityAdapter.withdrawLiquidity`; such a position stops counting
+ * once the adapter holds no liquidity for the vault.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * OPERATIONAL RULE — do not terminate a vault that has:
@@ -222,13 +224,42 @@ export class EvmTerminationPreflightService {
         args: [i],
       })) as { positionAsset: Address; status: number };
 
-      if (p.status === 0 /* Active */) {
+      if (p.status === 0 /* Active */ && !(await this.isWithdrawnV4Position(p.positionAsset, vaultAddress))) {
         activeCount++;
         positionAssets.add(p.positionAsset.toLowerCase());
       }
     }
 
     return { activeCount, positionAssets: [...positionAssets] as Address[] };
+  }
+
+  /**
+   * Vault records never leave Active (the contract has no LP-close surface). For
+   * a Uniswap v4 position the asset is the LP adapter's receipt, and the vault
+   * authority can withdraw the liquidity through the adapter; once nothing of
+   * this vault is left in the pool the position no longer blocks termination.
+   * Any other asset (e.g. a V2 pair) does not implement `liquidityOf` and stays active.
+   */
+  private async isWithdrawnV4Position(positionAsset: Address, vaultAddress: Address): Promise<boolean> {
+    try {
+      const liquidity = (await this.contractReader.publicClient.readContract({
+        address: positionAsset,
+        abi: [
+          {
+            type: 'function',
+            stateMutability: 'view',
+            name: 'liquidityOf',
+            inputs: [{ name: 'vault', type: 'address' }],
+            outputs: [{ type: 'uint256' }],
+          },
+        ],
+        functionName: 'liquidityOf',
+        args: [vaultAddress],
+      })) as bigint;
+      return liquidity === 0n;
+    } catch {
+      return false;
+    }
   }
 
   /**
