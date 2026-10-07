@@ -24,5 +24,5 @@ export const BURN_LOCK_ABI = [
     ],
   },
   { name: 'NothingToBurn', type: 'error', inputs: [] },
-  { name: 'NotStarted', type: 'error', inputs: [{ name: 'startTime', type: 'uint256' }] },
+  { name: 'NotStarter', type: 'error', inputs: [] },
 ] as const;
