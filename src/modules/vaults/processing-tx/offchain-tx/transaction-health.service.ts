@@ -106,6 +106,25 @@ export class TransactionHealthService {
   }
 
   /**
+   * Confirm a just-broadcast EVM transaction as soon as it is mined, instead of
+   * waiting for the Alchemy webhook. The webhook only reaches deployed
+   * environments, so without this a locally run API leaves a new vault in
+   * "Registering" until the 10-minute sweep — long after a short window closed.
+   * Same idempotent path as the sweep, so a webhook arriving too is harmless.
+   */
+  async confirmEvmTransactionWhenMined(txHash: string): Promise<void> {
+    if (!this.evmClient) return;
+    try {
+      await this.evmClient.waitForTransactionReceipt({ hash: txHash as `0x${string}`, timeout: 120_000 });
+      const transaction = await this.transactionRepository.findOne({ where: { tx_hash: txHash } });
+      if (!transaction || transaction.status !== TransactionStatus.submitted) return;
+      await this.verifyEvmTransaction(transaction);
+    } catch (error) {
+      this.logger.warn(`Immediate confirmation of ${txHash} failed, the sweep will retry: ${(error as Error).message}`);
+    }
+  }
+
+  /**
    * Verify a transaction on-chain and update its status
    * @param transaction Transaction to verify
    */

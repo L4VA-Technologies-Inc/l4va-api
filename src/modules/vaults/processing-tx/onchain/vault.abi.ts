@@ -797,6 +797,44 @@ export const VAULT_ABI = [
     outputs: [{ type: 'uint256' }],
   },
 
+  // --- LP provision (post-close LP seeding) ----------------------------------
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'provideLiquidity',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          { name: 'operationId', type: 'bytes32' },
+          { name: 'adapter', type: 'address' },
+          { name: 'nativeAmount', type: 'uint256' },
+          { name: 'expectedPositionAsset', type: 'address' },
+          { name: 'minPositionAmount', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'vtPool', type: 'address' },
+          { name: 'protocolParams', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [{ name: 'lpPositionId', type: 'uint256' }],
+  },
+  {
+    type: 'event',
+    name: 'LiquidityProvided',
+    inputs: [
+      { name: 'lpPositionId', type: 'uint256', indexed: true },
+      { name: 'cycleId', type: 'uint256', indexed: true },
+      { name: 'adapter', type: 'address', indexed: true },
+      { name: 'operationId', type: 'bytes32', indexed: false },
+      { name: 'nativeAmount', type: 'uint256', indexed: false },
+      { name: 'lpVtAmount', type: 'uint256', indexed: false },
+      { name: 'positionAsset', type: 'address', indexed: false },
+      { name: 'positionAmount', type: 'uint256', indexed: false },
+    ],
+  },
+
   // --- LP positions (read-only; used by the termination preflight) -----------
   {
     type: 'function',

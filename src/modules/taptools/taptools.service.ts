@@ -1271,8 +1271,7 @@ export class TaptoolsService {
         continue;
       }
 
-      const isFungible =
-        asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
+      const isFungible = asset.type === AssetType.FT || asset.type === AssetType.ETH || asset.type === AssetType.ADA;
       const key = isFungible ? `${asset.policy_id}_${asset.asset_id}_${asset.type}` : `nft_${asset.id}`;
       const existingAsset = isFungible ? assetMap.get(key) : undefined;
 
@@ -1344,8 +1343,9 @@ export class TaptoolsService {
           isEvmVault &&
           (asset.policyId === '0x0000000000000000000000000000000000000000' || asset.assetId === 'eth')
         ) {
-          const totalEthValue = asset.quantity / 1e18;
-          const acquiredEthValue = asset.acquiredQuantity / 1e18;
+          // quantity / acquiredQuantity are aggregated from `normalizedQuantity`, already in ETH.
+          const totalEthValue = asset.quantity;
+          const acquiredEthValue = asset.acquiredQuantity;
           const valueUsd_ = totalEthValue * ethPrice;
           const valueAda_ = adaPrice > 0 ? valueUsd_ / adaPrice : 0;
           assetsWithValues.push({ ...asset, assetName: 'ETH', valueAda: valueAda_, valueUsd: valueUsd_ });

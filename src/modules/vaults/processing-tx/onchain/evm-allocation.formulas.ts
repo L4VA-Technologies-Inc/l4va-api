@@ -138,3 +138,61 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
     vtToContributors,
   };
 }
+
+export interface EvmLpCarveoutParams {
+  /** Total VT supply in base units. */
+  vtSupplyBaseUnits: bigint;
+  /** Native (wei) raised in the Acquire window. */
+  totalNativeRaised: bigint;
+  /** Percentage of VT supply offered to acquirers, in bips (0..10000). */
+  assetsOfferedBps: number;
+  /** Vault `liquidity_pool_contribution`, in bips (0..10000). */
+  lpBps: number;
+}
+
+export interface EvmLpCarveout {
+  /** VT minted into the pool (base units). Subtract from the allocatable supply. */
+  lpVtAmount: bigint;
+  /** Native (wei) sent into the pool. Kept out of contributor payouts. */
+  lpNativeAmount: bigint;
+  /** `adaPairVtPerNativeUnit` for the LP cycle: VT per 1 native unit, 1e18-scaled. */
+  rate: bigint;
+  /** FDV in wei the pool price is derived from. */
+  fdvNative: bigint;
+}
+
+/**
+ * LP sizing, same model as Cardano `DistributionCalculationService.calculateLpTokens`:
+ *
+ *   fdv          = totalNativeRaised / assetsOffered%
+ *   lpNative     = fdv    * lp% / 2
+ *   lpVt         = supply * lp% / 2
+ *   pool price   = lpNative / lpVt = fdv / supply
+ *
+ * If lpNative would exceed what was raised it is capped at the raise and lpVt
+ * shrinks with it, so the pool price stays fdv / supply.
+ *
+ * Returns null when there is no pool to seed (LP 0%, nothing raised, or no
+ * acquirers — without an acquire raise there is no native and no FDV anchor).
+ */
+export function computeEvmLpCarveout(params: EvmLpCarveoutParams): EvmLpCarveout | null {
+  const { vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps } = params;
+  if (lpBps < 0 || lpBps > 10_000) throw new Error(`lpBps must be in [0, 10000]; got ${lpBps}`);
+  if (lpBps === 0 || assetsOfferedBps <= 0 || totalNativeRaised <= 0n || vtSupplyBaseUnits <= 0n) return null;
+
+  const fdvNative = (totalNativeRaised * 10_000n) / BigInt(assetsOfferedBps);
+  let lpNativeAmount = (fdvNative * BigInt(lpBps)) / 20_000n;
+  let lpVtAmount = (vtSupplyBaseUnits * BigInt(lpBps)) / 20_000n;
+
+  if (lpNativeAmount > totalNativeRaised) {
+    lpNativeAmount = totalNativeRaised;
+    lpVtAmount = (lpNativeAmount * vtSupplyBaseUnits) / fdvNative;
+  }
+  if (lpNativeAmount === 0n || lpVtAmount === 0n) return null;
+
+  const rate = (lpVtAmount * 10n ** 18n) / lpNativeAmount;
+  // The vault mints floor(lpNative * rate / 1e18) VT, which never exceeds lpVtAmount.
+  lpVtAmount = (lpNativeAmount * rate) / 10n ** 18n;
+
+  return { lpVtAmount, lpNativeAmount, rate, fdvNative };
+}

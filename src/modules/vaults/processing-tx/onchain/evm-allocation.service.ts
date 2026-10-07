@@ -4,9 +4,10 @@ import { DataSource, Repository } from 'typeorm';
 import { keccak256, toBytes, type Address, type Hex } from 'viem';
 
 import { buildAllocationMerkleTree, type AllocationLeafInput } from './evm-allocation-merkle';
-import { computeEvmAllocationRows, type EvmAllocationInputRow } from './evm-allocation.formulas';
+import { computeEvmAllocationRows, computeEvmLpCarveout, type EvmAllocationInputRow } from './evm-allocation.formulas';
 import { EvmContractReader } from './evm-contract-reader.service';
 import type { ContributionValueMap } from './evm-lock-time-pricing.service';
+import { EvmLpStatus, getEvmLpAdapterAddress, type EvmLpCarveoutRecord } from './evm-lp.config';
 import { EvmAssetKindOnchain } from './vault.abi';
 
 import { EvmAllocation } from '@/database/evm-allocation.entity';
@@ -198,13 +199,19 @@ export class EvmAllocationService {
         : BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
     const assetsOfferedBps =
       expansionVtOverride && expansionVtOverride.size > 0 ? 0 : Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
+    const lp = this.computeLpCarveout(
+      vault,
+      formulaRows,
+      vtSupplyBaseUnits,
+      assetsOfferedBps,
+      !!expansionVtOverride?.size
+    );
     const formulaResult = computeEvmAllocationRows({
       rows: formulaRows,
       vtSupplyBaseUnits,
       assetsOfferedBps,
-      // LP carveout deferred — see plan Phase B open items.
-      lpVtAmount: 0n,
-      lpNativeAmount: 0n,
+      lpVtAmount: lp ? BigInt(lp.lpVtAmount) : 0n,
+      lpNativeAmount: lp ? BigInt(lp.lpNativeAmount) : 0n,
     });
 
     if (formulaResult.perWallet.length === 0) {
@@ -257,9 +264,11 @@ export class EvmAllocationService {
         normalized_prices: normalizedPrices,
         total_native_raised: formulaResult.totalNativeRaised.toString(),
         total_asset_value_native: formulaResult.totalContributedValue.toString(),
-        fdv_native: (formulaResult.totalContributedValue + formulaResult.totalNativeRaised).toString(),
+        fdv_native: lp
+          ? lp.fdvNative
+          : (formulaResult.totalContributedValue + formulaResult.totalNativeRaised).toString(),
         vt_price: '0',
-        lp_carveout: {},
+        lp_carveout: lp ?? {},
         merkle_root: tree.root,
         valuation_hash: valuationHash,
         total_vt_allocation: formulaResult.totalVtAllocation.toString(),
@@ -425,6 +434,39 @@ export class EvmAllocationService {
       totalVtAllocation: input.totalVtAllocation.toString(),
       vaultId: input.vaultId,
     });
+  }
+
+  /**
+   * LP carveout for the vault's first raise. Expansion cycles never seed a pool.
+   * Null when LP is off (env), the vault has 0% LP, or nothing was raised.
+   */
+  private computeLpCarveout(
+    vault: Vault,
+    rows: EvmAllocationInputRow[],
+    vtSupplyBaseUnits: bigint,
+    assetsOfferedBps: number,
+    isExpansion: boolean
+  ): EvmLpCarveoutRecord | null {
+    const adapter = getEvmLpAdapterAddress();
+    const lpBps = Math.round(Number(vault.liquidity_pool_contribution ?? 0) * 100);
+    if (!adapter || isExpansion || lpBps <= 0) return null;
+
+    const totalNativeRaised = rows.reduce((sum, r) => sum + r.nativeRaised, 0n);
+    const lp = computeEvmLpCarveout({ vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps });
+    if (!lp) return null;
+
+    this.logger.log(
+      `LP carveout for vault ${vault.id}: ${lpBps} bps → lpNative=${lp.lpNativeAmount} lpVt=${lp.lpVtAmount} rate=${lp.rate}`
+    );
+    return {
+      status: EvmLpStatus.pending,
+      lpBps,
+      lpVtAmount: lp.lpVtAmount.toString(),
+      lpNativeAmount: lp.lpNativeAmount.toString(),
+      rate: lp.rate.toString(),
+      fdvNative: lp.fdvNative.toString(),
+      adapter,
+    };
   }
 }
 

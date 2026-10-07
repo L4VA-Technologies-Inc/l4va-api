@@ -69,6 +69,7 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
+import { TransactionHealthService } from '@/modules/vaults/processing-tx/offchain-tx/transaction-health.service';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -228,6 +229,7 @@ export class VaultsService {
     private readonly dexHunterService: DexHunterService,
     private readonly claimsService: ClaimsService,
     private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly transactionHealthService: TransactionHealthService,
     private readonly indexVaultService: IndexVaultService,
     private readonly evmCycleCloseService: EvmCycleCloseService,
     private readonly evmContractReader: EvmContractReader,
@@ -998,6 +1000,7 @@ export class VaultsService {
       if (!signedTx.txId)
         throw new BadRequestException('txId (transaction record ID) is required for EVM vault publishing');
       await this.evmVaultSignerService.confirmVaultCreation(userId, signedTx.vaultId, signedTx.txHash, signedTx.txId);
+      void this.transactionHealthService.confirmEvmTransactionWhenMined(signedTx.txHash);
       return this.getVaultById(signedTx.vaultId, userId);
     }
 
