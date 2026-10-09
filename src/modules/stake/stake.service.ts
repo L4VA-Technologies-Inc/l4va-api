@@ -21,6 +21,7 @@ import { SubmitStakeTxDto } from './dto/submit-stake-tx.dto';
 import { SubmitTxRes } from './dto/submit-tx.res';
 import { getStakeAdminWalletBalances } from './stake-admin-wallet-balances';
 import { toHumanAmountNumber } from './stake-amounts';
+import { buildStakingApyByTokenType, calculateStakeReward, type StakeApy } from './stake-apy';
 import { encodeStakeDatum, tryDecodeStakeDatum } from './stake-datum';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
@@ -95,9 +96,8 @@ export class StakeService {
   private readonly referenceScriptIndex: number;
   private readonly adminAddress: string;
   private readonly adminSKey: string;
-  private readonly APY: number;
-  /** APY pre-scaled to 12 decimal places for bigint reward arithmetic. */
-  private readonly APY_SCALED: bigint;
+  /** TokenType → APY (VLRM and L4VA have separate rates). */
+  private readonly apyByTokenType: Map<TokenType, StakeApy>;
   /** Fallback decimals for unknown tokens. */
   private readonly TOKEN_DECIMALS = 4;
   /** unit (policyId + assetName hex, lowercase) → { decimals, type } */
@@ -121,14 +121,7 @@ export class StakeService {
     this.adminAddress = this.configService.getOrThrow<string>('L4VA_TREASURY_ADDRESS');
     this.adminSKey = this.configService.getOrThrow<string>('L4VA_TREASURY_KEY');
 
-    const apyPercentRaw = this.configService.get<string>('STAKING_APY') ?? '8';
-    const apyPercent = Number.parseFloat(apyPercentRaw);
-    if (!Number.isFinite(apyPercent) || apyPercent < 0 || apyPercent > 100) {
-      throw new Error(`Invalid STAKING_APY: expected a number between 0 and 100 (percent), got "${apyPercentRaw}"`);
-    }
-    this.APY = apyPercent / 100;
-    this.APY_SCALED = BigInt(Math.round(this.APY * 1e12));
-
+    this.apyByTokenType = buildStakingApyByTokenType(this.configService);
     this.tokenRegistry = buildStakeTokenRegistry(this.configService);
   }
 
@@ -211,6 +204,10 @@ export class StakeService {
   }
 
   /** Reverse lookup: TokenType → canonical unit string. */
+  private getApyForTokenType(tokenType: TokenType | null): StakeApy {
+    return (tokenType && this.apyByTokenType.get(tokenType)) || { percent: 0, scaled: 0n };
+  }
+
   private getUnitForTokenType(tokenType: TokenType): string {
     for (const [unit, meta] of this.tokenRegistry) {
       if (meta.type === tokenType) return unit;
@@ -524,14 +521,11 @@ export class StakeService {
     unit: string,
     utxo: UTxO
   ): { deposit: bigint; reward: bigint; payout: bigint; staked_at: bigint } {
-    const MS_IN_YEAR = 365n * 24n * 60n * 60n * 1000n;
-    const APY_SCALE = 10n ** 12n;
-
     const amount = utxo.assets[unit] ?? 0n;
     const decoded = tryDecodeStakeDatum(utxo.datum!);
     const staked_at = decoded!.staked_at;
-    const elapsed = BigInt(Math.max(0, Date.now() - Number(staked_at)));
-    const reward = (amount * this.APY_SCALED * elapsed) / (MS_IN_YEAR * APY_SCALE);
+    const { scaled } = this.getApyForTokenType(this.getTokenTypeForUnit(unit));
+    const reward = calculateStakeReward(amount, scaled, Date.now() - Number(staked_at));
     return { deposit: amount, reward, payout: amount + reward, staked_at };
   }
 
@@ -693,9 +687,6 @@ export class StakeService {
    * Does not require an on-chain call.
    */
   async getStakedBalanceFromDb(userId: string): Promise<StakedBalanceRes> {
-    const MS_IN_YEAR = 365n * 24n * 60n * 60n * 1000n;
-    const APY_SCALE = 10n ** 12n;
-
     const positions = await this.tokenStakingPositionRepository.find({
       where: { user_id: userId, status: StakingStatus.ACTIVE },
       relations: ['stake_transaction'],
@@ -724,8 +715,8 @@ export class StakeService {
 
         const decimals = this.getDecimalsForUnit(unit);
         const amount = BigInt(pos.amount);
-        const elapsed = BigInt(Math.max(0, Date.now() - stakedAt));
-        const reward = (amount * this.APY_SCALED * elapsed) / (MS_IN_YEAR * APY_SCALE);
+        const apy = this.getApyForTokenType(pos.token_type);
+        const reward = calculateStakeReward(amount, apy.scaled, Date.now() - stakedAt);
         const payout = amount + reward;
 
         return {
@@ -737,12 +728,17 @@ export class StakeService {
           stakedAt,
           estimatedReward: toHumanAmountNumber(reward, decimals),
           estimatedPayout: toHumanAmountNumber(payout, decimals),
+          apy: apy.percent,
           eligible: true,
         } satisfies StakedBoxItem;
       })
       .filter((b): b is NonNullable<typeof b> => b !== null);
 
-    return { boxes };
+    const apy = Object.fromEntries(
+      Array.from(this.apyByTokenType.entries()).map(([tokenType, { percent }]) => [tokenType, percent])
+    );
+
+    return { boxes, apy };
   }
 
   /**

@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 
 import { getStakeAdminWalletBalances } from '../stake-admin-wallet-balances';
 import { toHumanAmountString } from '../stake-amounts';
+import { buildStakingApyByTokenType, calculateStakeReward, type StakeApy } from '../stake-apy';
 
 import {
   DistributedRewardRes,
@@ -24,8 +25,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
 export class StakeAdminService {
-  private readonly APY: number;
-  private readonly APY_SCALED: bigint;
+  private readonly apyByTokenType: Map<TokenType, StakeApy>;
   private readonly TOKEN_DECIMALS = 4;
   private readonly tokenRegistry: Map<string, TokenMeta>;
   private readonly adminAddress: string;
@@ -38,13 +38,7 @@ export class StakeAdminService {
     @InjectRepository(TokenStakingPosition)
     private readonly tokenStakingPositionRepository: Repository<TokenStakingPosition>
   ) {
-    const apyPercentRaw = this.configService.get<string>('STAKING_APY') ?? '8';
-    const apyPercent = Number.parseFloat(apyPercentRaw);
-    if (!Number.isFinite(apyPercent) || apyPercent < 0 || apyPercent > 100) {
-      throw new Error(`Invalid STAKING_APY: expected a number between 0 and 100 (percent), got "${apyPercentRaw}"`);
-    }
-    this.APY = apyPercent / 100;
-    this.APY_SCALED = BigInt(Math.round(this.APY * 1e12));
+    this.apyByTokenType = buildStakingApyByTokenType(this.configService);
     this.tokenRegistry = buildStakeTokenRegistry(this.configService);
     this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
     this.blockfrost = new BlockFrostAPI({
@@ -54,6 +48,10 @@ export class StakeAdminService {
 
   private getDecimalsForUnit(unit: string): number {
     return this.tokenRegistry.get(unit.toLowerCase())?.decimals ?? this.TOKEN_DECIMALS;
+  }
+
+  private getApyScaled(tokenType: TokenType): bigint {
+    return this.apyByTokenType.get(tokenType)?.scaled ?? 0n;
   }
 
   private getUnitForTokenType(tokenType: TokenType): string {
@@ -90,8 +88,6 @@ export class StakeAdminService {
   }
 
   async getStakingAnalytics(): Promise<StakeAnalyticsRes> {
-    const MS_IN_YEAR = 365n * 24n * 60n * 60n * 1000n;
-    const APY_SCALE = 10n ** 12n;
     const now = Date.now();
 
     const stakeTypes = [
@@ -179,11 +175,7 @@ export class StakeAdminService {
       const stakedAt = Number(txMeta?.staked_at ?? 0);
       const amount = BigInt(pos.amount ?? '0');
 
-      let reward = 0n;
-      if (stakedAt > 0) {
-        const elapsed = BigInt(Math.max(0, now - stakedAt));
-        reward = (amount * this.APY_SCALED * elapsed) / (MS_IN_YEAR * APY_SCALE);
-      }
+      const reward = stakedAt > 0 ? calculateStakeReward(amount, this.getApyScaled(tokenType), now - stakedAt) : 0n;
 
       if (!tokenAggMap.has(tokenType)) {
         tokenAggMap.set(tokenType, {
@@ -231,6 +223,7 @@ export class StakeAdminService {
 
       return {
         tokenType,
+        apy: this.apyByTokenType.get(tokenType)?.percent ?? 0,
         activePositionsCount: agg.activePositions,
         uniqueStakers: agg.stakerIds.size,
         totalDepositedRaw: agg.totalDepositRaw.toString(),
@@ -264,9 +257,8 @@ export class StakeAdminService {
         : pos.unstakeUpdatedAt
           ? new Date(pos.unstakeUpdatedAt).getTime()
           : now;
-      const elapsed = BigInt(Math.max(0, closedAt - stakedAt));
       const amount = BigInt(pos.amount ?? '0');
-      const reward = (amount * this.APY_SCALED * elapsed) / (MS_IN_YEAR * APY_SCALE);
+      const reward = calculateStakeReward(amount, this.getApyScaled(tokenType), closedAt - stakedAt);
       distributedRewardByToken.set(tokenType, (distributedRewardByToken.get(tokenType) ?? 0n) + reward);
 
       const date = new Date(closedAt).toISOString().slice(0, 10);
@@ -366,7 +358,10 @@ export class StakeAdminService {
 
     return {
       generatedAt: now,
-      apy: this.APY * 100,
+      apy: this.apyByTokenType.get(TokenType.VLRM)?.percent ?? 0,
+      apyByToken: Object.fromEntries(
+        Array.from(this.apyByTokenType.entries()).map(([tokenType, { percent }]) => [tokenType, percent])
+      ),
       totalActivePositions: activePositions.length,
       totalClosedPositions: closedPositions.length,
       uniqueActiveStakers: activeStakerIds.size,
