@@ -21,6 +21,7 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { MinswapModule } from '@/modules/minswap/minswap.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
@@ -38,6 +39,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     GovernanceModule,
     ClaimsModule,
     VyfiModule,
+    MinswapModule,
     TransactionsModule,
     AlertsModule,
     DistributionCalculationModule,
