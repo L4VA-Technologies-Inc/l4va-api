@@ -59,7 +59,7 @@ export const VAULT_TAGS = [
  * feeds the errors back for correction, so a stale spec costs an extra turn, not a bad vault.
  */
 export const VAULT_CREATION_SPEC: VaultCreationSpec = {
-  version: '1.3.0',
+  version: '1.4.0',
 
   rules: [
     'Percentages are whole-number percents (0-100), not basis points.',
@@ -426,11 +426,24 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
     preprod: {
       contributionDuration: { min: 300_000, default: 300_000 },
       acquireWindowDuration: { min: 300_000, default: 300_000 },
+      // Testnet release: the assistant only builds acquire-only vaults.
+      isAcquireOnly: { default: true, description: 'Always true on testnet.', aiEditable: false },
+      tokensForAcquires: { default: 100, description: 'Always 100 on testnet (acquire-only).', aiEditable: false },
     },
     mainnet: {
       contributionDuration: { min: 5 * DAY_MS, default: 5 * DAY_MS },
       acquireWindowDuration: { min: 5 * DAY_MS, default: 5 * DAY_MS },
     },
+  },
+
+  networkRules: {
+    preprod: [
+      'Testnet release: the assistant only creates acquire-only vaults (isAcquireOnly = true, ' +
+        'tokensForAcquires = 100). Always pick the acquire-only preset, never propose an asset ' +
+        'contribution window or contributors, and if the user asks for another vault type explain that ' +
+        'only the acquire flow is available through the assistant on testnet.',
+    ],
+    mainnet: [],
   },
 
   chainProfiles: {

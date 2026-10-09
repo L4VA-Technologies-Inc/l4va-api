@@ -44,7 +44,12 @@ export function resolveVaultCreationSpec(
     archetypeSummary: archetypeProfile.summary,
     currency: profile.currency,
     assetIdentifier: profile.assetIdentifier,
-    rules: [...VAULT_CREATION_SPEC.rules, ...(profile.rules ?? []), ...(archetypeProfile.rules ?? [])],
+    rules: [
+      ...VAULT_CREATION_SPEC.rules,
+      ...VAULT_CREATION_SPEC.networkRules[network],
+      ...(profile.rules ?? []),
+      ...(archetypeProfile.rules ?? []),
+    ],
     fields,
   };
 }

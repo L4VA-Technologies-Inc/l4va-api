@@ -63,6 +63,8 @@ export interface VaultCreationSpec {
   rules: string[];
   fields: Record<string, VaultFieldSpec>;
   networkOverrides: Record<SpecNetwork, Record<string, VaultFieldOverride>>;
+  /** Rules that only apply on a given network (e.g. the testnet release limits the assistant to acquire-only). */
+  networkRules: Record<SpecNetwork, string[]>;
   chainProfiles: Record<SpecChain, ChainProfile>;
   archetypeProfiles: Record<VaultArchetype, ArchetypeProfile>;
 }

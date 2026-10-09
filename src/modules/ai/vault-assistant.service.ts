@@ -270,7 +270,10 @@ export class VaultAssistantService {
     const [archetype = VaultArchetype.standard] = this.systemSettingsService.vaultArchetypesEnabled(chain);
     const spec = resolveVaultCreationSpec(chain, request.network, archetype);
 
-    const presets = await this.presetsService.getAllPresets(userId);
+    const allPresets = await this.presetsService.getAllPresets(userId);
+    // Testnet release: the assistant only builds acquire-only vaults, so it only sees that preset.
+    const acquireOnlyPresets = allPresets.filter(preset => preset.type?.toLowerCase() === 'acquire_only');
+    const presets = request.network === 'preprod' && acquireOnlyPresets.length ? acquireOnlyPresets : allPresets;
     const presetContext: PresetContext[] = presets.map(preset => ({
       id: preset.id,
       name: preset.name,
