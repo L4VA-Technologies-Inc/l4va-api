@@ -196,6 +196,8 @@ export class PresaleService implements OnModuleInit {
   private readonly deployBlock: bigint;
   private readonly logChunkBlocks: bigint;
   private readonly rpcLabel: string;
+  /** Off unless `PRESALE_POLLING_ENABLED=true`; while off, no chain requests are sent and cached endpoints serve the empty state. */
+  private readonly pollingEnabled: boolean;
 
   private state: PresaleState;
   private feed: PurchaseFeed;
@@ -220,6 +222,7 @@ export class PresaleService implements OnModuleInit {
     // silently reading another network, so the built-in addresses below are
     // selected by chain id and never used as a blanket fallback.
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '0');
+    this.pollingEnabled = this.configService.get<string>('PRESALE_POLLING_ENABLED')?.trim().toLowerCase() === 'true';
     const defaults = PRESALE_DEFAULTS[this.chainId] ?? null;
     this.deployBlock = this.parseBigint(
       this.configService.get<string>('PRESALE_DEPLOY_BLOCK'),
@@ -292,6 +295,10 @@ export class PresaleService implements OnModuleInit {
       this.logger.warn('PRESALE_ADDRESS not configured — presale endpoints will report unconfigured.');
       return;
     }
+    if (!this.pollingEnabled) {
+      this.logger.warn('PRESALE_POLLING_ENABLED is not true — presale polling disabled, no RPC requests will be sent.');
+      return;
+    }
     const successor = this.nextAddress ? `, successor ${this.nextAddress}` : '';
     this.logger.log(
       `Presale poller starting — contract ${this.address}${successor} on chain ${this.chainId} via ${this.rpcLabel}`
@@ -313,7 +320,7 @@ export class PresaleService implements OnModuleInit {
 
   @Cron('*/10 * * * * *', { name: 'presale-state' })
   async refreshState(): Promise<void> {
-    if (!this.address || this.refreshingState) return;
+    if (!this.address || !this.pollingEnabled || this.refreshingState) return;
     this.refreshingState = true;
     try {
       // One multicall per contract. With no successor configured this is exactly
@@ -416,7 +423,7 @@ export class PresaleService implements OnModuleInit {
 
   @Cron('*/20 * * * * *', { name: 'presale-purchases' })
   async refreshPurchases(): Promise<void> {
-    if (!this.address || this.scanning) return;
+    if (!this.address || !this.pollingEnabled || this.scanning) return;
     this.scanning = true;
     try {
       const latest: bigint = await this.logClient.getBlockNumber();

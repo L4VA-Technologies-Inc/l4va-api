@@ -43,7 +43,7 @@ export class RewardClaimProxy {
     // Default to local dev setup (localhost:4000)
     // Testnet/Mainnet MUST set REWARDS_SERVICE_URL explicitly (e.g., http://l4va-rewards:3001 for Docker)
     this.rewardsBaseUrl = this.configService.get<string>('REWARDS_SERVICE_URL', 'http://localhost:4000');
-    this.l4vaDecimals = this.configService.get<number>('L4VA_DECIMALS') || 3;
+    this.l4vaDecimals = this.configService.get<number>('L4VA_DECIMALS') || 6;
     this.internalToken = this.configService.get<string>('INTERNAL_SERVICE_TOKEN') || '';
   }
 
