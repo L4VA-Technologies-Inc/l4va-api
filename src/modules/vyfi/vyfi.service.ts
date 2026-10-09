@@ -7,6 +7,7 @@ import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import NodeCache from 'node-cache';
 import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
@@ -94,6 +95,13 @@ export class VyfiService {
   private readonly isMainnet: boolean;
   private readonly networkId: number;
 
+  /** Cache for /lp responses — avoids repeated requests within a TVL update cycle */
+  private readonly poolDataCache: NodeCache;
+  /** TTL for found pools (5 min) */
+  private static readonly POOL_CACHE_TTL = 300;
+  /** TTL for not-found/null results (1 min) to stop repeated 502 hammering */
+  private static readonly POOL_NULL_CACHE_TTL = 60;
+
   constructor(
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
@@ -114,6 +122,7 @@ export class VyfiService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
+    this.poolDataCache = new NodeCache({ stdTTL: VyfiService.POOL_CACHE_TTL, checkperiod: 60, useClones: false });
 
     // Warn if POOL_ADDRESS is not configured (required for LP creation)
     if (!this.poolAddress) {
@@ -148,10 +157,11 @@ export class VyfiService {
         data: response.data,
       };
     } catch (error) {
-      if (error.response?.status === 500 || error.response?.status === 404) {
+      // Handle expected errors gracefully (pool not found, server unavailable)
+      if (error.response?.status === 500 || error.response?.status === 404 || error.response?.status === 502) {
         return {
           exists: false,
-          error: 'Pool does not exist',
+          error: error.response?.status === 502 ? 'VyFi service temporarily unavailable' : 'Pool does not exist',
         };
       }
       throw new Error(`Failed to check VyFi pool: ${error.message}`);
@@ -217,6 +227,10 @@ export class VyfiService {
    * @returns Raw VyFi pool data with quantities or null
    */
   async getVyFiPoolData(tokenAUnit: string, tokenBUnit: string = 'lovelace'): Promise<VyFiPoolData | null> {
+    const cacheKey = `${tokenAUnit}:${tokenBUnit}`;
+    const cached = this.poolDataCache.get<VyFiPoolData | null>(cacheKey);
+    if (cached !== undefined) return cached;
+
     try {
       const poolCheck = await this.checkPool({
         tokenAUnit,
@@ -224,15 +238,22 @@ export class VyfiService {
       });
 
       if (!poolCheck.exists || !poolCheck.data) {
+        // Log at debug level if VyFi service is temporarily unavailable
+        if (poolCheck.error?.includes('temporarily unavailable')) {
+          this.logger.debug(`VyFi pool lookup skipped: ${poolCheck.error} (${tokenAUnit}/${tokenBUnit})`);
+        }
+        this.poolDataCache.set(cacheKey, null, VyfiService.POOL_NULL_CACHE_TTL);
         return null;
       }
 
       // VyFi API returns an array, get the first pool
       const poolData: VyFiPoolData | undefined = Array.isArray(poolCheck.data) ? poolCheck.data[0] : poolCheck.data;
-
-      return poolData || null;
+      const result = poolData || null;
+      this.poolDataCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       this.logger.error(`Failed to get VyFi pool data: ${error.message}`);
+      this.poolDataCache.set(cacheKey, null, VyfiService.POOL_NULL_CACHE_TTL);
       return null;
     }
   }
