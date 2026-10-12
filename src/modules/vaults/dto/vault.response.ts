@@ -419,6 +419,16 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   protocolAcquiresFeeWei?: string;
 
+  @ApiProperty({
+    description: 'EVM on-chain acquire fee in bps, taken from the ETH raised when the vault locks',
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquireFeeBps' },
+  })
+  protocolAcquireFeeBps?: number;
+
   @ApiProperty({ description: 'Whether protocol fees are enabled', required: false })
   @DtoRepresent({
     transform: false,

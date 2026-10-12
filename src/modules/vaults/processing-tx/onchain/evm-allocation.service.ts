@@ -7,6 +7,7 @@ import { buildAllocationMerkleTree, type AllocationLeafInput } from './evm-alloc
 import { computeEvmAllocationRows, type EvmAllocationInputRow } from './evm-allocation.formulas';
 import { EvmContractReader } from './evm-contract-reader.service';
 import type { ContributionValueMap } from './evm-lock-time-pricing.service';
+import { ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmAssetKindOnchain } from './vault.abi';
 
 import { EvmAllocation } from '@/database/evm-allocation.entity';
@@ -198,6 +199,12 @@ export class EvmAllocationService {
         : BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
     const assetsOfferedBps =
       expansionVtOverride && expansionVtOverride.size > 0 ? 0 : Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
+    // Read at snapshot time; closeCycle reads it again at close. A rate change
+    // in between would make this snapshot fail its close, not misprice it.
+    const contributionFeeBps = await this.contractReader.protocolFeeBps(
+      vault.contract_address as Address,
+      ProtocolFeeType.Contribution
+    );
     const formulaResult = computeEvmAllocationRows({
       rows: formulaRows,
       vtSupplyBaseUnits,
@@ -205,6 +212,7 @@ export class EvmAllocationService {
       // LP carveout deferred — see plan Phase B open items.
       lpVtAmount: 0n,
       lpNativeAmount: 0n,
+      contributionFeeBps,
     });
 
     if (formulaResult.perWallet.length === 0) {
