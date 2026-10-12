@@ -23,7 +23,8 @@ export interface ChatTurnParams {
   /** Constrains `content` to this schema via strict structured outputs. */
   jsonSchema?: { name: string; schema: Record<string, unknown> };
   tools?: ChatTool[];
-  toolChoice?: 'auto' | 'none';
+  /** A tool name forces that tool to be called this round. */
+  toolChoice?: 'auto' | 'none' | { name: string };
 }
 
 export type ChatStreamEvent =
@@ -91,8 +92,14 @@ export class OpenAiClient {
             },
           }
         : {}),
-      ...(params.tools?.length ? { tools: params.tools, tool_choice: params.toolChoice ?? 'auto' } : {}),
+      ...(params.tools?.length ? { tools: params.tools, tool_choice: this.toToolChoice(params.toolChoice) } : {}),
     };
+  }
+
+  private toToolChoice(choice: ChatTurnParams['toolChoice']): OpenAI.Chat.Completions.ChatCompletionToolChoiceOption {
+    if (typeof choice === 'string') return choice;
+    if (choice) return { type: 'function', function: { name: choice.name } };
+    return 'auto';
   }
 
   /** One non-streamed assistant turn. */

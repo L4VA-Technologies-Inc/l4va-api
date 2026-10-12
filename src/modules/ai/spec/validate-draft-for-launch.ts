@@ -230,7 +230,9 @@ export function validateVaultDraftForLaunch(
   }
 
   // --- Asset whitelist (not applicable to acquire-only vaults) -------------
-  if (view.isAcquireOnly !== true) {
+  // An index vault is always acquire-only, even before its draft carries the flag;
+  // its whitelist is derived from the basket, which is checked below.
+  if (view.isAcquireOnly !== true && spec.archetype !== VaultArchetype.index_weighted) {
     const validAssets = countValidAssetRows(view.assetsWhitelist, spec);
     if (validAssets < 1) {
       missingFields.push('assetsWhitelist');

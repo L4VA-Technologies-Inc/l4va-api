@@ -3,7 +3,18 @@ import { aiEditableFieldNames } from '../spec/resolve-spec';
 import { ResolvedVaultCreationSpec } from '../spec/spec.types';
 import { describeFieldConstraints } from '../spec/vault-draft.schema';
 
-import { VaultArchetype } from '@/types/index-vault.types';
+import { INDEX_MAX_ASSETS, INDEX_MIN_WEIGHT_BPS, VaultArchetype } from '@/types/index-vault.types';
+
+/** A token the assistant may put in an index basket. */
+export interface IndexCatalogEntry {
+  assetAddress: string;
+  symbol: string;
+  name: string;
+}
+
+function renderIndexCatalog(catalog: IndexCatalogEntry[]): string {
+  return catalog.map(entry => `- ${entry.symbol} | ${entry.name} | ${entry.assetAddress}`).join('\n');
+}
 
 export interface PresetContext {
   id: string;
@@ -35,11 +46,15 @@ function renderPresets(presets: PresetContext[]): string {
 export function buildVaultAssistantPrompt(params: {
   spec: ResolvedVaultCreationSpec;
   presets: PresetContext[];
+  /** Tokens an index basket may hold. Empty when the user has to pick the basket themselves. */
+  indexCatalog?: IndexCatalogEntry[];
   currentDraft: Record<string, unknown>;
   completion: VaultCompletionContext;
   validationErrors?: string[];
 }): string {
   const { spec, presets, currentDraft, completion, validationErrors } = params;
+  const indexCatalog = params.indexCatalog ?? [];
+  const canProposeBasket = spec.archetype === VaultArchetype.index_weighted && indexCatalog.length > 0;
 
   const correction = validationErrors?.length
     ? `\n# Corrections required\nThe previous draft was rejected by the live validators. Fix exactly these problems and keep everything else:\n${validationErrors
@@ -201,7 +216,13 @@ ${JSON.stringify(completion)}
 - missingUserControlledFields need the user. Say what is needed using the "needsFromUser" wording
   and offer the matching option: "choose_assets" for the asset collection, "choose_basket" for the
   index basket, "generate_image" plus "upload_image" for the image, and for a participant whitelist
-  tell the user it has to be added in the vault form.
+  tell the user it has to be added in the vault form.${
+    canProposeBasket
+      ? `
+  Exception: the index basket is yours to build — see "Index basket". When it is missing or
+  invalid, call propose_index_basket instead of asking the user for it.`
+      : ''
+  }
 - invalidValues are values that were rejected — correct them yourself.
 - blockers is the exact list that stops the launch. Each has a "message" (say that, near-verbatim,
   never the "field" name) and an "action". Offer the "action" as an option when it is
@@ -265,7 +286,36 @@ Infer the asset type from what the user means, never from the default:
 Never choose "cnt" just because it is the default when the user described NFTs.
 
 `
-}# Quick options
+}${
+    canProposeBasket
+      ? `# Index basket
+You build the basket: which tokens the vault buys when the acquire window locks, and their weights.
+It is part of the strategy, so set it in the same turn you first understand the strategy — do not
+wait to be asked and do not ask the user to pick tokens.
+
+- Choose ONLY from the catalog below, by copying the address exactly. Never use any other token, and
+  never invent or guess an address. If the user wants a token that is not listed, say in one
+  sentence that it is not available yet and build the closest basket from the catalog.
+- Weights follow the strategy: equal weights unless the user's intent implies otherwise (a "core"
+  holding, "mostly X", a market-cap tilt, a risk preference). At most ${INDEX_MAX_ASSETS} tokens, each at
+  least ${INDEX_MIN_WEIGHT_BPS / 100}%, all weights summing to exactly 100% (10000 bps).
+- Reserve: the share of the raise kept in ${spec.currency} instead of bought. Leave it null (10%) unless
+  the user asks for more or less cash, or the strategy is explicitly cautious or fully invested.
+- Apply it with the propose_index_basket tool — the basket can only be set that way, never in
+  vaultDraft. If the tool rejects it, fix the basket and call it again.
+- In the reply, name the picks by symbol with their percentages and say why in one sentence. The user
+  can fine-tune with "choose_basket"; offer it only when they want to edit.
+- Never write a token address in the message, never list the catalog, and never mention a token that
+  is not in the catalog as if it were available. If the theme the user asked for (e.g. memecoins,
+  stablecoins) has no tokens in the catalog, say so plainly in one sentence, then describe the
+  closest basket you built from what is available.
+
+Index basket catalog (symbol | name | address):
+${renderIndexCatalog(indexCatalog)}
+
+`
+      : ''
+  }# Quick options
 When a turn ends on a constrained decision, offer 2-3 options instead of an open question. Each
 option has a user-facing "label" and a "value".
 - For a normal choice, "value" is the reply to send as the user, e.g. label "50 / 50", value
@@ -280,7 +330,12 @@ option has a user-facing "label" and a "value".
 # Actions
 Besides the structured reply you return every turn, the backend exposes tools you can call. The API
 supplies their exact schemas — you only need to decide *when* to use one.
-- launch_vault: request that the vault the user configured be launched. Call it only when the user
+${
+  canProposeBasket
+    ? `- propose_index_basket: set the index basket from the catalog (see "Index basket").
+`
+    : ''
+}- launch_vault: request that the vault the user configured be launched. Call it only when the user
   clearly expresses intent to create, launch, deploy, start or proceed with the vault right now.
 - Intent, not completeness, is the trigger. Never call launch_vault just because every required
   field finally has a value — say the vault is ready and let the user decide.

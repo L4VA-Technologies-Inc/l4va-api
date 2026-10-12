@@ -59,7 +59,7 @@ export const VAULT_TAGS = [
  * feeds the errors back for correction, so a stale spec costs an extra turn, not a bad vault.
  */
 export const VAULT_CREATION_SPEC: VaultCreationSpec = {
-  version: '1.3.0',
+  version: '1.4.0',
 
   rules: [
     'Percentages are whole-number percents (0-100), not basis points.',
@@ -208,7 +208,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       step: 3,
       description:
         'Tokens an index-weighted vault buys when the acquire window locks, with their target weights. ' +
-        'Picked by the user from real tokens — never generated.',
+        'Set only through the propose_index_basket tool (catalog tokens, server-validated) or by the user — ' +
+        'never written into vaultDraft.',
       aiEditable: false,
     },
 

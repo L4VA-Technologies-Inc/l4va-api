@@ -18,6 +18,12 @@ export interface VaultAiToolOutcome {
   result: Record<string, unknown>;
   /** UI action surfaced to the frontend. Only set when the tool succeeded. */
   action?: VaultAssistantAction;
+  /**
+   * Server-validated values merged into this turn's vaultDraft. The only way a
+   * field the model may not write directly (e.g. the index basket) reaches the
+   * draft. Only set when the tool succeeded.
+   */
+  draftPatch?: Record<string, unknown>;
 }
 
 /**
