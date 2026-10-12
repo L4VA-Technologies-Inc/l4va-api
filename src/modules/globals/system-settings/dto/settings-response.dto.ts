@@ -28,6 +28,14 @@ export class SystemSettingsResponseDto {
   protocol_fee_per_asset: number;
 
   @ApiProperty({
+    description: 'EVM protocol fee per asset entry, in wei as a decimal string (0.0001 ETH = "100000000000000")',
+  })
+  protocol_fee_per_asset_evm: string;
+
+  @ApiProperty({ description: 'EVM protocol acquires fee, in wei as a decimal string' })
+  protocol_acquires_fee_evm: string;
+
+  @ApiProperty({
     description: 'LP recommended minimum liquidity in lovelace (500 ADA = 500000000)',
   })
   lp_recommended_min_liquidity: number;

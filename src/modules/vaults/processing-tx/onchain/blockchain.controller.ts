@@ -76,13 +76,13 @@ export class BlockchainController {
   @ApiOperation({
     summary: 'Prepare EVM contribution — sign one ContributionAuthorization per asset',
     description:
-      'Returns per-asset EIP-712 authorizations signed by the vault mintingKey, plus the vault address, chainId, and the approve/contribute calls the wallet must submit.',
+      'Returns per-asset EIP-712 authorizations signed by the vault mintingKey, plus the vault address, chainId, and the approve/contribute calls the wallet must submit. If a protocol fee is due, returns `feePayment` and no calls instead; pay it and call again with `feeTxHash`.',
   })
   async prepareEvmContribution(
     @Body() body: PrepareEvmContributionReq,
     @Request() req: AuthRequest
   ): Promise<EvmContributionPrepareResponse> {
-    return this.evmVaultContributionService.prepareContribution(body.txId, req.user.sub);
+    return this.evmVaultContributionService.prepareContribution(body.txId, req.user.sub, body.feeTxHash);
   }
 
   @Post('evm/contribution/confirm')

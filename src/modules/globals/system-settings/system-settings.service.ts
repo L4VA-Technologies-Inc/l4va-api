@@ -17,6 +17,14 @@ export interface SystemSettingsData {
   protocol_flat_fee: number;
   // Per-asset contribution fee: charged per NFT or per FT type (quantity ignored)
   protocol_fee_per_asset: number;
+  /**
+   * EVM (Robinhood) siblings of protocol_fee_per_asset / protocol_acquires_fee,
+   * in wei as decimal strings — same reasoning as the governance *_evm keys.
+   * Paid by the user as a native transfer before contribution signatures are
+   * issued (see EvmVaultContributionService.prepareContribution).
+   */
+  protocol_fee_per_asset_evm: string;
+  protocol_acquires_fee_evm: string;
   lp_recommended_min_liquidity: number;
   max_acquire_amount_ada: number;
   auto_create_treasury_wallets: boolean;
@@ -93,6 +101,8 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
   protocol_fee_per_asset: 2_000_000, // 2 ADA per asset entry (NFT or FT type, qty ignored)
+  protocol_fee_per_asset_evm: '100000000000000', // 0.0001 ETH per asset entry
+  protocol_acquires_fee_evm: '200000000000000', // 0.0002 ETH per acquire
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
@@ -234,6 +244,14 @@ export class SystemSettingsService implements OnModuleInit {
       : 0;
   }
 
+  get protocolFeePerAssetEvm(): string {
+    return this.settings.protocol_enabled ? this.evmFee(this.settings.protocol_fee_per_asset_evm) : '0';
+  }
+
+  get protocolAcquiresFeeEvm(): string {
+    return this.settings.protocol_enabled ? this.evmFee(this.settings.protocol_acquires_fee_evm) : '0';
+  }
+
   get evmTerminationMaxPoolVtBps(): number {
     return this.settings.evm_termination_max_pool_vt_bps;
   }
@@ -320,13 +338,13 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_fee_voting || 0;
   }
 
-  // EVM governance fee getters (wei, as decimal strings)
+  // EVM fee values (wei, as decimal strings)
   private evmFee(value: string | number | undefined): string {
     if (value === undefined || value === null || value === '') return '0';
     const asString = String(value);
     // Guard against a malformed settings edit reaching BigInt() downstream.
     if (!/^\d+$/.test(asString)) {
-      this.logger.warn(`Invalid EVM governance fee value "${asString}" — treating as 0`);
+      this.logger.warn(`Invalid EVM fee value "${asString}" — treating as 0`);
       return '0';
     }
     return asString;

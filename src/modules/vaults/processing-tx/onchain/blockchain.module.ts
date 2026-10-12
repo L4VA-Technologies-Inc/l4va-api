@@ -51,6 +51,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
+import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 
 @Module({
   imports: [
@@ -99,6 +100,9 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmWebhookService,
     EvmOpenCycleService,
     EvmFeeWithdrawService,
+    // Owned here so EVM contribution prepare can verify protocol-fee payments;
+    // GovernanceModule gets it through its BlockchainModule import.
+    EvmGovernanceFeeService,
     EvmPositionService,
     EvmSwapService,
     EvmTerminationPreflightService,
@@ -126,6 +130,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmContributionBackfillService,
     EvmOpenCycleService,
     EvmFeeWithdrawService,
+    EvmGovernanceFeeService,
     EvmPositionService,
     EvmSwapService,
     EvmTerminationPreflightService,

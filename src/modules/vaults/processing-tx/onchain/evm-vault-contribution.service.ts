@@ -14,6 +14,12 @@ import { VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import {
+  EvmGovernanceFeeService,
+  FeePaymentNotVisibleError,
+  type EvmGovernanceFeePayment,
+} from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 import { AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
@@ -72,8 +78,20 @@ export interface EvmContributionPrepareResponse {
   vaultAddress: Address;
   chainId: number;
   mintingSigner: Address;
+  /**
+   * Empty while `feePayment` is set: no authorization is signed until the
+   * protocol fee has been paid and verified.
+   */
   calls: EvmContributionCall[];
+  /**
+   * Native transfer the wallet must send before calling prepare again with
+   * the resulting `feeTxHash`. Null when there is no fee or it is already paid.
+   */
+  feePayment: EvmGovernanceFeePayment | null;
 }
+
+/** Metadata `purpose` on the `payment` row that records a verified fee. */
+const CONTRIBUTION_FEE_PURPOSE = 'evm-contribution-fee';
 
 // ---------------------------------------------------------------------------
 // EIP-712 typed data — MUST mirror
@@ -102,7 +120,11 @@ const CONTRIBUTION_TYPES = {
  *  1. Frontend calls `POST /contribute/:vaultId` (existing Cardano endpoint).
  *     A `Transaction` row with `metadata = [...assets]` is created.
  *  2. Frontend calls `POST /blockchain/evm/contribution/prepare { txId }`
- *     (this service). We sign one EIP-712 `ContributionAuthorization` per
+ *     (this service). If a protocol fee is due (per-asset for contribute,
+ *     flat for acquire — see SystemSettingsService *_evm keys) and unpaid,
+ *     we return `feePayment` and no calls; the wallet sends that native
+ *     transfer and calls prepare again with `feeTxHash`. Once the fee is
+ *     verified (or zero) we sign one EIP-712 `ContributionAuthorization` per
  *     asset using the vault's `mintingKey` private key, and return everything
  *     the wallet needs to submit N on-chain calls.
  *  3. Frontend loops through `calls`, sends approve() + contributeXxx() per
@@ -129,7 +151,9 @@ export class EvmVaultContributionService {
     private readonly configService: ConfigService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly contractReader: EvmContractReader,
-    private readonly vaultEventReconciler: EvmVaultEventReconciler
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly evmFeeService: EvmGovernanceFeeService
   ) {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
@@ -152,7 +176,7 @@ export class EvmVaultContributionService {
   // Public API
   // --------------------------------------------------------------------------
 
-  async prepareContribution(txId: string, userId: string): Promise<EvmContributionPrepareResponse> {
+  async prepareContribution(txId: string, userId: string, feeTxHash?: string): Promise<EvmContributionPrepareResponse> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
       relations: ['user'],
@@ -192,6 +216,21 @@ export class EvmVaultContributionService {
     }
 
     const vaultAddress = vault.contract_address as Address;
+
+    // Protocol fee gate. Signatures are what let the user contribute at all,
+    // so withholding them until the fee is verified is the enforcement point.
+    const feePayment = await this.resolveFeePayment(transaction, rawAssets.length, contributor, feeTxHash);
+    if (feePayment) {
+      return {
+        txId,
+        vaultAddress,
+        chainId: this.chainId,
+        mintingSigner: this.mintingSignerAddress,
+        calls: [],
+        feePayment,
+      };
+    }
+
     const deadline = Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS;
 
     // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
@@ -238,6 +277,7 @@ export class EvmVaultContributionService {
       chainId: this.chainId,
       mintingSigner: this.mintingSignerAddress,
       calls,
+      feePayment: null,
     };
   }
 
@@ -301,6 +341,79 @@ export class EvmVaultContributionService {
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
+
+  /** Per asset entry for contribute (NFT or FT type, quantity ignored), flat for acquire. */
+  private quoteProtocolFeeWei(type: TransactionType, assetCount: number): bigint {
+    if (type === TransactionType.acquire) {
+      return BigInt(this.systemSettingsService.protocolAcquiresFeeEvm);
+    }
+    return BigInt(assetCount) * BigInt(this.systemSettingsService.protocolFeePerAssetEvm);
+  }
+
+  /**
+   * Returns the payment the wallet still owes, or null once nothing is owed.
+   * A supplied `feeTxHash` is verified (sender, recipient, amount, replay) and
+   * recorded as a `payment` row whose tx_hash the replay guard checks, the
+   * same way governance fees are recorded.
+   */
+  private async resolveFeePayment(
+    transaction: Transaction,
+    assetCount: number,
+    contributor: Address,
+    feeTxHash?: string
+  ): Promise<EvmGovernanceFeePayment | null> {
+    const alreadyPaid = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .where('tx.type = :type', { type: TransactionType.payment })
+      .andWhere("tx.metadata->>'purpose' = :purpose", { purpose: CONTRIBUTION_FEE_PURPOSE })
+      .andWhere("tx.metadata->>'contributionTxId' = :txId", { txId: transaction.id })
+      .getExists();
+    if (alreadyPaid) return null;
+
+    const feeWei = this.quoteProtocolFeeWei(transaction.type, assetCount);
+    if (feeWei <= 0n) return null;
+
+    const recipient = this.evmFeeService.feeRecipient;
+    if (!feeTxHash) {
+      return { to: recipient, value: feeWei.toString(), chainId: this.chainId, feeAmount: feeWei.toString() };
+    }
+
+    let verified: Awaited<ReturnType<EvmGovernanceFeeService['verifyFeePayment']>>;
+    try {
+      verified = await this.evmFeeService.verifyFeePayment({
+        txHash: feeTxHash,
+        expectedFrom: contributor,
+        expectedValue: feeWei,
+        expectedTo: recipient,
+      });
+    } catch (error) {
+      if (error instanceof FeePaymentNotVisibleError) {
+        throw new BadRequestException(`${error.message}. Please retry once the transaction is confirmed.`);
+      }
+      throw error;
+    }
+
+    await this.transactionRepository.save({
+      vault_id: transaction.vault_id,
+      type: TransactionType.payment,
+      status: TransactionStatus.confirmed,
+      user_id: transaction.user_id,
+      amount: verified.value.toString() as unknown as number,
+      tx_hash: verified.txHash,
+      assets: [],
+      metadata: {
+        purpose: CONTRIBUTION_FEE_PURPOSE,
+        contributionTxId: transaction.id,
+        contributionType: transaction.type,
+        feeWei: verified.value.toString(),
+        feeRecipient: verified.to,
+      },
+    });
+    this.logger.log(
+      `Protocol fee ${verified.txHash} (${verified.value} wei) recorded for EVM ${transaction.type} ${transaction.id}`
+    );
+    return null;
+  }
 
   /**
    * Fire-and-forget: if the tx is already mined (receipt available), apply

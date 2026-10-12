@@ -1521,6 +1521,9 @@ export class VaultsService {
       protocolAcquiresFeeLovelace: this.systemSettingsService.protocolAcquiresFee,
       protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
       protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
+      // EVM (Robinhood) rates, wei as decimal strings
+      protocolFeePerAssetWei: this.systemSettingsService.protocolFeePerAssetEvm,
+      protocolAcquiresFeeWei: this.systemSettingsService.protocolAcquiresFeeEvm,
       protocolEnabled: this.systemSettingsService.protocolEnabled,
       // Max acquire amount (vault-specific override or protocol default)
       maxAcquireAmountAda: vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda,

@@ -402,6 +402,23 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   protocolAcquiresFeeUsd?: number;
 
+  @ApiProperty({
+    description: 'EVM protocol fee per asset entry, in wei as a decimal string',
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolFeePerAssetWei' },
+  })
+  protocolFeePerAssetWei?: string;
+
+  @ApiProperty({ description: 'EVM protocol fee for acquirers, in wei as a decimal string', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquiresFeeWei' },
+  })
+  protocolAcquiresFeeWei?: string;
+
   @ApiProperty({ description: 'Whether protocol fees are enabled', required: false })
   @DtoRepresent({
     transform: false,
