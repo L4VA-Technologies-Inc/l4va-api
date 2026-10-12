@@ -5,6 +5,15 @@ export class PrepareEvmContributionReq {
   @ApiProperty({ description: 'ID of the pending contribution Transaction row' })
   @IsUUID()
   txId: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Hash of the native protocol-fee transfer. Send it on the second prepare call, after paying the `feePayment` returned by the first.',
+    example: '0x632624fbe9065b1d0b47781b5edabbc44f7b63a5fe18a69bf3a7631244d5cb81',
+  })
+  @IsOptional()
+  @IsString()
+  feeTxHash?: string;
 }
 
 export class ConfirmEvmContributionReq {

@@ -43,6 +43,12 @@ export interface EvmAllocationFormulaParams {
   lpVtAmount?: bigint;
   /** Reserved native that will go to the LP contract (deferred; pass 0n for now). */
   lpNativeAmount?: bigint;
+  /**
+   * Protocol `FeeType.Contribution` rate, in bps. `closeCycle` accrues
+   * `nativeCollected * bps / 10000` before its solvency check, so the native
+   * paid out here must leave that slice in custody or the close reverts.
+   */
+  contributionFeeBps?: number;
 }
 
 export interface EvmAllocationFormulaRow {
@@ -57,6 +63,8 @@ export interface EvmAllocationFormulaResult {
   totalContributedValue: bigint;
   totalVtAllocation: bigint;
   totalNativeAllocation: bigint;
+  /** Native the vault accrues as protocol fee when this cycle closes. */
+  contributionFee: bigint;
   vtToAcquirers: bigint;
   vtToContributors: bigint;
 }
@@ -66,9 +74,13 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
   const { rows, vtSupplyBaseUnits, assetsOfferedBps } = params;
   const lpVtAmount = params.lpVtAmount ?? 0n;
   const lpNativeAmount = params.lpNativeAmount ?? 0n;
+  const contributionFeeBps = params.contributionFeeBps ?? 0;
 
   if (assetsOfferedBps < 0 || assetsOfferedBps > 10_000) {
     throw new Error(`assetsOfferedBps must be in [0, 10000]; got ${assetsOfferedBps}`);
+  }
+  if (contributionFeeBps < 0 || contributionFeeBps > 10_000) {
+    throw new Error(`contributionFeeBps must be in [0, 10000]; got ${contributionFeeBps}`);
   }
   if (vtSupplyBaseUnits <= 0n) {
     throw new Error('vtSupplyBaseUnits must be > 0');
@@ -94,8 +106,11 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
   const vtToAcquirers = (vtSupplyAvailable * BigInt(assetsOfferedBps)) / 10_000n;
   const vtToContributors = vtSupplyAvailable - vtToAcquirers;
 
-  // Native goes to contributors, minus LP carveout.
-  const nativeToContributors = totalNativeRaised > lpNativeAmount ? totalNativeRaised - lpNativeAmount : 0n;
+  // Native goes to contributors, minus the protocol fee and LP carveout. Fee
+  // rounding mirrors Vault._calculateFee (floor), on the same gross.
+  const contributionFee = (totalNativeRaised * BigInt(contributionFeeBps)) / 10_000n;
+  const nativeAfterFee = totalNativeRaised - contributionFee;
+  const nativeToContributors = nativeAfterFee > lpNativeAmount ? nativeAfterFee - lpNativeAmount : 0n;
 
   // Sort deterministically so claim_index is stable across recomputes.
   const sortedEntries = Array.from(merged.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -134,6 +149,7 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
     totalContributedValue,
     totalVtAllocation: sumVt,
     totalNativeAllocation: sumNative,
+    contributionFee,
     vtToAcquirers,
     vtToContributors,
   };

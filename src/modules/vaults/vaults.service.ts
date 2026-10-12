@@ -40,6 +40,7 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
+import { BlockchainWebhookService } from './processing-tx/onchain/blockchain-webhook.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { EvmContractReader } from './processing-tx/onchain/evm-contract-reader.service';
 import { EvmContributionBackfillService } from './processing-tx/onchain/evm-contribution-backfill.service';
@@ -231,7 +232,8 @@ export class VaultsService {
     private readonly indexVaultService: IndexVaultService,
     private readonly evmCycleCloseService: EvmCycleCloseService,
     private readonly evmContractReader: EvmContractReader,
-    private readonly evmContributionBackfillService: EvmContributionBackfillService
+    private readonly evmContributionBackfillService: EvmContributionBackfillService,
+    private readonly blockchainWebhookService: BlockchainWebhookService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -985,6 +987,33 @@ export class VaultsService {
   }
 
   /**
+   * Polls briefly for the creation receipt and runs the webhook's confirmation
+   * logic on it (sets contract_address from VaultCreated, confirms the tx).
+   * Idempotent with the webhook and the stuck-tx cron, which stay as fallbacks.
+   */
+  private async applyEvmCreationReceipt(txHash: string): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 3_000));
+      let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>;
+      try {
+        receipt = await this.evmContractReader.getTransactionReceipt(txHash as `0x${string}`);
+      } catch {
+        continue; // not mined yet, or RPC lag
+      }
+      if (!receipt) continue;
+
+      await this.blockchainWebhookService.applyEvmTransactionStatus(
+        txHash,
+        Number(receipt.transactionIndex ?? 0),
+        receipt.status === 'success' ? TransactionStatus.confirmed : TransactionStatus.failed,
+        (receipt.logs ?? []).map((l: any) => ({ topics: (l.topics ?? []) as string[], data: String(l.data ?? '0x') }))
+      );
+      return;
+    }
+    this.logger.warn(`EVM vault creation ${txHash} not visible after 60s — leaving it to the webhook / stuck-tx cron`);
+  }
+
+  /**
    * Publishes a vault by submitting a signed transaction and updating vault status.
    * Starts transaction confirmation in the background.
    * @param userId - ID of the vault owner
@@ -998,6 +1027,12 @@ export class VaultsService {
       if (!signedTx.txId)
         throw new BadRequestException('txId (transaction record ID) is required for EVM vault publishing');
       await this.evmVaultSignerService.confirmVaultCreation(userId, signedTx.vaultId, signedTx.txHash, signedTx.txId);
+      // The on-chain windows open at creation, so waiting for the webhook (or,
+      // without one, the 10-minute stuck-tx cron) can eat a short acquire window
+      // before the vault ever leaves `published`. Apply the receipt ourselves.
+      this.applyEvmCreationReceipt(signedTx.txHash).catch(err =>
+        this.logger.warn(`EVM vault creation catch-up failed for ${signedTx.txHash}: ${(err as Error).message}`)
+      );
       return this.getVaultById(signedTx.vaultId, userId);
     }
 
@@ -1521,6 +1556,10 @@ export class VaultsService {
       protocolAcquiresFeeLovelace: this.systemSettingsService.protocolAcquiresFee,
       protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
       protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
+      // EVM (Robinhood) rates, wei as decimal strings
+      protocolFeePerAssetWei: this.systemSettingsService.protocolFeePerAssetEvm,
+      protocolAcquiresFeeWei: this.systemSettingsService.protocolAcquiresFeeEvm,
+      protocolAcquireFeeBps: this.systemSettingsService.evmAcquireFeeBps ?? 0,
       protocolEnabled: this.systemSettingsService.protocolEnabled,
       // Max acquire amount (vault-specific override or protocol default)
       maxAcquireAmountAda: vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda,

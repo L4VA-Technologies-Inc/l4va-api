@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 
+import { PROTOCOL_FEE_CONFIG_ABI, type ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
 /** Shape returned by Vault.getCycle(cycleId). Mirrors CycleView in Vault.sol. */
@@ -138,6 +139,22 @@ export class EvmContractReader {
       this.logger.debug(`getContribution(${id}) reverted: ${(err as Error).message}`);
       return false;
     }
+  }
+
+  /** Protocol fee rate the vault applies to `feeType`, read from its ProtocolFeeConfig. */
+  async protocolFeeBps(vault: Address, feeType: ProtocolFeeType): Promise<number> {
+    const feeConfig = (await this.client.readContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'protocolFeeConfig',
+    })) as Address;
+    const bps = await this.client.readContract({
+      address: feeConfig,
+      abi: PROTOCOL_FEE_CONFIG_ABI,
+      functionName: 'feeBps',
+      args: [feeType],
+    });
+    return Number(bps);
   }
 
   async getTransactionReceipt(hash: Hex) {
