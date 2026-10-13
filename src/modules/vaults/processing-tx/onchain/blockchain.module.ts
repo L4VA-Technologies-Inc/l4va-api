@@ -24,6 +24,7 @@ import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
 import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
 import { EvmPositionService } from './evm-position.service';
+import { EvmProtocolFeeSyncService } from './evm-protocol-fee-sync.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
 import { EvmSwapService } from './evm-swap.service';
 import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
@@ -53,6 +54,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
+import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 
 @Module({
   imports: [
@@ -102,6 +104,10 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmWebhookService,
     EvmOpenCycleService,
     EvmFeeWithdrawService,
+    // Owned here so EVM contribution prepare can verify protocol-fee payments;
+    // GovernanceModule gets it through its BlockchainModule import.
+    EvmGovernanceFeeService,
+    EvmProtocolFeeSyncService,
     EvmPositionService,
     EvmSwapService,
     EvmTerminationPreflightService,
@@ -130,6 +136,7 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     EvmContributionBackfillService,
     EvmOpenCycleService,
     EvmFeeWithdrawService,
+    EvmGovernanceFeeService,
     EvmPositionService,
     EvmSwapService,
     EvmTerminationPreflightService,

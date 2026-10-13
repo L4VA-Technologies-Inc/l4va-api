@@ -6,6 +6,9 @@ export class StakeTokenAnalyticsRes {
   @ApiProperty({ description: 'Token type', enum: TokenType, example: TokenType.L4VA })
   tokenType: TokenType;
 
+  @ApiProperty({ description: 'Staking APY (percent) configured for this token', example: 5 })
+  apy: number;
+
   @ApiProperty({ description: 'Number of active staking positions for this token' })
   activePositionsCount: number;
 
@@ -152,8 +155,11 @@ export class StakeAnalyticsRes {
   @ApiProperty({ description: 'Unix timestamp (ms) when this analytics snapshot was generated' })
   generatedAt: number;
 
-  @ApiProperty({ description: 'Currently configured staking APY in percent', example: 8 })
+  @ApiProperty({ description: 'VLRM staking APY in percent (legacy; see apyByToken)', example: 8 })
   apy: number;
+
+  @ApiProperty({ description: 'Staking APY in percent per token type', example: { VLRM: 8, L4VA: 5 } })
+  apyByToken: Record<string, number>;
 
   @ApiProperty({ description: 'Total number of currently active staking positions' })
   totalActivePositions: number;

@@ -28,6 +28,9 @@ export class StakedBoxItem {
   })
   estimatedPayout: number;
 
+  @ApiProperty({ description: 'Staking APY (percent) applied to this box', example: 8 })
+  apy: number;
+
   @ApiProperty({ description: 'Whether this box has passed verification — can be unstaked' })
   eligible: boolean;
 }
@@ -38,4 +41,10 @@ export class StakedBalanceRes {
     type: [StakedBoxItem],
   })
   boxes: StakedBoxItem[];
+
+  @ApiProperty({
+    description: 'Configured staking APY (percent) per token type',
+    example: { VLRM: 8, L4VA: 5 },
+  })
+  apy: Record<string, number>;
 }

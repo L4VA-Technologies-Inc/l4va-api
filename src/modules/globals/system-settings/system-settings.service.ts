@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -17,6 +18,23 @@ export interface SystemSettingsData {
   protocol_flat_fee: number;
   // Per-asset contribution fee: charged per NFT or per FT type (quantity ignored)
   protocol_fee_per_asset: number;
+  /**
+   * EVM (Robinhood) siblings of protocol_fee_per_asset / protocol_acquires_fee,
+   * in wei as decimal strings — same reasoning as the governance *_evm keys.
+   * Paid by the user as a native transfer before contribution signatures are
+   * issued (see EvmVaultContributionService.prepareContribution).
+   */
+  protocol_fee_per_asset_evm: string;
+  /** Flat per-acquire transfer. Off by default: acquires use evm_acquire_fee_bps instead (one transaction). */
+  protocol_acquires_fee_evm: string;
+  /**
+   * On-chain `ProtocolFeeConfig` FeeType.Contribution rate, in bps (100 = 1%,
+   * contract max 500). Taken from the ETH raised when a cycle closes, so the
+   * acquirer sends a single transaction. Pushed on chain by
+   * EvmProtocolFeeSyncService on boot and on every settings reload. null
+   * leaves the on-chain value alone.
+   */
+  evm_acquire_fee_bps: number | null;
   lp_recommended_min_liquidity: number;
   max_acquire_amount_ada: number;
   auto_create_treasury_wallets: boolean;
@@ -84,6 +102,9 @@ export interface SystemSettingsData {
   evm_termination_allow_waivers: boolean;
 }
 
+/** Emitted after settings are (re)loaded from the database. */
+export const SYSTEM_SETTINGS_LOADED_EVENT = 'system-settings.loaded';
+
 const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_enabled: true,
   vlrm_creator_fee_enabled: false,
@@ -93,6 +114,9 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
   protocol_fee_per_asset: 2_000_000, // 2 ADA per asset entry (NFT or FT type, qty ignored)
+  protocol_fee_per_asset_evm: '100000000000000', // 0.0001 ETH per asset entry
+  protocol_acquires_fee_evm: '0',
+  evm_acquire_fee_bps: null,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
@@ -164,7 +188,8 @@ export class SystemSettingsService implements OnModuleInit {
   constructor(
     @InjectRepository(SystemSettings)
     private readonly systemSettingsRepository: Repository<SystemSettings>,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
@@ -186,6 +211,7 @@ export class SystemSettingsService implements OnModuleInit {
           ...settingsRecord[0].data,
         };
         this.logger.log('System settings loaded from database');
+        this.eventEmitter.emit(SYSTEM_SETTINGS_LOADED_EVENT);
       } else {
         this.logger.warn('No system settings found in database, using defaults');
       }
@@ -232,6 +258,28 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.protocol_enabled
       ? (this.settings.protocol_fee_per_asset ?? DEFAULT_SETTINGS.protocol_fee_per_asset)
       : 0;
+  }
+
+  get protocolFeePerAssetEvm(): string {
+    return this.settings.protocol_enabled ? this.evmFee(this.settings.protocol_fee_per_asset_evm) : '0';
+  }
+
+  get protocolAcquiresFeeEvm(): string {
+    return this.settings.protocol_enabled ? this.evmFee(this.settings.protocol_acquires_fee_evm) : '0';
+  }
+
+  /** Desired on-chain acquire fee in bps, or null when the API should not manage it. */
+  get evmAcquireFeeBps(): number | null {
+    const raw = this.settings.evm_acquire_fee_bps;
+    if (raw === null || raw === undefined || (raw as unknown) === '') return null;
+    const bps = Number(raw);
+    if (!Number.isInteger(bps) || bps < 0 || bps > 500) {
+      this.logger.warn(
+        `Invalid evm_acquire_fee_bps "${raw}" — must be an integer 0..500; leaving on-chain value alone`
+      );
+      return null;
+    }
+    return this.settings.protocol_enabled ? bps : 0;
   }
 
   get evmTerminationMaxPoolVtBps(): number {
@@ -320,13 +368,13 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_fee_voting || 0;
   }
 
-  // EVM governance fee getters (wei, as decimal strings)
+  // EVM fee values (wei, as decimal strings)
   private evmFee(value: string | number | undefined): string {
     if (value === undefined || value === null || value === '') return '0';
     const asString = String(value);
     // Guard against a malformed settings edit reaching BigInt() downstream.
     if (!/^\d+$/.test(asString)) {
-      this.logger.warn(`Invalid EVM governance fee value "${asString}" — treating as 0`);
+      this.logger.warn(`Invalid EVM fee value "${asString}" — treating as 0`);
       return '0';
     }
     return asString;
