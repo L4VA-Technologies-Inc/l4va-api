@@ -11,6 +11,8 @@ import { encodePacked, isAddress, keccak256, type Address, type Hex } from 'viem
  *                                  trades more than this away from the vault's price. On v4
  *                                  it is also the most of an input a deposit may forfeit.
  *   EVM_LP_V4_FEE / EVM_LP_V4_TICK_SPACING (optional, default 10000 / 200) — v4 fee tier.
+ *   EVM_LP_MIN_USD (optional, default 0 = off) — skip the pool when its native side is
+ *                                  worth less than this; the native stays with contributors.
  *
  * Everything else (V2 factory/WETH, v4 PoolManager/PositionManager) is read from the adapter.
  */
@@ -18,6 +20,11 @@ export function getEvmLpAdapterAddress(): Address | null {
   if ((process.env.EVM_LP_ENABLED ?? '').trim().toLowerCase() !== 'true') return null;
   const raw = (process.env.EVM_LP_ADAPTER_ADDRESS ?? '').trim();
   return isAddress(raw) ? (raw as Address) : null;
+}
+
+export function getEvmLpMinUsd(): number {
+  const n = Number(process.env.EVM_LP_MIN_USD ?? '0');
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 export function getEvmLpMaxPriceDeviationBps(): number {

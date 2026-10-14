@@ -7,7 +7,7 @@ import { buildAllocationMerkleTree, type AllocationLeafInput } from './evm-alloc
 import { computeEvmAllocationRows, computeEvmLpCarveout, type EvmAllocationInputRow } from './evm-allocation.formulas';
 import { EvmContractReader } from './evm-contract-reader.service';
 import type { ContributionValueMap } from './evm-lock-time-pricing.service';
-import { EvmLpStatus, getEvmLpAdapterAddress, type EvmLpCarveoutRecord } from './evm-lp.config';
+import { EvmLpStatus, getEvmLpAdapterAddress, getEvmLpMinUsd, type EvmLpCarveoutRecord } from './evm-lp.config';
 import { ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmAssetKindOnchain } from './vault.abi';
 
@@ -16,6 +16,7 @@ import { EvmContributionValuation } from '@/database/evm-contribution-valuation.
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Vault } from '@/database/vault.entity';
+import { PriceService } from '@/modules/price/price.service';
 import { ChainType } from '@/types/vault.types';
 
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
@@ -81,7 +82,8 @@ export class EvmAllocationService {
     private readonly valuationsRepository: Repository<EvmContributionValuation>,
     @InjectRepository(EvmAllocation) private readonly allocationsRepository: Repository<EvmAllocation>,
     private readonly dataSource: DataSource,
-    private readonly contractReader: EvmContractReader
+    private readonly contractReader: EvmContractReader,
+    private readonly priceService: PriceService
   ) {}
 
   // --------------------------------------------------------------------------
@@ -206,7 +208,7 @@ export class EvmAllocationService {
       vault.contract_address as Address,
       ProtocolFeeType.Contribution
     );
-    const lp = this.computeLpCarveout(
+    const lp = await this.computeLpCarveout(
       vault,
       formulaRows,
       vtSupplyBaseUnits,
@@ -447,16 +449,18 @@ export class EvmAllocationService {
 
   /**
    * LP carveout for the vault's first raise. Expansion cycles never seed a pool.
-   * Null when LP is off (env), the vault has 0% LP, or nothing was raised.
+   * Null when LP is off (env), the vault has 0% LP, nothing was raised, or the
+   * pool's native side is worth less than EVM_LP_MIN_USD — the native then stays
+   * in the contributor payout.
    */
-  private computeLpCarveout(
+  private async computeLpCarveout(
     vault: Vault,
     rows: EvmAllocationInputRow[],
     vtSupplyBaseUnits: bigint,
     assetsOfferedBps: number,
     isExpansion: boolean,
     contributionFeeBps: number
-  ): EvmLpCarveoutRecord | null {
+  ): Promise<EvmLpCarveoutRecord | null> {
     const adapter = getEvmLpAdapterAddress();
     const lpBps = Math.round(Number(vault.liquidity_pool_contribution ?? 0) * 100);
     if (!adapter || isExpansion || lpBps <= 0) return null;
@@ -466,6 +470,19 @@ export class EvmAllocationService {
     const nativeFee = (totalNativeRaised * BigInt(contributionFeeBps)) / 10_000n;
     const lp = computeEvmLpCarveout({ vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps, nativeFee });
     if (!lp) return null;
+
+    const minUsd = getEvmLpMinUsd();
+    if (minUsd > 0) {
+      const ethUsd = await this.priceService.getEthPrice();
+      const lpNativeUsd = (Number(lp.lpNativeAmount) / 1e18) * ethUsd;
+      if (lpNativeUsd < minUsd) {
+        this.logger.warn(
+          `LP skipped for vault ${vault.id}: native side $${lpNativeUsd.toFixed(2)} < EVM_LP_MIN_USD $${minUsd} ` +
+            `(lpNative=${lp.lpNativeAmount}, ETH $${ethUsd})`
+        );
+        return null;
+      }
+    }
 
     this.logger.log(
       `LP carveout for vault ${vault.id}: ${lpBps} bps → lpNative=${lp.lpNativeAmount} lpVt=${lp.lpVtAmount} rate=${lp.rate}`
