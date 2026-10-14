@@ -13,6 +13,7 @@ import {
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { MinswapService } from '@/modules/minswap/minswap.service';
 import GovernanceService from '@/modules/vaults/phase-management/governance/governance.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
@@ -55,6 +56,7 @@ export class AutomatedDistributionService {
     private readonly governanceService: GovernanceService,
     private readonly vyfiService: VyfiService,
     private readonly minswapService: MinswapService,
+    private readonly systemSettingsService: SystemSettingsService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
     private readonly acquireOnlyOrchestrator: AcquireOnlyDistributionOrchestrator,
     private readonly contributorOrchestrator: ContributorDistributionOrchestrator
@@ -343,11 +345,6 @@ export class AutomatedDistributionService {
     }
   }
 
-  /** DEX used for new vault LPs: LP_DEX=minswap switches from VyFi (default) to Minswap V2. */
-  private getLpDex(): 'vyfi' | 'minswap' {
-    return this.configService.get<string>('LP_DEX')?.trim().toLowerCase() === 'minswap' ? 'minswap' : 'vyfi';
-  }
-
   /**
    * Minswap V2 LP creation. Non acquire-only vaults first withdraw the LP ADA from the
    * dispatch script to the admin wallet (shared step, implemented in VyfiService).
@@ -417,7 +414,7 @@ export class AutomatedDistributionService {
         });
 
         // Create LP if LP percentage > 0 AND LP claim exists
-        if (lpPercent > 0 && lpClaim && this.getLpDex() === 'minswap') {
+        if (lpPercent > 0 && lpClaim && this.systemSettingsService.lpDex === 'minswap') {
           await this.createMinswapLiquidityPool(vaultId, vault.is_acquire_only);
         } else if (lpPercent > 0 && lpClaim) {
           if (vault.is_acquire_only) {

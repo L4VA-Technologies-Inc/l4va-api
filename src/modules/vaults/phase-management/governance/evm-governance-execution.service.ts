@@ -28,6 +28,10 @@ import { VaultStatus } from '@/types/vault.types';
 
 type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
 
+/** The vault rejects `deadline == 0` on positions, so a stuck tx can't be mined late against a stale quote. */
+const POSITION_DEADLINE_SECONDS = 20 * 60;
+const positionDeadline = (): bigint => BigInt(Math.floor(Date.now() / 1000) + POSITION_DEADLINE_SECONDS);
+
 /**
  * EVM-side execution for passed governance proposals.
  * Mirrors the Cardano execution paths in GovernanceExecutionService but
@@ -409,7 +413,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           maxInputAmount: inputAmountRaw,
           expectedPositionAsset: tokenOut,
           minExpectedOutput: quote.minAmountOut,
-          deadline: 0n,
+          deadline: positionDeadline(),
           protocolParams: quote.protocolParams,
         });
 
@@ -461,7 +465,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       const closeParams: ClosePositionParams = {
         positionId,
         minUnderlyingReturned: quote.minAmountOut,
-        deadline: 0n,
+        deadline: positionDeadline(),
         protocolParams: quote.protocolParams,
       };
 
@@ -510,7 +514,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           maxInputAmount: inputAmountRaw,
           expectedPositionAsset: inputAsset,
           minExpectedOutput: 1n, // mock always succeeds
-          deadline: 0n,
+          deadline: positionDeadline(),
           protocolParams,
         });
 

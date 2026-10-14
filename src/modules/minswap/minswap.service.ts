@@ -30,6 +30,7 @@ import {
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
 import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { Claim } from '@/database/claim.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import type { LpClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 
@@ -52,13 +53,12 @@ export class MinswapService {
   private readonly blockfrost: BlockFrostAPI;
   private readonly adminAddress: string;
   private readonly adminSKey: string;
-  /** Trading fee numerator with denominator 10000 (30 = 0.3%). */
-  private readonly tradingFeeNumerator: bigint;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>
+    private readonly claimRepository: Repository<Claim>,
+    private readonly systemSettingsService: SystemSettingsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.config = MINSWAP_V2_CONFIG[this.isMainnet ? 'mainnet' : 'testnet'];
@@ -66,15 +66,21 @@ export class MinswapService {
     this.blockfrost = new BlockFrostAPI({ projectId: this.blockfrostProjectId });
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+  }
 
-    const feeRaw = this.configService.get<string>('MINSWAP_POOL_TRADING_FEE_BPS') ?? '30';
-    const fee = BigInt(Number.parseInt(feeRaw, 10) || 0);
+  /** Trading fee numerator with denominator 10000 (30 = 0.3%), from system settings. */
+  private getTradingFeeNumerator(): bigint {
+    const raw = this.systemSettingsService.minswapPoolTradingFeeBps;
+    if (!Number.isInteger(raw)) {
+      throw new Error(`Invalid minswap_pool_trading_fee_bps "${raw}": expected an integer (basis points)`);
+    }
+    const fee = BigInt(raw);
     if (fee < MINSWAP_V2.MIN_TRADING_FEE || fee > MINSWAP_V2.MAX_TRADING_FEE) {
       throw new Error(
-        `Invalid MINSWAP_POOL_TRADING_FEE_BPS: expected ${MINSWAP_V2.MIN_TRADING_FEE}..${MINSWAP_V2.MAX_TRADING_FEE} (basis points), got "${feeRaw}"`
+        `Invalid minswap_pool_trading_fee_bps ${raw}: expected ${MINSWAP_V2.MIN_TRADING_FEE}..${MINSWAP_V2.MAX_TRADING_FEE}`
       );
     }
-    this.tradingFeeNumerator = fee;
+    return fee;
   }
 
   /** Full LP token unit (policy + asset name) of the Minswap V2 pool for a token/ADA pair. */
@@ -172,6 +178,7 @@ export class MinswapService {
       throw new Error(`Invalid pool reserves: ADA=${adaReserve}, token=${tokenReserve}`);
     }
 
+    const tradingFeeNumerator = this.getTradingFeeNumerator();
     const tokenAsset = assetFromUnit(tokenUnit.toLowerCase());
     const [assetA, assetB, reserveA, reserveB]: [MinswapAsset, MinswapAsset, bigint, bigint] =
       compareAssets(ADA_ASSET, tokenAsset) < 0
@@ -203,7 +210,7 @@ export class MinswapService {
       totalLiquidity: initialLiquidity,
       reserveA,
       reserveB,
-      tradingFeeNumerator: this.tradingFeeNumerator,
+      tradingFeeNumerator,
     });
 
     const poolValue: Record<string, bigint> = {
@@ -232,7 +239,7 @@ export class MinswapService {
 
     this.logger.log(
       `Building Minswap V2 pool: ADA=${adaReserve} token=${tokenReserve} ` +
-        `fee=${this.tradingFeeNumerator}bps LP=${lpTokenUnit} lpToAdmin=${lpTokens}`
+        `fee=${tradingFeeNumerator}bps LP=${lpTokenUnit} lpToAdmin=${lpTokens}`
     );
 
     const tx = await lucid
