@@ -18,6 +18,8 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
+import { EvmLiquidityController } from './evm-liquidity.controller';
+import { EvmLiquidityService } from './evm-liquidity.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
 import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
@@ -81,7 +83,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
       EvmIndexRebalance,
     ]),
   ],
-  controllers: [BlockchainController],
+  controllers: [BlockchainController, EvmLiquidityController],
   providers: [
     MetadataRegistryApiService,
     BlockchainService,
@@ -92,6 +94,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmAllocationService,
     EvmLockTimePricingService,
     EvmCycleCloseService,
+    EvmLiquidityService,
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmVaultSignerService,
@@ -127,6 +130,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmAllocationService,
     EvmLockTimePricingService,
     EvmCycleCloseService,
+    EvmLiquidityService,
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmContributionBackfillService,

@@ -5,6 +5,7 @@ import { decodeEventLog, type Address, type Hex } from 'viem';
 
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
+import { lpTechnicalCycleRoot } from './evm-lp.config';
 import { EvmAssetKindOnchain, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
 import { Asset } from '@/database/asset.entity';
@@ -438,6 +439,15 @@ export class EvmVaultEventReconciler {
       where: { vault_id: vault.id, cycle_id: cycleId },
     });
     if (!snapshot) {
+      // The empty technical cycle EvmLiquidityService opens to seed LP has no snapshot by design.
+      if (
+        totalVt === '0' &&
+        totalNative === '0' &&
+        vault.contract_address &&
+        allocationRoot === lpTechnicalCycleRoot(vault.contract_address as Address, BigInt(cycleId)).toLowerCase()
+      ) {
+        return;
+      }
       throw new Error(
         `CycleClosed for vault ${vault.id} cycle ${cycleId} tx=${log.txHash} has NO local snapshot. ` +
           `Root=${allocationRoot} committed without our involvement.`

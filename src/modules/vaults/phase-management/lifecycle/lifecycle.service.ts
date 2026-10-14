@@ -29,6 +29,7 @@ import {
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
 import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/onchain/evm-fee-withdraw.service';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import {
   EvmLockTimePricingService,
   MissingPriceError,
@@ -89,6 +90,7 @@ export class LifecycleService {
     private readonly alertsService: AlertsService,
     private readonly dataSource: DataSource,
     private readonly evmCycleCloseService: EvmCycleCloseService,
+    private readonly evmLiquidityService: EvmLiquidityService,
     private readonly evmContractReader: EvmContractReader,
     private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
     private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
@@ -118,6 +120,7 @@ export class LifecycleService {
       await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
       await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
+      await this.handleEvmLiquidity(); // EVM: seed the VT/WETH pool for raises that closed with an LP carveout
       await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
       await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
       await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
@@ -3105,6 +3108,21 @@ export class LifecycleService {
    * FALSE so the cron does nothing until pricing, reconciliation, and
    * webhook handlers are all wired up.
    */
+  /**
+   * Seeds the VT/WETH pool for every confirmed raise with a pending LP carveout
+   * (technical cycle → provideLiquidity → close). Runs before index buys so the
+   * LP native is spent on the pool, not on the basket. Retries failed attempts
+   * on later ticks; see EvmLiquidityService.
+   */
+  private async handleEvmLiquidity(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      await this.evmLiquidityService.processPending();
+    } catch (err) {
+      this.logger.error(`EVM LP sweep failed: ${(err as Error).message}`);
+    }
+  }
+
   /**
    * Index-weighted vaults raise native and then buy their basket. Runs after
    * `closeCycle` confirms, for the initial cycle and every acquire-expansion

@@ -20,6 +20,7 @@ import { EvmIndexRebalance, IndexRebalancePhase } from '@/database/evm-index-reb
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import { EvmSwapService } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
 import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import {
@@ -118,6 +119,7 @@ export class IndexVaultService {
     private readonly contractReader: EvmContractReader,
     private readonly swapService: EvmSwapService,
     private readonly routeService: IndexSwapRouteService,
+    private readonly liquidityService: EvmLiquidityService,
     configService: ConfigService
   ) {
     this.allowedAssets = (configService.get<string>('INDEX_BASKET_ALLOWED_ASSETS') ?? '')
@@ -460,6 +462,8 @@ export class IndexVaultService {
 
     for (const vault of vaults) {
       if (!vault.evm_current_cycle_id) continue;
+      // The pool gets its native first; buying the basket now would spend it.
+      if (await this.liquidityService.isLpPending(vault.id, vault.evm_current_cycle_id)) continue;
       const key = `initial:cycle:${vault.evm_current_cycle_id}`;
       const existing = await this.rebalanceRepository.findOne({ where: { vault_id: vault.id, idempotency_key: key } });
       if (existing?.status === IndexRebalanceStatus.completed) continue;

@@ -4,9 +4,10 @@ import { DataSource, Repository } from 'typeorm';
 import { keccak256, toBytes, type Address, type Hex } from 'viem';
 
 import { buildAllocationMerkleTree, type AllocationLeafInput } from './evm-allocation-merkle';
-import { computeEvmAllocationRows, type EvmAllocationInputRow } from './evm-allocation.formulas';
+import { computeEvmAllocationRows, computeEvmLpCarveout, type EvmAllocationInputRow } from './evm-allocation.formulas';
 import { EvmContractReader } from './evm-contract-reader.service';
 import type { ContributionValueMap } from './evm-lock-time-pricing.service';
+import { EvmLpStatus, getEvmLpAdapterAddress, getEvmLpMinUsd, type EvmLpCarveoutRecord } from './evm-lp.config';
 import { ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmAssetKindOnchain } from './vault.abi';
 
@@ -15,6 +16,7 @@ import { EvmContributionValuation } from '@/database/evm-contribution-valuation.
 import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Vault } from '@/database/vault.entity';
+import { PriceService } from '@/modules/price/price.service';
 import { ChainType } from '@/types/vault.types';
 
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
@@ -80,7 +82,8 @@ export class EvmAllocationService {
     private readonly valuationsRepository: Repository<EvmContributionValuation>,
     @InjectRepository(EvmAllocation) private readonly allocationsRepository: Repository<EvmAllocation>,
     private readonly dataSource: DataSource,
-    private readonly contractReader: EvmContractReader
+    private readonly contractReader: EvmContractReader,
+    private readonly priceService: PriceService
   ) {}
 
   // --------------------------------------------------------------------------
@@ -205,13 +208,20 @@ export class EvmAllocationService {
       vault.contract_address as Address,
       ProtocolFeeType.Contribution
     );
+    const lp = await this.computeLpCarveout(
+      vault,
+      formulaRows,
+      vtSupplyBaseUnits,
+      assetsOfferedBps,
+      !!expansionVtOverride?.size,
+      contributionFeeBps
+    );
     const formulaResult = computeEvmAllocationRows({
       rows: formulaRows,
       vtSupplyBaseUnits,
       assetsOfferedBps,
-      // LP carveout deferred — see plan Phase B open items.
-      lpVtAmount: 0n,
-      lpNativeAmount: 0n,
+      lpVtAmount: lp ? BigInt(lp.lpVtAmount) : 0n,
+      lpNativeAmount: lp ? BigInt(lp.lpNativeAmount) : 0n,
       contributionFeeBps,
     });
 
@@ -265,9 +275,11 @@ export class EvmAllocationService {
         normalized_prices: normalizedPrices,
         total_native_raised: formulaResult.totalNativeRaised.toString(),
         total_asset_value_native: formulaResult.totalContributedValue.toString(),
-        fdv_native: (formulaResult.totalContributedValue + formulaResult.totalNativeRaised).toString(),
+        fdv_native: lp
+          ? lp.fdvNative
+          : (formulaResult.totalContributedValue + formulaResult.totalNativeRaised).toString(),
         vt_price: '0',
-        lp_carveout: {},
+        lp_carveout: lp ?? {},
         merkle_root: tree.root,
         valuation_hash: valuationHash,
         total_vt_allocation: formulaResult.totalVtAllocation.toString(),
@@ -433,6 +445,57 @@ export class EvmAllocationService {
       totalVtAllocation: input.totalVtAllocation.toString(),
       vaultId: input.vaultId,
     });
+  }
+
+  /**
+   * LP carveout for the vault's first raise. Expansion cycles never seed a pool.
+   * Null when LP is off (env), the vault has 0% LP, nothing was raised, or the
+   * pool's native side is worth less than EVM_LP_MIN_USD — the native then stays
+   * in the contributor payout.
+   */
+  private async computeLpCarveout(
+    vault: Vault,
+    rows: EvmAllocationInputRow[],
+    vtSupplyBaseUnits: bigint,
+    assetsOfferedBps: number,
+    isExpansion: boolean,
+    contributionFeeBps: number
+  ): Promise<EvmLpCarveoutRecord | null> {
+    const adapter = getEvmLpAdapterAddress();
+    const lpBps = Math.round(Number(vault.liquidity_pool_contribution ?? 0) * 100);
+    if (!adapter || isExpansion || lpBps <= 0) return null;
+
+    const totalNativeRaised = rows.reduce((sum, r) => sum + r.nativeRaised, 0n);
+    // Same floor rounding as computeEvmAllocationRows / Vault._calculateFee.
+    const nativeFee = (totalNativeRaised * BigInt(contributionFeeBps)) / 10_000n;
+    const lp = computeEvmLpCarveout({ vtSupplyBaseUnits, totalNativeRaised, assetsOfferedBps, lpBps, nativeFee });
+    if (!lp) return null;
+
+    const minUsd = getEvmLpMinUsd();
+    if (minUsd > 0) {
+      const ethUsd = await this.priceService.getEthPrice();
+      const lpNativeUsd = (Number(lp.lpNativeAmount) / 1e18) * ethUsd;
+      if (lpNativeUsd < minUsd) {
+        this.logger.warn(
+          `LP skipped for vault ${vault.id}: native side $${lpNativeUsd.toFixed(2)} < EVM_LP_MIN_USD $${minUsd} ` +
+            `(lpNative=${lp.lpNativeAmount}, ETH $${ethUsd})`
+        );
+        return null;
+      }
+    }
+
+    this.logger.log(
+      `LP carveout for vault ${vault.id}: ${lpBps} bps → lpNative=${lp.lpNativeAmount} lpVt=${lp.lpVtAmount} rate=${lp.rate}`
+    );
+    return {
+      status: EvmLpStatus.pending,
+      lpBps,
+      lpVtAmount: lp.lpVtAmount.toString(),
+      lpNativeAmount: lp.lpNativeAmount.toString(),
+      rate: lp.rate.toString(),
+      fdvNative: lp.fdvNative.toString(),
+      adapter,
+    };
   }
 }
 
