@@ -8,6 +8,8 @@ import { SystemSettings } from '@/database/systemSettings.entity';
 import { VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
+export type LpDex = 'vyfi' | 'minswap';
+
 export interface SystemSettingsData {
   protocol_enabled: boolean;
   vlrm_creator_fee: number;
@@ -36,6 +38,10 @@ export interface SystemSettingsData {
    */
   evm_acquire_fee_bps: number | null;
   lp_recommended_min_liquidity: number;
+  /** DEX that new Cardano vault LPs are created on at distribution finalization. */
+  lp_dex: LpDex;
+  /** Minswap V2 pool trading fee in basis points (5..2000, 30 = 0.3%). */
+  minswap_pool_trading_fee_bps: number;
   max_acquire_amount_ada: number;
   auto_create_treasury_wallets: boolean;
   auto_create_treasury_wallets_testnet: boolean;
@@ -118,6 +124,8 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_acquires_fee_evm: '0',
   evm_acquire_fee_bps: null,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
+  lp_dex: 'vyfi',
+  minswap_pool_trading_fee_bps: 30, // 0.3%
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
   auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
@@ -300,6 +308,19 @@ export class SystemSettingsService implements OnModuleInit {
 
   get lpRecommendedMinLiquidity(): number {
     return this.settings.lp_recommended_min_liquidity;
+  }
+
+  get lpDex(): LpDex {
+    const value = String(this.settings.lp_dex ?? '')
+      .trim()
+      .toLowerCase();
+    return value === 'minswap' ? 'minswap' : 'vyfi';
+  }
+
+  /** Raw value; MinswapService validates it against the V2 fee bounds before building a pool. */
+  get minswapPoolTradingFeeBps(): number {
+    const value = Number(this.settings.minswap_pool_trading_fee_bps);
+    return Number.isFinite(value) ? value : DEFAULT_SETTINGS.minswap_pool_trading_fee_bps;
   }
 
   get maxAcquireAmountAda(): number {

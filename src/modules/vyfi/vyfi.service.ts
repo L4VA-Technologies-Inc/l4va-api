@@ -17,6 +17,7 @@ import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onc
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import type { LpClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -511,6 +512,10 @@ export class VyfiService {
 
     if (!lpClaim) {
       throw new NotFoundException(`No claimed LP tokens found for vault ${vaultId}`);
+    }
+
+    if ((lpClaim.metadata as LpClaimMetadata | undefined)?.dex === 'minswap') {
+      throw new Error(`Vault ${vaultId} LP is on Minswap; Minswap liquidity removal is not implemented yet`);
     }
 
     // Get pool info by token pair

@@ -75,15 +75,19 @@ export interface TerminationClaimMetadata extends BaseClaimMetadata {
 
 /**
  * Metadata for LP (Liquidity Pool) claims
- * Used when creating liquidity pool on VyFi
+ * Used when creating liquidity pool on VyFi or Minswap V2
  */
 export interface LpClaimMetadata extends BaseClaimMetadata {
   /** Amount of VT tokens for LP */
   vtAmount?: number;
   /** Amount of ADA for LP (in lovelace) */
   adaAmount?: number;
-  /** VyFi pool transaction hash */
+  /** DEX the pool was created on (absent = VyFi, the legacy default) */
+  dex?: 'vyfi' | 'minswap';
+  /** Pool creation transaction hash */
   poolTxHash?: string;
+  /** LP token unit (policyId + asset name) */
+  lpTokenUnit?: string;
   /** LP token quantity received */
   lpTokens?: string;
 }

@@ -13,6 +13,8 @@ import {
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
+import { MinswapService } from '@/modules/minswap/minswap.service';
 import GovernanceService from '@/modules/vaults/phase-management/governance/governance.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
@@ -53,6 +55,8 @@ export class AutomatedDistributionService {
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
     private readonly vyfiService: VyfiService,
+    private readonly minswapService: MinswapService,
+    private readonly systemSettingsService: SystemSettingsService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
     private readonly acquireOnlyOrchestrator: AcquireOnlyDistributionOrchestrator,
     private readonly contributorOrchestrator: ContributorDistributionOrchestrator
@@ -342,6 +346,28 @@ export class AutomatedDistributionService {
   }
 
   /**
+   * Minswap V2 LP creation. Non acquire-only vaults first withdraw the LP ADA from the
+   * dispatch script to the admin wallet (shared step, implemented in VyfiService).
+   */
+  private async createMinswapLiquidityPool(vaultId: string, isAcquireOnly: boolean): Promise<void> {
+    let withdrawalTxHash: string | null = null;
+    if (!isAcquireOnly) {
+      const withdrawal = await this.vyfiService.withdrawAdaFromDispatch(vaultId);
+      withdrawalTxHash = withdrawal.txHash;
+      if (!withdrawal.skipped && withdrawal.txHash) {
+        this.logger.log('Waiting 90s for withdrawal confirmation before creating Minswap LP...');
+        await new Promise(resolve => setTimeout(resolve, 90000));
+      }
+    }
+
+    const { txHash, lpTokenUnit } = await this.minswapService.createLiquidityPool(vaultId);
+    this.logger.log(
+      `Minswap LP created for vault ${vaultId}. Withdrawal: ${withdrawalTxHash ?? 'skipped'}, ` +
+        `LP Creation: ${txHash}, LP token: ${lpTokenUnit}`
+    );
+  }
+
+  /**
    * Finalize vault distribution: create LP and governance snapshot
    * Note: LP creation is SKIPPED for expansion distributions (LP was created during initial distribution)
    */
@@ -388,7 +414,9 @@ export class AutomatedDistributionService {
         });
 
         // Create LP if LP percentage > 0 AND LP claim exists
-        if (lpPercent > 0 && lpClaim) {
+        if (lpPercent > 0 && lpClaim && this.systemSettingsService.lpDex === 'minswap') {
+          await this.createMinswapLiquidityPool(vaultId, vault.is_acquire_only);
+        } else if (lpPercent > 0 && lpClaim) {
           if (vault.is_acquire_only) {
             // Acquire-only vaults: ADA already in admin wallet, no dispatch withdrawal needed
             const { txHash: lpCreationTxHash } = await this.vyfiService.createLiquidityPoolSimple(vaultId);

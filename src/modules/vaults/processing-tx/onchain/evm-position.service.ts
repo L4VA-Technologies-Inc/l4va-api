@@ -22,7 +22,7 @@ export interface OpenPositionParams {
   maxInputAmount: bigint;
   expectedPositionAsset: Address;
   minExpectedOutput: bigint;
-  /** 0n = no deadline */
+  /** Unix seconds; the vault rejects 0 */
   deadline: bigint;
   /** ABI-encoded adapter-specific params */
   protocolParams: Hex;
@@ -31,7 +31,7 @@ export interface OpenPositionParams {
 export interface ClosePositionParams {
   positionId: bigint;
   minUnderlyingReturned: bigint;
-  /** 0n = no deadline */
+  /** Unix seconds; the vault rejects 0 */
   deadline: bigint;
   protocolParams: Hex;
 }
