@@ -13,6 +13,6 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
   imports: [TypeOrmModule.forFeature([Vault, EvmIndexRebalance]), BlockchainModule],
   controllers: [IndexVaultController],
   providers: [IndexVaultService, IndexSwapRouteService],
-  exports: [IndexVaultService],
+  exports: [IndexVaultService, IndexSwapRouteService],
 })
 export class IndexVaultModule {}

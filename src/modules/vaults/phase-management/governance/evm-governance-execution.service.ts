@@ -11,22 +11,27 @@ import {
   encodeMockAdapterParams,
   EvmAssetKind,
   EvmPositionService,
-  type ClosePositionParams,
   type SellNftParams,
 } from '../../processing-tx/onchain/evm-position.service';
+import { EvmSwapService } from '../../processing-tx/onchain/evm-swap.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
-import { UniswapQuoteService } from '../../processing-tx/onchain/uniswap-quote.service';
 
 import { EvmDistributionService } from './evm-distribution.service';
 
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
+import { IndexSwapRouteService } from '@/modules/vaults/index-vault/index-swap-route.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 
 type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
+
+/** The vault rejects `deadline == 0`; adapter calls get this much headroom. */
+const TX_DEADLINE_SECONDS = 600n;
+
+const txDeadline = (): bigint => BigInt(Math.floor(Date.now() / 1000)) + TX_DEADLINE_SECONDS;
 
 /**
  * EVM-side execution for passed governance proposals.
@@ -42,7 +47,6 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   private readonly logger = new Logger(EvmGovernanceExecutionService.name);
   private readonly isTestnet: boolean;
   private readonly mockAdapterAddress: Address | null;
-  private readonly uniswapAdapterAddress: Address | null;
   /**
    * Marketplace adapter used for NFT sales when a proposal does not name one.
    * Null until a real marketplace integration exists — there is no production
@@ -54,15 +58,18 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   private readonly swapSlippageBps: number;
 
   constructor(
-    @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Proposal) private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(EvmExternalPosition)
     private readonly positionsRepository: Repository<EvmExternalPosition>,
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
     private readonly distributionService: EvmDistributionService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
-    private readonly uniswapQuoteService: UniswapQuoteService,
+    private readonly swapService: EvmSwapService,
+    private readonly swapRouteService: IndexSwapRouteService,
     private readonly evmOpenCycleService: EvmOpenCycleService,
     private readonly indexVaultService: IndexVaultService,
     configService: ConfigService
@@ -70,8 +77,6 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     this.isTestnet = configService.get<string>('CARDANO_NETWORK') !== 'mainnet';
     const raw = configService.get<string>('EVM_MOCK_ADAPTER_ADDRESS');
     this.mockAdapterAddress = raw ? (raw as Address) : null;
-    const uniswapRaw = configService.get<string>('EVM_UNISWAP_ADAPTER_ADDRESS');
-    this.uniswapAdapterAddress = uniswapRaw ? (uniswapRaw as Address) : null;
     const nftSaleRaw = configService.get<string>('EVM_NFT_SALE_ADAPTER_ADDRESS');
     this.nftSaleAdapterAddress = nftSaleRaw ? (nftSaleRaw as Address) : null;
     this.swapSlippageBps = Number(configService.get<string>('EVM_SWAP_SLIPPAGE_BPS') ?? '50');
@@ -254,7 +259,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     const nftSells: { action: any; index: number }[] = [];
     const rest: { action: any; index: number }[] = [];
     for (let i = 0; i < actions.length; i++) {
-      (this._isNftSell(actions[i]) ? nftSells : rest).push({ action: actions[i], index: i });
+      (this._isNftSell(actions[i]) ? nftSells : rest).push({
+        action: actions[i],
+        index: i,
+      });
     }
 
     if (nftSells.length > 0) {
@@ -268,7 +276,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       return this.executeMarketActionMock(proposal, vault, remaining);
     }
 
-    return this.executeMarketActionUniswap(proposal, vault, remaining);
+    return this.executeMarketActionSwap(proposal, vault, remaining);
   }
 
   /** A SELL whose subject is an on-chain NFT rather than a fungible token. */
@@ -361,123 +369,102 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     return true;
   }
 
-  private async executeMarketActionUniswap(
+  /**
+   * Mainnet token trades go through the vault's position-less `swap` on the
+   * `swap`-tagged UniversalRouter adapter (`EVM_SWAP_ADAPTER_ADDRESS`), the same
+   * path index vaults use. `operationId` is derived from (vault, proposal,
+   * action index), so a retry after a lost receipt reverts instead of trading
+   * twice.
+   */
+  private async executeMarketActionSwap(
     proposal: Proposal,
     vault: EvmGovernanceVaultRef,
     actions: any[]
   ): Promise<boolean> {
-    if (!this.uniswapAdapterAddress) {
+    const adapter = this.swapRouteService.adapter;
+    if (!adapter) {
       this.logger.error(
-        `EVM_UNISWAP_ADAPTER_ADDRESS is not configured — cannot execute mainnet market proposal ${proposal.id}`
+        `EVM_SWAP_ADAPTER_ADDRESS is not configured — cannot execute mainnet market proposal ${proposal.id}`
       );
+      return false;
+    }
+
+    const vaultRow = await this.vaultRepository.findOne({
+      where: { id: vault.id },
+      select: ['id', 'contract_address'],
+    });
+    const vaultAddress = vaultRow?.contract_address as Address | undefined;
+    if (!vaultAddress) {
+      this.logger.error(`Proposal ${proposal.id}: vault ${vault.id} has no contract address`);
+      return false;
+    }
+
+    let tradeFeeBps: number;
+    try {
+      tradeFeeBps = await this.swapService.tradeFeeBps(vaultAddress);
+    } catch (err) {
+      this.logger.error(`Proposal ${proposal.id}: failed to read trade fee — ${(err as Error).message}`);
       return false;
     }
 
     for (let i = 0; i < actions.length; i++) {
       const action = actions[i];
 
-      // CLOSE_POSITION: unwind an existing adapter position.
+      // Swap-adapter trades leave no position behind, so there is nothing to close.
       if (action.exec === 'CLOSE_POSITION') {
-        const ok = await this.executeClosePosition(proposal, vault, action, i);
-        if (!ok) return false;
-        continue;
+        this.logger.error(
+          `Proposal ${proposal.id} action[${i}]: CLOSE_POSITION is not supported — trades settle in one swap`
+        );
+        return false;
       }
 
-      // Default: open a new Uniswap swap position.
-      const tokenIn: Address = action.inputAsset ?? action.policyId ?? '0x0000000000000000000000000000000000000000';
-      const tokenOut: Address =
+      const assetIn: Address = action.inputAsset ?? action.policyId ?? '0x0000000000000000000000000000000000000000';
+      const assetOut: Address =
         action.expectedOutputAsset ?? action.outputAsset ?? '0x0000000000000000000000000000000000000000';
-      const inputAmountRaw = BigInt(action.amount ?? action.quantity ?? 0);
+      const amountIn = BigInt(action.amount ?? action.quantity ?? 0);
 
-      if (inputAmountRaw === 0n || tokenIn === tokenOut) continue;
+      if (amountIn === 0n || assetIn.toLowerCase() === assetOut.toLowerCase()) continue;
+
+      const operationId = buildOperationId(vault.id, proposal.id, i);
 
       try {
-        const quote = await this.uniswapQuoteService.quoteExactInput(
-          tokenIn,
-          tokenOut,
-          inputAmountRaw,
-          this.swapSlippageBps
-        );
+        if (await this.swapService.isOperationIdUsed(vaultAddress, operationId)) {
+          this.logger.log(`Proposal ${proposal.id} action[${i}]: operation already executed — skipping`);
+          continue;
+        }
 
-        const operationId = buildOperationId(vault.id, proposal.id, i);
+        const quote = await this.swapRouteService.quote(assetIn, assetOut, amountIn);
+        // Floor on what the vault keeps: quote less slippage, less the trade fee.
+        const minAmountOut =
+          (((quote.amountOut * BigInt(10_000 - this.swapSlippageBps)) / 10_000n) * BigInt(10_000 - tradeFeeBps)) /
+          10_000n;
+        if (minAmountOut === 0n) {
+          this.logger.error(`Proposal ${proposal.id} action[${i}]: quote rounds to zero output`);
+          return false;
+        }
 
-        await this.positionService.openPosition(vault.id, {
+        const res = await this.swapService.swap(vault.id, {
           operationId,
-          adapter: this.uniswapAdapterAddress,
-          protocol: '0xcaf681a66d020601342297493863e78c959e5cb2', // SwapRouter02 as protocol tag
-          inputAsset: tokenIn,
-          maxInputAmount: inputAmountRaw,
-          expectedPositionAsset: tokenOut,
-          minExpectedOutput: quote.minAmountOut,
-          deadline: 0n,
-          protocolParams: quote.protocolParams,
+          adapter,
+          assetIn,
+          amountIn,
+          assetOut,
+          minAmountOut,
+          deadline: txDeadline(),
+          route: quote.route,
         });
 
         this.logger.log(
-          `Proposal ${proposal.id} action[${i}]: Uniswap V3 swap ${tokenIn}→${tokenOut} ` +
-            `fee=${quote.fee} minOut=${quote.minAmountOut} — ok`
+          `Proposal ${proposal.id} action[${i}]: swap ${assetIn}→${assetOut} ` +
+            `grossOut=${res.grossOut} fee=${res.fee} tx=${res.txHash}`
         );
       } catch (err) {
-        this.logger.error(`Proposal ${proposal.id} action[${i}]: Uniswap swap failed — ${(err as Error).message}`);
+        this.logger.error(`Proposal ${proposal.id} action[${i}]: swap failed — ${(err as Error).message}`);
         return false;
       }
     }
 
     return true;
-  }
-
-  private async executeClosePosition(
-    proposal: Proposal,
-    vault: EvmGovernanceVaultRef,
-    action: any,
-    actionIndex: number
-  ): Promise<boolean> {
-    const positionId = BigInt(action.positionId ?? 0);
-    if (positionId === 0n) {
-      this.logger.error(`Proposal ${proposal.id} action[${actionIndex}]: CLOSE_POSITION missing positionId`);
-      return false;
-    }
-
-    // positionAsset = token we hold in the position; underlyingAsset = what we swap back to.
-    const positionAsset: Address = action.positionAsset ?? '0x0000000000000000000000000000000000000000';
-    const underlyingAsset: Address = action.underlyingAsset ?? '0x0000000000000000000000000000000000000000';
-    const positionAmount = BigInt(action.positionAmount ?? 0);
-
-    if (positionAmount === 0n || positionAsset === underlyingAsset) {
-      this.logger.error(`Proposal ${proposal.id} action[${actionIndex}]: CLOSE_POSITION invalid amounts`);
-      return false;
-    }
-
-    try {
-      // Quote the reverse swap to compute minUnderlyingReturned.
-      const quote = await this.uniswapQuoteService.quoteExactInput(
-        positionAsset,
-        underlyingAsset,
-        positionAmount,
-        this.swapSlippageBps,
-        action.feeTier
-      );
-
-      const closeParams: ClosePositionParams = {
-        positionId,
-        minUnderlyingReturned: quote.minAmountOut,
-        deadline: 0n,
-        protocolParams: quote.protocolParams,
-      };
-
-      await this.positionService.closePosition(vault.id, closeParams);
-
-      this.logger.log(
-        `Proposal ${proposal.id} action[${actionIndex}]: closePosition id=${positionId} ` +
-          `${positionAsset}→${underlyingAsset} minReturn=${quote.minAmountOut} — ok`
-      );
-      return true;
-    } catch (err) {
-      this.logger.error(
-        `Proposal ${proposal.id} action[${actionIndex}]: closePosition failed — ${(err as Error).message}`
-      );
-      return false;
-    }
   }
 
   private async executeMarketActionMock(
@@ -510,7 +497,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           maxInputAmount: inputAmountRaw,
           expectedPositionAsset: inputAsset,
           minExpectedOutput: 1n, // mock always succeeds
-          deadline: 0n,
+          deadline: txDeadline(),
           protocolParams,
         });
 
@@ -543,7 +530,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       return this.executeMarketActionMock(
         proposal,
         vault,
-        all.map(t => ({ inputAsset: '0x0000000000000000000000000000000000000000', amount: (t as any).amount ?? 1 }))
+        all.map(t => ({
+          inputAsset: '0x0000000000000000000000000000000000000000',
+          amount: (t as any).amount ?? 1,
+        }))
       );
     }
 
@@ -675,7 +665,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * repeatedly — the on-chain execution key makes a duplicate impossible.
    */
   async retryDistribution(proposalId: string): Promise<boolean> {
-    const proposal = await this.proposalRepository.findOne({ where: { id: proposalId } });
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId },
+    });
     if (!proposal) {
       this.logger.error(`retryDistribution: proposal ${proposalId} not found`);
       return false;
@@ -690,7 +682,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    */
   async retryTermination(vaultId: string, waived?: Address[]): Promise<boolean> {
     try {
-      const result = await this.terminationService.beginTermination(vaultId, { waived });
+      const result = await this.terminationService.beginTermination(vaultId, {
+        waived,
+      });
       this.logger.log(
         `Vault ${vaultId}: beginTermination committed on retry — ${result.rows.length} asset(s), ` +
           `deadline ${result.terminationDeadline}`
