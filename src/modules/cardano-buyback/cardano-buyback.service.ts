@@ -29,6 +29,14 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 const LOCK_KEY = 'cardano-buyback:cycle:lock';
 const LOCK_TTL_SECONDS = 600;
+const FUND_LOCK_KEY = 'cardano-buyback:fund:lock';
+/** Hash of the last submitted swap/distribution. Blockfrost does not see the
+ *  mempool, so until it confirms the wallet's UTxOs look unspent; a cycle that
+ *  ran before then would double-spend them. Expires so a dropped tx unblocks. */
+const PENDING_TX_KEY = 'cardano-buyback:pending-tx';
+const PENDING_TX_TTL_SECONDS = 3600;
+/** Headroom over the funded amount for fee and min-change when picking UTxOs. */
+const FUND_FEE_HEADROOM_LOVELACE = 2_000_000n;
 
 export type BuybackCycleResult =
   | { action: 'skipped'; reason: string }
@@ -50,42 +58,48 @@ export type BuybackCycleResult =
  *      L4VA lands back in the wallet and is distributed on a later cycle.
  *
  * The burn is a negative mint through the deployed L4VA policy, which lets any
- * holder burn (src/scripts/cardano/deployments). For a policy that is not one
- * of our deployments (older test tokens) the burn share goes to the protocol
- * burn wallet instead.
+ * holder burn (src/scripts/cardano/deployments). On testnet, for a policy that
+ * is not one of our deployments (older test tokens), the burn share goes to the
+ * protocol burn wallet instead; mainnet refuses to run without the real policy.
+ *
+ * The L4VA token is configured with its own CARDANO_BUYBACK_L4VA_* variables,
+ * not the shared L4VA_POLICY_ID / L4VA_DECIMALS, so another module's legacy
+ * token can never become the buyback target.
  */
 @Injectable()
 export class CardanoBuybackService {
   private readonly logger = new Logger(CardanoBuybackService.name);
 
   private notConfiguredWarned = false;
+  /** Invalid config disables the buyback instead of failing app startup. */
+  private configError: string | null = null;
   private readonly isMainnet: boolean;
   private readonly blockfrost: BlockFrostAPI;
   private readonly blockfrostProjectId: string;
 
-  private readonly l4vaPolicyId: string;
-  private readonly l4vaAssetName: string;
-  private readonly l4vaDecimals: number;
+  private l4vaPolicyId: string;
+  private l4vaAssetName: string;
+  private l4vaDecimals: number;
 
-  private readonly buybackAddress: string;
-  private readonly buybackSKey: string;
-  private readonly treasuryAddress: string;
-  private readonly opsAddress: string;
-  private readonly burnAddress: string;
-  private readonly burnPolicy: MintingPolicy | null;
+  private buybackAddress: string;
+  private buybackSKey: string;
+  private treasuryAddress: string;
+  private opsAddress: string;
+  private burnAddress: string;
+  private burnPolicy: MintingPolicy | null;
 
-  private readonly adminAddress: string;
-  private readonly adminSKey: string;
-  private readonly adminHash: string;
+  private adminAddress: string;
+  private adminSKey: string;
+  private adminHash: string;
 
-  private readonly split: BuybackSplitBps;
-  private readonly reserveLovelace: bigint;
-  private readonly minSwapLovelace: bigint;
-  private readonly maxSwapLovelace: bigint;
-  private readonly slippagePct: number;
-  private readonly maxPriceImpactBps: bigint;
-  private readonly minL4vaPerAda: bigint;
-  private readonly minDistribute: bigint;
+  private split: BuybackSplitBps;
+  private reserveLovelace: bigint;
+  private minSwapLovelace: bigint;
+  private maxSwapLovelace: bigint;
+  private slippagePct: number;
+  private maxPriceImpactBps: bigint;
+  private minL4vaPerAda: bigint;
+  private minDistribute: bigint;
 
   constructor(
     private readonly configService: ConfigService,
@@ -96,15 +110,33 @@ export class CardanoBuybackService {
   ) {
     const get = (key: string): string | undefined =>
       this.configService.get<string>(key)?.toString().trim() || undefined;
-    const big = (key: string, fallback: bigint): bigint => (get(key) ? BigInt(get(key)) : fallback);
+    const big = (key: string, fallback: bigint): bigint => {
+      const raw = get(key);
+      if (!raw) return fallback;
+      if (!/^\d+$/.test(raw)) throw new Error(`${key} must be a non-negative integer, got "${raw}"`);
+      return BigInt(raw);
+    };
 
     this.isMainnet = get('CARDANO_NETWORK') === 'mainnet';
     this.blockfrostProjectId = get('BLOCKFROST_API_KEY');
     this.blockfrost = new BlockFrostAPI({ projectId: this.blockfrostProjectId });
 
-    this.l4vaPolicyId = get('L4VA_POLICY_ID')?.toLowerCase() ?? '';
-    this.l4vaAssetName = get('L4VA_ASSET_NAME')?.toLowerCase() ?? '';
-    this.l4vaDecimals = Number(get('L4VA_DECIMALS') ?? 6);
+    try {
+      this.loadConfig(get, big);
+    } catch (error: any) {
+      this.configError = error.message;
+      this.logger.error(`Cardano buyback disabled, invalid config: ${error.message}`);
+    }
+  }
+
+  private loadConfig(get: (key: string) => string | undefined, big: (key: string, fallback: bigint) => bigint): void {
+    this.l4vaPolicyId = get('CARDANO_BUYBACK_L4VA_POLICY_ID')?.toLowerCase() ?? '';
+    this.l4vaAssetName = get('CARDANO_BUYBACK_L4VA_ASSET_NAME')?.toLowerCase() ?? '';
+    const decimals = get('CARDANO_BUYBACK_L4VA_DECIMALS');
+    if (decimals !== undefined && !/^\d+$/.test(decimals)) {
+      throw new Error(`CARDANO_BUYBACK_L4VA_DECIMALS must be an integer, got "${decimals}"`);
+    }
+    this.l4vaDecimals = decimals === undefined ? NaN : Number(decimals);
 
     this.buybackAddress = get('CARDANO_BUYBACK_ADDRESS');
     this.buybackSKey = get('CARDANO_BUYBACK_S_KEY');
@@ -112,6 +144,11 @@ export class CardanoBuybackService {
     this.opsAddress = get('CARDANO_BUYBACK_OPS_ADDRESS');
     this.burnAddress = get('CARDANO_BUYBACK_BURN_ADDRESS') ?? getBurnWallet(this.isMainnet);
     this.burnPolicy = this.l4vaPolicyId ? findL4vaPolicy(this.l4vaPolicyId) : null;
+    if (this.isMainnet && this.l4vaPolicyId && !this.burnPolicy) {
+      throw new Error(
+        `CARDANO_BUYBACK_L4VA_POLICY_ID ${this.l4vaPolicyId} is not a deployed L4VA policy; mainnet requires on-chain burn`
+      );
+    }
 
     this.adminAddress = get('ADMIN_ADDRESS');
     this.adminSKey = get('ADMIN_S_KEY');
@@ -129,7 +166,13 @@ export class CardanoBuybackService {
     this.slippagePct = Number(get('CARDANO_BUYBACK_SLIPPAGE_PCT') ?? 1);
     this.maxPriceImpactBps = big('CARDANO_BUYBACK_MAX_PRICE_IMPACT_BPS', 300n);
     this.minL4vaPerAda = big('CARDANO_BUYBACK_MIN_L4VA_PER_ADA', 0n);
-    this.minDistribute = big('CARDANO_BUYBACK_MIN_DISTRIBUTE', 10n ** BigInt(this.l4vaDecimals));
+    this.minDistribute = big(
+      'CARDANO_BUYBACK_MIN_DISTRIBUTE',
+      Number.isInteger(this.l4vaDecimals) ? 10n ** BigInt(this.l4vaDecimals) : 1n
+    );
+    if (this.isMainnet && this.minL4vaPerAda === 0n) {
+      throw new Error('CARDANO_BUYBACK_MIN_L4VA_PER_ADA must be set on mainnet (price floor)');
+    }
   }
 
   private get l4vaUnit(): string {
@@ -141,8 +184,10 @@ export class CardanoBuybackService {
   }
 
   private missingConfig(): string[] {
+    if (this.configError) return [this.configError];
     return Object.entries({
-      L4VA_POLICY_ID: this.l4vaPolicyId,
+      CARDANO_BUYBACK_L4VA_POLICY_ID: this.l4vaPolicyId,
+      CARDANO_BUYBACK_L4VA_DECIMALS: Number.isInteger(this.l4vaDecimals) ? 'set' : '',
       CARDANO_BUYBACK_ADDRESS: this.buybackAddress,
       CARDANO_BUYBACK_S_KEY: this.buybackSKey,
       'CARDANO_BUYBACK_TREASURY_ADDRESS (or L4VA_TREASURY_ADDRESS)': this.treasuryAddress,
@@ -173,7 +218,8 @@ export class CardanoBuybackService {
 
   /** Balances, config and what the next cycle would do. Read-only. */
   async getStatus(): Promise<Record<string, unknown>> {
-    this.assertConfigured();
+    const missing = this.missingConfig();
+    if (missing.length > 0) return { configured: false, missing };
     const balances = await this.getBalances(this.buybackAddress);
     const distribution = planDistribution(balances.l4va, this.minDistribute, this.split);
     const swapLovelace = distribution
@@ -186,6 +232,8 @@ export class CardanoBuybackService {
         });
 
     return {
+      configured: true,
+      pendingTx: await this.redis.get(PENDING_TX_KEY),
       network: this.network,
       buybackAddress: this.buybackAddress,
       treasuryAddress: this.treasuryAddress,
@@ -239,6 +287,14 @@ export class CardanoBuybackService {
     if (!acquired) return { action: 'skipped', reason: 'Another buyback cycle is running' };
 
     try {
+      const pending = await this.redis.get(PENDING_TX_KEY);
+      if (pending) {
+        if (!(await this.isConfirmed(pending))) {
+          return { action: 'skipped', reason: `Waiting for previous buyback tx ${pending} to confirm` };
+        }
+        await this.redis.del(PENDING_TX_KEY);
+      }
+
       const balances = await this.getBalances(this.buybackAddress);
 
       const distribution = planDistribution(balances.l4va, this.minDistribute, this.split);
@@ -266,6 +322,48 @@ export class CardanoBuybackService {
     }
   }
 
+  private async isConfirmed(txHash: string): Promise<boolean> {
+    try {
+      await this.blockfrost.txs(txHash);
+      return true;
+    } catch (error: any) {
+      if (error?.status_code === 404) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Checks a DexHunter quote (estimate or build response). Missing output or
+   * price-impact data is a rejection, never a zero. `price_impact` is read as a
+   * percentage (DexHunter's unit; 3 = 3%).
+   */
+  private evaluateQuote(
+    lovelaceIn: bigint,
+    totalOutput: unknown,
+    splits: unknown
+  ): { ok: true; minOut: bigint; priceImpactsPct: number[] } | { ok: false; reason: string } {
+    if (totalOutput === undefined || totalOutput === null || !Number.isFinite(Number(totalOutput))) {
+      return { ok: false, reason: 'Quote has no total_output' };
+    }
+    if (!Array.isArray(splits) || splits.length === 0) {
+      return { ok: false, reason: 'Quote has no route splits, price impact unknown' };
+    }
+    const priceImpactsPct = splits.map((s: any) => Number(s?.priceImpact ?? s?.price_impact));
+    if (priceImpactsPct.some(p => !Number.isFinite(p))) {
+      return { ok: false, reason: 'Quote split without price impact' };
+    }
+
+    const minOut = displayToBase(String(totalOutput), this.l4vaDecimals);
+    const check = checkQuote({
+      lovelaceIn,
+      minOut,
+      priceImpactsPct,
+      maxPriceImpactBps: this.maxPriceImpactBps,
+      minL4vaPerAda: this.minL4vaPerAda,
+    });
+    return check.ok === false ? check : { ok: true, minOut, priceImpactsPct };
+  }
+
   private async swap(lovelaceIn: bigint): Promise<BuybackCycleResult> {
     const adaIn = baseToDisplay(lovelaceIn, 6);
 
@@ -276,20 +374,12 @@ export class CardanoBuybackService {
       slippage: this.slippagePct,
     });
 
-    const minOut = displayToBase(estimate.totalOutput, this.l4vaDecimals);
-    // estimateSwap passes DexHunter's raw split objects through.
-    const priceImpactsPct = (estimate.splits ?? []).map((s: any) => Number(s.priceImpact ?? s.price_impact ?? 0));
-
-    const check = checkQuote({
-      lovelaceIn,
-      minOut,
-      priceImpactsPct,
-      maxPriceImpactBps: this.maxPriceImpactBps,
-      minL4vaPerAda: this.minL4vaPerAda,
-    });
-    if (check.ok === false) {
-      return { action: 'idle', reason: `Quote rejected: ${check.reason}` };
+    const quote = this.evaluateQuote(lovelaceIn, estimate.totalOutput, estimate.splits);
+    if (quote.ok === false) {
+      return { action: 'idle', reason: `Quote rejected: ${quote.reason}` };
     }
+    const { priceImpactsPct } = quote;
+    let { minOut } = quote;
 
     const transaction = await this.transactionsService.createTransaction({
       vault_id: null,
@@ -315,8 +405,16 @@ export class CardanoBuybackService {
         amountIn: adaIn,
         slippage: this.slippagePct,
         signingKeys: [PrivateKey.from_bech32(this.buybackSKey)],
+        // The built tx can carry a different route and price than the estimate,
+        // so the quote that is actually signed is the one checked.
+        beforeSign: buildData => {
+          const built = this.evaluateQuote(lovelaceIn, buildData?.total_output, buildData?.splits);
+          if (built.ok === false) throw new Error(`Built swap rejected: ${built.reason}`);
+          minOut = built.minOut;
+        },
       });
 
+      await this.redis.set(PENDING_TX_KEY, txHash, 'EX', PENDING_TX_TTL_SECONDS);
       await this.transactionsService.updateTransactionHash(transaction.id, txHash);
       this.logger.log(`Buyback swap ${adaIn} ADA → ≥${minOut} L4VA base units submitted: ${txHash}`);
 
@@ -356,6 +454,7 @@ export class CardanoBuybackService {
 
       const signed = await (await tx.complete()).sign.withPrivateKey(this.buybackSKey).complete();
       const txHash = await signed.submit();
+      await this.redis.set(PENDING_TX_KEY, txHash, 'EX', PENDING_TX_TTL_SECONDS);
       await this.transactionsService.updateTransactionHash(transaction.id, txHash);
 
       this.logger.log(
@@ -378,8 +477,19 @@ export class CardanoBuybackService {
       throw new BadRequestException('Funding amount must be at least 1 ADA');
     }
 
+    const acquired = (await this.redis.set(FUND_LOCK_KEY, '1', 'EX', LOCK_TTL_SECONDS, 'NX')) === 'OK';
+    if (!acquired) throw new BadRequestException('Another buyback funding is in progress');
+
+    try {
+      return await this.fundLocked(lovelace);
+    } finally {
+      await this.redis.del(FUND_LOCK_KEY).catch(() => undefined);
+    }
+  }
+
+  private async fundLocked(lovelace: bigint): Promise<{ txHash: string }> {
     const { utxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-      targetAdaAmount: Number(lovelace),
+      targetAdaAmount: Number(lovelace + FUND_FEE_HEADROOM_LOVELACE),
     });
 
     const transaction = await this.transactionsService.createTransaction({

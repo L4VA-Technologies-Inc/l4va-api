@@ -242,6 +242,8 @@ export class DexHunterService {
     amountIn: number;
     slippage: number;
     signingKeys: PrivateKey[];
+    /** Called with the raw /swap/build response before signing; throw to abort. */
+    beforeSign?: (buildData: any) => void | Promise<void>;
   }): Promise<{ txHash: string }> {
     const swapResponse = await fetch(`${this.dexHunterBaseUrl}/swap/build`, {
       method: 'POST',
@@ -269,6 +271,8 @@ export class DexHunterService {
     if (!swapData.cbor) {
       throw new Error('No transaction CBOR returned from DexHunter');
     }
+
+    await params.beforeSign?.(swapData);
 
     const txToSign = FixedTransaction.from_bytes(Buffer.from(swapData.cbor, 'hex'));
     for (const key of params.signingKeys) {
