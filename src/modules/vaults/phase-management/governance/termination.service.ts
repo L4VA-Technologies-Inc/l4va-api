@@ -19,6 +19,7 @@ import { VaultManagingService } from '../../processing-tx/onchain/vault-managing
 import { TreasuryWalletService } from '../../treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '../../treasure/treasury-extraction.service';
 
+import { getBurnWallet } from '@/common/cardano/burn-wallet';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -89,11 +90,6 @@ export class TerminationService {
   private readonly adminSKey: string;
   private readonly adminHash: string;
 
-  private readonly BURN_WALLET_TESTNET =
-    'addr_test1qzdv6pn0ltar7q3hhgrgts2yqvphxtptr4m3t4xf5lfyx7hc3v9amrnu0cp6zt3vkry03838n2mv9e69g8e70aqktgcsnvkule';
-  private readonly BURN_WALLET_MAINNET =
-    'addr1qxnk9w6e3azattu87ythnnjt2vmtlskzcld0ptwa924j0znz7v4zyqfqapmueh24l2r8v848mya68nndvjy783m656kq0cxjsn';
-
   // Minimum ADA for distribution (2 ADA per user minimum to cover tx costs)
   private readonly MIN_ADA_PER_CLAIM = 2_000_000;
   // Minimum total ADA to justify treasury distribution (10 ADA)
@@ -156,7 +152,7 @@ export class TerminationService {
    * Get burn wallet address based on network
    */
   private get burnWallet(): string {
-    return this.isMainnet ? this.BURN_WALLET_MAINNET : this.BURN_WALLET_TESTNET;
+    return getBurnWallet(this.isMainnet);
   }
 
   /**
