@@ -1,4 +1,4 @@
-import { FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -197,95 +197,30 @@ export class DexHunterService {
     });
 
     try {
-      // Step 2: Build swap transaction using DexHunter API
-      const swapResponse = await fetch(`${this.dexHunterBaseUrl}/swap/build`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Partner-Id': this.dexHunterApiKey,
-        },
-        body: JSON.stringify({
-          buyer_address: address, // Treasury wallet receives the output
-          token_in: input.tokenIn,
-          token_out: 'ADA',
-          slippage: input.slippage || 0.5,
-          amount_in: input.amountIn,
-          tx_optimization: true, // Enable DEX splitting for better prices
-        }),
-      });
-
-      if (!swapResponse.ok) {
-        const errorText = await swapResponse.text();
-        throw new Error(`DexHunter /swap/build API error: ${swapResponse.status} - ${errorText}`);
-      }
-
-      const swapData = await swapResponse.json();
-
-      if (!swapData.cbor) {
-        throw new Error('No transaction CBOR returned from DexHunter');
-      }
-
-      this.logger.log('Swap transaction built successfully');
-
-      // Step 3: Sign the transaction with BOTH keys
-      this.logger.log('Signing transaction with treasury wallet...');
       const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
-      const txToSign = FixedTransaction.from_bytes(Buffer.from(swapData.cbor, 'hex'));
-
-      txToSign.sign_and_add_vkey_signature(privateKey);
-      txToSign.sign_and_add_vkey_signature(stakePrivateKey);
-
-      const witnessSet = txToSign.witness_set();
-      const witnessSetHex = Buffer.from(witnessSet.to_bytes()).toString('hex');
-
-      this.logger.log('Transaction signed with both payment and stake keys');
-
-      // Step 4: Submit signed transaction to DexHunter /swap/sign endpoint
-      this.logger.log('Submitting signed transaction to DexHunter...');
-      const signResponse = await fetch(`${this.dexHunterBaseUrl}/swap/sign`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Partner-Id': this.dexHunterApiKey,
-        },
-        body: JSON.stringify({
-          txCbor: swapData.cbor,
-          signatures: witnessSetHex, // Send as single hex string
-        }),
-      });
-
-      if (!signResponse.ok) {
-        const errorText = await signResponse.text();
-        throw new Error(`DexHunter /swap/sign API error: ${signResponse.status} - ${errorText}`);
-      }
-
-      const signData = await signResponse.json();
-
-      if (!signData.cbor) {
-        throw new Error('No signed transaction CBOR returned from DexHunter');
-      }
-
-      this.logger.log('Signed transaction received from DexHunter');
-
-      // Step 5: Submit the final signed transaction to blockchain
-      const submitResponse = await this.blockchainService.submitTransaction({
-        transaction: signData.cbor,
+      const { txHash } = await this.buildSignAndSubmitSwap({
+        address, // Treasury wallet receives the output
+        tokenIn: input.tokenIn,
+        tokenOut: 'ADA',
+        amountIn: input.amountIn,
+        slippage: input.slippage || 0.5,
+        signingKeys: [privateKey, stakePrivateKey],
       });
 
       // Update transaction with hash and status
-      await this.transactionsService.updateTransactionHash(transaction.id, submitResponse.txHash, {
+      await this.transactionsService.updateTransactionHash(transaction.id, txHash, {
         actualOutput: estimate.totalOutput,
       });
 
-      this.logger.log(`Swap transaction submitted successfully. TxHash: ${submitResponse.txHash}`);
+      this.logger.log(`Swap transaction submitted successfully. TxHash: ${txHash}`);
 
       // Calculate actual slippage
       const actualSlippage =
         ((estimate.totalOutputWithoutSlippage - estimate.totalOutput) / estimate.totalOutputWithoutSlippage) * 100;
 
       return {
-        txHash: submitResponse.txHash,
+        txHash,
         estimatedOutput: estimate.totalOutput,
         actualSlippage: actualSlippage,
       };
@@ -294,5 +229,81 @@ export class DexHunterService {
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       throw error;
     }
+  }
+
+  /**
+   * Build a swap via DexHunter for `address`, sign it with `signingKeys`,
+   * co-sign through /swap/sign and submit on-chain. Output lands at `address`.
+   */
+  async buildSignAndSubmitSwap(params: {
+    address: string;
+    tokenIn: string;
+    tokenOut: string;
+    amountIn: number;
+    slippage: number;
+    signingKeys: PrivateKey[];
+  }): Promise<{ txHash: string }> {
+    const swapResponse = await fetch(`${this.dexHunterBaseUrl}/swap/build`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Partner-Id': this.dexHunterApiKey,
+      },
+      body: JSON.stringify({
+        buyer_address: params.address,
+        token_in: params.tokenIn,
+        token_out: params.tokenOut,
+        slippage: params.slippage,
+        amount_in: params.amountIn,
+        tx_optimization: true, // Enable DEX splitting for better prices
+      }),
+    });
+
+    if (!swapResponse.ok) {
+      const errorText = await swapResponse.text();
+      throw new Error(`DexHunter /swap/build API error: ${swapResponse.status} - ${errorText}`);
+    }
+
+    const swapData = await swapResponse.json();
+
+    if (!swapData.cbor) {
+      throw new Error('No transaction CBOR returned from DexHunter');
+    }
+
+    const txToSign = FixedTransaction.from_bytes(Buffer.from(swapData.cbor, 'hex'));
+    for (const key of params.signingKeys) {
+      txToSign.sign_and_add_vkey_signature(key);
+    }
+
+    const witnessSetHex = Buffer.from(txToSign.witness_set().to_bytes()).toString('hex');
+
+    const signResponse = await fetch(`${this.dexHunterBaseUrl}/swap/sign`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Partner-Id': this.dexHunterApiKey,
+      },
+      body: JSON.stringify({
+        txCbor: swapData.cbor,
+        signatures: witnessSetHex, // Send as single hex string
+      }),
+    });
+
+    if (!signResponse.ok) {
+      const errorText = await signResponse.text();
+      throw new Error(`DexHunter /swap/sign API error: ${signResponse.status} - ${errorText}`);
+    }
+
+    const signData = await signResponse.json();
+
+    if (!signData.cbor) {
+      throw new Error('No signed transaction CBOR returned from DexHunter');
+    }
+
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: signData.cbor,
+    });
+
+    return { txHash: submitResponse.txHash };
   }
 }
