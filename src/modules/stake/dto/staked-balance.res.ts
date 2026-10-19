@@ -1,6 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 export class StakedBoxItem {
+  @ApiProperty({ description: 'EVM only: L4VAStaking position id', required: false })
+  positionId?: string;
+
   @ApiProperty({ description: 'Transaction hash of the UTxO' })
   txHash: string;
 

@@ -3,10 +3,15 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class AddIndexWeightedVaults1790249291055 implements MigrationInterface {
   name = 'AddIndexWeightedVaults1790249291055';
 
+  // Idempotent: this migration shipped on dev as AddIndexWeightedVaults1789500000000
+  // and was renamed, so databases migrated before the rename already have the
+  // schema but record the old name. There it now only records itself.
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "vaults" ADD "vault_archetype" character varying NOT NULL DEFAULT 'standard'`);
-    await queryRunner.query(`ALTER TABLE "vaults" ADD "index_config" jsonb`);
-    await queryRunner.query(`CREATE INDEX "IDX_vaults_vault_archetype" ON "vaults" ("vault_archetype")`);
+    await queryRunner.query(
+      `ALTER TABLE "vaults" ADD COLUMN IF NOT EXISTS "vault_archetype" character varying NOT NULL DEFAULT 'standard'`
+    );
+    await queryRunner.query(`ALTER TABLE "vaults" ADD COLUMN IF NOT EXISTS "index_config" jsonb`);
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_vaults_vault_archetype" ON "vaults" ("vault_archetype")`);
 
     await queryRunner.query(`ALTER TYPE "public"."transactions_type_enum" ADD VALUE IF NOT EXISTS 'evm-swap'`);
     await queryRunner.query(
@@ -14,7 +19,7 @@ export class AddIndexWeightedVaults1790249291055 implements MigrationInterface {
     );
 
     await queryRunner.query(`
-      CREATE TABLE "evm_index_rebalances" (
+      CREATE TABLE IF NOT EXISTS "evm_index_rebalances" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "vault_id" uuid NOT NULL,
         "idempotency_key" character varying NOT NULL,
@@ -36,10 +41,10 @@ export class AddIndexWeightedVaults1790249291055 implements MigrationInterface {
       )
     `);
     await queryRunner.query(
-      `CREATE UNIQUE INDEX "IDX_evm_index_rebalances_vault_key" ON "evm_index_rebalances" ("vault_id", "idempotency_key")`
+      `CREATE UNIQUE INDEX IF NOT EXISTS "IDX_evm_index_rebalances_vault_key" ON "evm_index_rebalances" ("vault_id", "idempotency_key")`
     );
     await queryRunner.query(
-      `CREATE INDEX "IDX_evm_index_rebalances_vault_created" ON "evm_index_rebalances" ("vault_id", "created_at")`
+      `CREATE INDEX IF NOT EXISTS "IDX_evm_index_rebalances_vault_created" ON "evm_index_rebalances" ("vault_id", "created_at")`
     );
   }
 
