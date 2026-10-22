@@ -93,6 +93,8 @@ export interface EvmDistributionMetadata {
   deadline: string;
   txHash: string | null;
   openedAt: string;
+  /** Set once every snapshot holder with a share has been paid by the auto-claim cron. */
+  autoClaimCompletedAt?: string;
 }
 
 /**

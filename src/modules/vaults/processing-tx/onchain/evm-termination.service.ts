@@ -25,6 +25,43 @@ import { ChainType, VaultStatus } from '@/types/vault.types';
 
 const NATIVE = '0x0000000000000000000000000000000000000000' as const;
 
+/** The slice of the Uniswap v4 LP adapter that the termination exit needs. */
+const V4_LP_ADAPTER_ABI = [
+  {
+    type: 'function',
+    name: 'positionsOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'vault', type: 'address' }],
+    outputs: [{ type: 'uint256[]' }],
+  },
+  {
+    type: 'function',
+    name: 'liquidityOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'vault', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'withdrawLiquidity',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'tokenId', type: 'uint256' },
+      { name: 'recipient', type: 'address' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'event',
+    name: 'LiquidityWithdrawn',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'recipient', type: 'address', indexed: false },
+    ],
+  },
+] as const;
+
 export interface BeginTerminationResult {
   txHash: Hex;
   vtSupply: bigint;
@@ -96,6 +133,10 @@ export class EvmTerminationService {
       );
     }
 
+    // Protocol-owned v4 LP must leave the pool first, or the preflight blocks
+    // (redeemers would get a receipt whose VT leg dies with the vault).
+    await this.exitV4Liquidity(vaultAddress);
+
     // Strict: this is the point of no return. `TerminationPreparing` has no
     // exit other than `beginTermination` — `openCycle` accepts only
     // Locked/Cancelled — so a vault that enters it and then cannot commit is
@@ -117,6 +158,102 @@ export class EvmTerminationService {
       'TerminationPrepared',
       null // no DB status transition yet
     );
+  }
+
+  /** Distinct position assets of the vault's protocol-owned LP positions. */
+  private async lpPositionAssets(vaultAddress: Address): Promise<Address[]> {
+    const client = this.contractReader.publicClient;
+    const total = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'totalLiquidityPositions',
+    })) as bigint;
+    const assets = new Set<Address>();
+    for (let i = 1n; i <= total; i++) {
+      const p = (await client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'getLiquidityPosition',
+        args: [i],
+      })) as { positionAsset: Address };
+      assets.add(p.positionAsset.toLowerCase() as Address);
+    }
+    return [...assets];
+  }
+
+  /**
+   * Withdraw every v4 LP position the vault still has in a pool. The vault
+   * authority calls the adapter directly; proceeds go to the treasury because
+   * `Vault.receive` rejects ETH sent by the PoolManager. Assets that are not a
+   * v4 adapter (no `positionsOf`) are left to the preflight.
+   */
+  private async exitV4Liquidity(vaultAddress: Address): Promise<void> {
+    const client = this.contractReader.publicClient;
+    const recipient = process.env.EVM_TREASURY_ADDRESS as Address | undefined;
+
+    for (const adapter of await this.lpPositionAssets(vaultAddress)) {
+      let tokenIds: readonly bigint[];
+      try {
+        tokenIds = (await client.readContract({
+          address: adapter,
+          abi: V4_LP_ADAPTER_ABI,
+          functionName: 'positionsOf',
+          args: [vaultAddress],
+        })) as readonly bigint[];
+      } catch {
+        continue; // not a v4 adapter
+      }
+      if (tokenIds.length === 0) continue;
+
+      const liquidity = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'liquidityOf',
+        args: [vaultAddress],
+      })) as bigint;
+      if (liquidity === 0n) continue;
+
+      if (!recipient) {
+        throw new BadRequestException(
+          `Vault ${vaultAddress} has v4 LP in a pool; set EVM_TREASURY_ADDRESS to receive the withdrawn liquidity`
+        );
+      }
+
+      for (const tokenId of tokenIds) {
+        const result = await this.adminSigner.sendAndConfirm(
+          {
+            address: adapter,
+            abi: V4_LP_ADAPTER_ABI,
+            functionName: 'withdrawLiquidity',
+            args: [tokenId, recipient],
+          },
+          ['LiquidityWithdrawn']
+        );
+        this.logger.log(
+          `Termination LP exit: vault=${vaultAddress} adapter=${adapter} tokenId=${tokenId} → ${recipient} tx=${result.hash}`
+        );
+      }
+    }
+  }
+
+  /** v4 LP receipts the vault holds whose liquidity has been withdrawn. */
+  private async withdrawnV4Receipts(vaultAddress: Address): Promise<Address[]> {
+    const client = this.contractReader.publicClient;
+    const receipts: Address[] = [];
+    for (const adapter of await this.lpPositionAssets(vaultAddress)) {
+      try {
+        const liquidity = (await client.readContract({
+          address: adapter,
+          abi: V4_LP_ADAPTER_ABI,
+          functionName: 'liquidityOf',
+          args: [vaultAddress],
+        })) as bigint;
+        if (liquidity === 0n) receipts.push(adapter);
+      } catch {
+        // not a v4 adapter
+      }
+    }
+    return receipts;
   }
 
   /**
@@ -223,6 +360,13 @@ export class EvmTerminationService {
           'on-chain limit bounds only how many may be waived, not their value. Define the dust/approval policy ' +
           'and set evm_termination_allow_waivers before using it.'
       );
+    }
+
+    // Receipts of withdrawn v4 LP positions are non-transferable and back no
+    // liquidity, so they can neither be redeemed nor carry value: waive them
+    // regardless of the waiver setting (which guards valuable assets).
+    for (const receipt of await this.withdrawnV4Receipts(vaultAddress)) {
+      if (!waived.includes(receipt)) waived.push(receipt);
     }
 
     const plan = await this.buildCustodyPlan(vaultAddress);

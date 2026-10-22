@@ -266,12 +266,12 @@ export class EvmSnapshotService {
         fromBlock = await this.findContractDeploymentBlock(vtAddress, latestBlock);
       } catch (error) {
         if (this.isMissingTrieNodeError(error)) {
-          // Non-archive RPCs may fail historical eth_getCode lookups.
-          // Fall back to block 0 replay so we can still build a snapshot.
+          // Non-archive RPCs may fail historical eth_getCode lookups. Every VT is
+          // created after the factory, so replay from its deploy block (0 if unset).
+          fromBlock = this.factoryDeployBlock();
           this.logger.warn(
-            `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to full replay from block 0`
+            `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to replay from block ${fromBlock.toString()}`
           );
-          fromBlock = 0n;
         } else {
           throw error;
         }
@@ -802,7 +802,7 @@ export class EvmSnapshotService {
       return 0n;
     }
 
-    let low = 0n;
+    let low = this.factoryDeployBlock();
     let high = latestBlock;
     let earliest = latestBlock;
 
@@ -828,6 +828,17 @@ export class EvmSnapshotService {
 
   private isMissingTrieNodeError(error: unknown): boolean {
     const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-    return message.includes('missing trie node') || message.includes('state is not available');
+    // Nitro / Robinhood public RPC: "historical state <hash> is not available".
+    return (
+      message.includes('missing trie node') ||
+      message.includes('state is not available') ||
+      /historical state .* is not available/.test(message)
+    );
+  }
+
+  /** Lower bound for VT history: `EVM_FACTORY_DEPLOY_BLOCK` (every vault is created after it), else 0. */
+  private factoryDeployBlock(): bigint {
+    const raw = this.configService.get<string>('EVM_FACTORY_DEPLOY_BLOCK')?.trim();
+    return raw && /^\d+$/.test(raw) ? BigInt(raw) : 0n;
   }
 }

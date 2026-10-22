@@ -200,8 +200,17 @@ export class EvmAllocationService {
       expansionVtOverride && expansionVtOverride.size > 0
         ? [...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)
         : BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
+    // With limit pricing the override already fixes every contribution's VT, so
+    // the whole supply goes to one side: asset contributors for an expansion,
+    // native acquirers for an acquire expansion (native rows carry no value).
+    const overrideAllNative =
+      !!expansionVtOverride?.size && contributions.every(c => c.kind === EvmAssetKindOnchain.Native);
     const assetsOfferedBps =
-      expansionVtOverride && expansionVtOverride.size > 0 ? 0 : Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
+      expansionVtOverride && expansionVtOverride.size > 0
+        ? overrideAllNative
+          ? 10_000
+          : 0
+        : Math.round(Number(vault.tokens_for_acquires) * 100); // percent → bips
     // Read at snapshot time; closeCycle reads it again at close. A rate change
     // in between would make this snapshot fail its close, not misprice it.
     const contributionFeeBps = await this.contractReader.protocolFeeBps(

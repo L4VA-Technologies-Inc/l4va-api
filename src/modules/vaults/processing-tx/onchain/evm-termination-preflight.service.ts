@@ -165,8 +165,17 @@ export class EvmTerminationPreflightService {
       };
     }
 
+    // DexScreener reports Uniswap v4 pools by their bytes32 pool id, not a pair
+    // address. All v4 liquidity sits in the singleton PoolManager, so its VT
+    // balance is read once in place of the per-pool ids.
+    const v4PoolManager = (process.env.EVM_UNISWAP_V4_POOL_MANAGER ||
+      '0x8366a39CC670B4001A1121B8F6A443A643e40951') as Address;
+    const holders = [
+      ...new Set(pairs.map(p => (p.length === 66 ? v4PoolManager : p).toLowerCase())),
+    ] as Address[];
+
     let poolHeldVt = 0n;
-    for (const pair of pairs) {
+    for (const pair of holders) {
       try {
         const bal = (await this.contractReader.publicClient.readContract({
           address: vtAddress,

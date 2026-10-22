@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { encodeAbiParameters, keccak256, zeroAddress, type Address, type Hex } from 'viem';
@@ -12,6 +13,7 @@ import { EvmSnapshotService } from './evm-snapshot.service';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { ChainType } from '@/types/vault.types';
 
 /** Matches `MIN_DISTRIBUTION_CLAIM_WINDOW` in Vault.sol. */
@@ -19,6 +21,9 @@ export const MIN_CLAIM_WINDOW_SECONDS = 90 * 24 * 60 * 60;
 
 /** Default claim window. Generous on purpose: unclaimed funds go to treasury. */
 export const DEFAULT_CLAIM_WINDOW_SECONDS = 180 * 24 * 60 * 60;
+
+/** Most `claimDistributionFor` transactions sent per cron tick, across all distributions. */
+const AUTO_CLAIM_MAX_PER_TICK = 50;
 
 export interface EvmDistributionValidation {
   valid: boolean;
@@ -258,6 +263,152 @@ export class EvmDistributionService {
       ['DistributionClaimed']
     );
     return result.hash;
+  }
+
+  /**
+   * Pays every open EVM distribution out to its holders, admin covering gas —
+   * the EVM counterpart of the Cardano batch payout, so holders never have to
+   * claim. Holders come from the snapshot the pot was opened against; the
+   * contract decides each share (`distributionClaimable`), returns 0 for
+   * excluded holders (LP pools) and for anyone already paid, and rejects a
+   * second claim, so re-running a tick is safe. A distribution is marked done
+   * once a full pass finds nothing left to pay.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async autoClaimOpenDistributions(): Promise<void> {
+    if (this.autoClaimRunning) return;
+    if (['false', '0'].includes(process.env.EVM_DISTRIBUTION_AUTO_CLAIM ?? '')) return;
+    this.autoClaimRunning = true;
+    try {
+      const proposals = await this.proposalRepository
+        .createQueryBuilder('p')
+        .innerJoin(Vault, 'v', 'v.id = p.vault_id')
+        .where('p.proposal_type = :type', { type: ProposalType.DISTRIBUTION })
+        .andWhere('p.status = :status', { status: ProposalStatus.EXECUTED })
+        .andWhere('v.chain_type = :chain', { chain: ChainType.robinhood })
+        .andWhere("(p.metadata -> 'evmDistribution' ->> 'autoClaimCompletedAt') IS NULL")
+        .getMany();
+
+      let budget = AUTO_CLAIM_MAX_PER_TICK;
+      for (const proposal of proposals) {
+        if (budget <= 0) break;
+        budget -= await this.autoClaimDistribution(proposal, budget);
+      }
+    } catch (err) {
+      this.logger.error(`EVM distribution auto-claim sweep failed: ${(err as Error).message}`);
+    } finally {
+      this.autoClaimRunning = false;
+    }
+  }
+
+  private autoClaimRunning = false;
+
+  /** Pays up to `budget` holders of one distribution; returns how many transactions it sent. */
+  private async autoClaimDistribution(proposal: Proposal, budget: number): Promise<number> {
+    const vault = await this.requireEvmVault(proposal.vaultId);
+    const vaultAddress = vault.contract_address as Address;
+
+    // The chain, not the proposal row, is the authority on what was opened: a
+    // racing save of the proposal can drop `metadata.evmDistribution`.
+    let dist = proposal.metadata?.evmDistribution;
+    if (!dist?.distributionId) {
+      const id = await this.readDistributionIdForKey(
+        vaultAddress,
+        this.buildExecutionKey(proposal.vaultId, proposal.id)
+      );
+      if (id === 0n) return 0; // not opened (yet)
+      const onchain = await this.readDistribution(vaultAddress, id);
+      dist = {
+        distributionId: String(id),
+        asset: onchain.asset,
+        netPot: String(onchain.netPot),
+        supply: String(onchain.supply),
+        timepoint: String(onchain.timepoint),
+        deadline: String(onchain.deadline),
+        txHash: null,
+        openedAt: new Date().toISOString(),
+      };
+      await this.proposalRepository.update(
+        { id: proposal.id },
+        { metadata: { ...proposal.metadata, evmDistribution: dist } }
+      );
+      proposal.metadata = { ...proposal.metadata, evmDistribution: dist };
+      this.logger.warn(
+        `Proposal ${proposal.id}: evmDistribution metadata was missing, restored distribution ${id} from chain`
+      );
+    }
+    const distributionId = BigInt(dist.distributionId);
+
+    if (Number(dist.deadline) * 1000 <= Date.now()) {
+      // Claims are closed on-chain; the remainder goes to the treasury by sweep.
+      await this.markAutoClaimDone(proposal, 'claim window closed');
+      return 0;
+    }
+
+    const snapshot =
+      (await this.snapshotRepository.findOne({
+        where: { vaultId: proposal.vaultId, snapshotTimepoint: dist.timepoint },
+      })) ?? (await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId } }));
+    if (!snapshot) {
+      this.logger.warn(`Distribution ${dist.distributionId} (proposal ${proposal.id}): no holder snapshot, skipping`);
+      return 0;
+    }
+
+    let sent = 0;
+    let pending = false;
+    for (const holder of Object.keys(snapshot.addressBalances ?? {})) {
+      const claimable = (await this.contractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'distributionClaimable',
+        args: [distributionId, holder as Address],
+      })) as bigint;
+      if (claimable === 0n) continue;
+
+      if (sent >= budget) {
+        pending = true;
+        break;
+      }
+      try {
+        const result = await this.adminSigner.sendAndConfirm(
+          {
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'claimDistributionFor',
+            args: [distributionId, holder as Address],
+          },
+          ['DistributionClaimed']
+        );
+        sent++;
+        this.logger.log(
+          `Distribution ${dist.distributionId} on ${vaultAddress}: paid ${claimable} to ${holder} tx=${result.hash}`
+        );
+      } catch (err) {
+        // Left for the next tick; the contract refuses a double payment.
+        pending = true;
+        this.logger.warn(
+          `Distribution ${dist.distributionId} on ${vaultAddress}: claim for ${holder} failed — ${(err as Error).message}`
+        );
+      }
+    }
+
+    if (!pending) await this.markAutoClaimDone(proposal, `paid ${sent} holder(s) this pass`);
+    return sent;
+  }
+
+  private async markAutoClaimDone(proposal: Proposal, reason: string): Promise<void> {
+    const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id } });
+    if (!fresh?.metadata?.evmDistribution) return;
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...fresh.metadata,
+          evmDistribution: { ...fresh.metadata.evmDistribution, autoClaimCompletedAt: new Date().toISOString() },
+        },
+      }
+    );
+    this.logger.log(`Distribution ${fresh.metadata.evmDistribution.distributionId} auto-claim complete (${reason})`);
   }
 
   /** What `holder` can claim right now, straight from the contract. */

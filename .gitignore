@@ -61,3 +61,6 @@ l4va-protocol-mainnet.json
 
 gcp-service-account.json
 gcp-bucket.json
+
+# Local Robinhood-mainnet test stack (contains test keys)
+.env.mainnet

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { encodeAbiParameters, encodePacked, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, encodePacked, keccak256, type Address, type Hex } from 'viem';
 
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
@@ -19,6 +19,69 @@ export enum SwapAdapterKind {
 
 /** `UniversalRouterSwapAdapter.RouteKind`. */
 const ROUTE_KIND_V3_EXACT_IN = 0;
+const ROUTE_KIND_V4_EXACT_IN_SINGLE = 1;
+
+/** Uniswap v4 on Robinhood Chain 4663 (developers.uniswap.org v4 deployments). */
+const V4_QUOTER = '0x8dc178efb8111bb0973dd9d722ebeff267c98f94' as Address;
+const V4_STATE_VIEW = '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b' as Address;
+const NO_HOOKS = NATIVE;
+
+/**
+ * Hookless v4 tiers probed when a token has no v3 pool (e.g. L4VA, whose only
+ * liquidity is the ETH/L4VA 0.25% / tickSpacing 25 pool). The deepest wins.
+ */
+const V4_POOL_CANDIDATES: Array<{ fee: number; tickSpacing: number }> = [
+  { fee: 100, tickSpacing: 1 },
+  { fee: 500, tickSpacing: 10 },
+  { fee: 2500, tickSpacing: 25 },
+  { fee: 2500, tickSpacing: 50 },
+  { fee: 3000, tickSpacing: 60 },
+  { fee: 10000, tickSpacing: 200 },
+];
+
+const POOL_KEY_COMPONENTS = [
+  { name: 'currency0', type: 'address' },
+  { name: 'currency1', type: 'address' },
+  { name: 'fee', type: 'uint24' },
+  { name: 'tickSpacing', type: 'int24' },
+  { name: 'hooks', type: 'address' },
+] as const;
+
+const V4_QUOTER_ABI = [
+  {
+    type: 'function',
+    name: 'quoteExactInputSingle',
+    stateMutability: 'nonpayable',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          { name: 'poolKey', type: 'tuple', components: POOL_KEY_COMPONENTS },
+          { name: 'zeroForOne', type: 'bool' },
+          { name: 'exactAmount', type: 'uint128' },
+          { name: 'hookData', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [
+      { name: 'amountOut', type: 'uint256' },
+      { name: 'gasEstimate', type: 'uint256' },
+    ],
+  },
+] as const;
+
+const STATE_VIEW_ABI = [
+  {
+    type: 'function',
+    name: 'getLiquidity',
+    stateMutability: 'view',
+    inputs: [{ name: 'poolId', type: 'bytes32' }],
+    outputs: [{ type: 'uint128' }],
+  },
+] as const;
+
+type V4PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
 
 const TESTNET_SWAP_ADAPTER_ABI = [
   {
@@ -80,9 +143,16 @@ export class IndexSwapRouteService {
 
   async quote(assetIn: Address, assetOut: Address, amountIn: bigint): Promise<SwapQuote> {
     if (amountIn === 0n) return { amountOut: 0n, route: '0x' };
-    return this.kind === SwapAdapterKind.testnetFixedRate
-      ? this.quoteFixedRate(assetIn, assetOut, amountIn)
-      : this.quoteUniswapV3(assetIn, assetOut, amountIn);
+    if (this.kind === SwapAdapterKind.testnetFixedRate) return this.quoteFixedRate(assetIn, assetOut, amountIn);
+    try {
+      return await this.quoteUniswapV3(assetIn, assetOut, amountIn);
+    } catch (v3Err) {
+      // Some tokens only trade on v4 (L4VA on Robinhood); the adapter routes
+      // V4_EXACT_IN_SINGLE natively, so fall back before giving up.
+      const v4 = await this.quoteUniswapV4(assetIn, assetOut, amountIn).catch(() => null);
+      if (v4) return v4;
+      throw v3Err;
+    }
   }
 
   /** Native value of `amount` of `asset`, via an exact-input quote into native. */
@@ -102,6 +172,52 @@ export class IndexSwapRouteService {
       throw new Error(`TestnetSwapAdapter has no rate for ${assetIn} → ${assetOut}`);
     }
     return { amountOut: (amountIn * rate) / 10n ** 18n, route: '0x' };
+  }
+
+  /** Pool keys per pair, picked once (deepest hookless candidate). */
+  private readonly v4PoolCache = new Map<string, V4PoolKey | null>();
+
+  private async findV4Pool(a: Address, b: Address): Promise<V4PoolKey | null> {
+    const [currency0, currency1] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+    const cacheKey = `${currency0}:${currency1}`.toLowerCase();
+    if (this.v4PoolCache.has(cacheKey)) return this.v4PoolCache.get(cacheKey)!;
+
+    let best: { key: V4PoolKey; liquidity: bigint } | null = null;
+    for (const { fee, tickSpacing } of V4_POOL_CANDIDATES) {
+      const key: V4PoolKey = { currency0, currency1, fee, tickSpacing, hooks: NO_HOOKS };
+      const poolId = keccak256(
+        encodeAbiParameters(
+          [{ type: 'address' }, { type: 'address' }, { type: 'uint24' }, { type: 'int24' }, { type: 'address' }],
+          [currency0, currency1, fee, tickSpacing, NO_HOOKS]
+        )
+      );
+      const liquidity = (await this.contractReader.publicClient
+        .readContract({ address: V4_STATE_VIEW, abi: STATE_VIEW_ABI, functionName: 'getLiquidity', args: [poolId] })
+        .catch(() => 0n)) as bigint;
+      if (liquidity > 0n && (!best || liquidity > best.liquidity)) best = { key, liquidity };
+    }
+    this.v4PoolCache.set(cacheKey, best?.key ?? null);
+    return best?.key ?? null;
+  }
+
+  /** Single-hop v4 quote; native stays `address(0)` (no wrapping on v4). */
+  private async quoteUniswapV4(assetIn: Address, assetOut: Address, amountIn: bigint): Promise<SwapQuote | null> {
+    const key = await this.findV4Pool(assetIn, assetOut);
+    if (!key) return null;
+    const zeroForOne = assetIn.toLowerCase() === key.currency0.toLowerCase();
+    const { result } = await this.contractReader.publicClient.simulateContract({
+      address: V4_QUOTER,
+      abi: V4_QUOTER_ABI,
+      functionName: 'quoteExactInputSingle',
+      args: [{ poolKey: key, zeroForOne, exactAmount: amountIn, hookData: '0x' }],
+    });
+    const [amountOut] = result as readonly [bigint, bigint];
+    const data = encodeAbiParameters(
+      [{ type: 'tuple', components: POOL_KEY_COMPONENTS }, { type: 'bool' }],
+      [key, zeroForOne]
+    );
+    const route = encodeAbiParameters([{ type: 'uint8' }, { type: 'bytes' }], [ROUTE_KIND_V4_EXACT_IN_SINGLE, data]);
+    return { amountOut, route };
   }
 
   private async quoteUniswapV3(assetIn: Address, assetOut: Address, amountIn: bigint): Promise<SwapQuote> {

@@ -56,6 +56,8 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
+      // ENV_FILE lets a second local stack (e.g. Robinhood mainnet) run from its own file.
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     BullModule.forRootAsync({
       inject: [ConfigService],
@@ -65,6 +67,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
           port: 6379,
           role: 'master',
           password: configService.get<string>('REDIS_PASSWORD'),
+          db: Number(configService.get<string>('REDIS_DB') ?? 0),
         },
       }),
     }),

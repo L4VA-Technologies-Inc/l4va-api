@@ -15,6 +15,8 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
           host: configService.get<string>('REDIS_HOST'),
           port: configService.get<number>('REDIS_PORT'),
           password: configService.get<string>('REDIS_PASSWORD'),
+          // Separate logical DB per local stack, so testnet and mainnet never share cache or queues.
+          db: Number(configService.get<string>('REDIS_DB') ?? 0),
           retryStrategy: (times: number): number => {
             const delay = Math.min(times * 50, 2000);
             return delay;

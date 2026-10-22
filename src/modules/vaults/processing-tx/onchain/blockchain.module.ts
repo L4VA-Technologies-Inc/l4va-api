@@ -60,6 +60,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     HttpModule,
     TransactionsModule,

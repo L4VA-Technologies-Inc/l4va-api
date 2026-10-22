@@ -2,7 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { config } from 'dotenv';
 import { DataSource } from 'typeorm';
 
-config();
+config({ path: process.env.ENV_FILE || '.env' });
 
 const configService = new ConfigService();
 

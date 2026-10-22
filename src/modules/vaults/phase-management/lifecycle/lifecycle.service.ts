@@ -2644,6 +2644,8 @@ export class LifecycleService {
         | 'acquire_phase_start'
         | 'acquire_window_duration'
         | 'tokens_for_acquires'
+        | 'expansion_phase_start'
+        | 'expansion_duration'
       >
     > = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -2672,6 +2674,8 @@ export class LifecycleService {
         'vault.acquire_phase_start',
         'vault.acquire_window_duration',
         'vault.tokens_for_acquires',
+        'vault.expansion_phase_start',
+        'vault.expansion_duration',
       ])
       .getMany();
 
@@ -2710,7 +2714,15 @@ export class LifecycleService {
         // Both configured windows must have ended. Zero-length windows are
         // treated as already closed.
         const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
-        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        // Acquire expansion ends with its governance duration, not the on-chain
+        // window ("no limit" opens the window for a year).
+        const expansionEnded =
+          vault.vault_status === VaultStatus.acquire_expansion &&
+          !!vault.expansion_phase_start &&
+          vault.expansion_duration != null &&
+          new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration) <= Date.now();
+        const acquireEnded =
+          expansionEnded || cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
         if (!assetEnded || !acquireEnded) {
           continue;
         }
@@ -2828,13 +2840,16 @@ export class LifecycleService {
             const vtDecimals = vault.ft_token_decimals ?? 18;
             const vtDecimalMul = 10n ** BigInt(vtDecimals);
             const SCALE = 1_000_000n;
+            const NATIVE_UNIT = 10n ** 18n;
             const limitPriceScaled = BigInt(Math.round(expCfg.limitPrice * 1_000_000));
             expansionVtOverride = new Map<string, bigint>();
             for (const [contribId, v] of pricing.contributionValues) {
               const unitPrice = BigInt(v.unitPriceNative);
               if (unitPrice === 0n) continue;
+              // valueNative is already in wei and limitPrice is VT per 1 whole native
+              // unit, so scale by the native decimals (18), not by the unit price.
               const valueNative = BigInt(v.valueNative);
-              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (unitPrice * SCALE));
+              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (NATIVE_UNIT * SCALE));
             }
             this.logger.log(
               `EVM acquire-expansion limit-price override: vault=${vault.id} limitPrice=${expCfg.limitPrice} contributions=${expansionVtOverride.size} ` +
@@ -2939,7 +2954,7 @@ export class LifecycleService {
       try {
         const vault = await this.vaultRepository.findOne({
           where: { id: snap.vault_id },
-          select: ['id', 'contract_address', 'chain_id'],
+          select: ['id', 'contract_address', 'chain_id', 'vault_status', 'expansion_phase_start', 'expansion_duration'],
         });
         if (!vault?.contract_address) continue;
         const cycleView = await this.evmContractReader.getCycle(
@@ -2951,7 +2966,16 @@ export class LifecycleService {
         // Both windows must have ended. Zero-length windows (start==end==0)
         // are treated as already closed.
         const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
-        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        // An acquire-expansion cycle ends when its governance duration does, even
+        // if the on-chain window runs longer ("no limit" opens it for a year):
+        // closeCycle does not check the window end.
+        const expansionEnded =
+          vault.vault_status === VaultStatus.acquire_expansion &&
+          !!vault.expansion_phase_start &&
+          vault.expansion_duration != null &&
+          new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration) <= Date.now();
+        const acquireEnded =
+          expansionEnded || cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
         bothWindowsClosed = assetEnded && acquireEnded;
       } catch (err) {
         this.logger.warn(

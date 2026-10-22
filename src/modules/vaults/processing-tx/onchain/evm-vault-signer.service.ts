@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, parseEther, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
@@ -324,7 +324,12 @@ export class EvmVaultSignerService {
       initialCycle: {
         assetWindow: { start: assetWindowStart, end: assetWindowEnd },
         acquireWindow: { start: acquireWindowStart, end: acquireWindowEnd },
-        minAcquireThreshold: 0n,
+        // ETH from the form (validated and stored as wei by the create flow);
+        // the cycle cancels and refunds if less than this is raised.
+        minAcquireThreshold:
+          data.minAcquireThreshold != null && Number(data.minAcquireThreshold) > 0
+            ? parseEther(String(data.minAcquireThreshold))
+            : 0n,
         // V3: LP-pair multiplier only. Contribution-time rates are gone —
         // final VT / native allocations are committed off-chain and
         // published on-chain as a Merkle root at `closeCycle`.
