@@ -1542,6 +1542,16 @@ export class VaultsService {
       acquireExpansionCurrentUsd: acquireExpansionCurrentAdaLovelace
         ? (acquireExpansionCurrentAdaLovelace / 1_000_000) * adaPrice
         : undefined,
+      // EVM: the raise is summed from wei amounts and then scaled by 1e6 like lovelace,
+      // and the max is ETH × 1e6 from the proposal form — undo both for ETH display.
+      acquireExpansionCurrentEth:
+        vault.chain_type === ChainType.robinhood && acquireExpansionCurrentAdaLovelace
+          ? Number(acquireExpansionCurrentAdaLovelace) / 1e24
+          : undefined,
+      acquireExpansionMaxEth:
+        vault.chain_type === ChainType.robinhood && acquireExpansionMaxAdaLovelace
+          ? acquireExpansionMaxAdaLovelace / 1_000_000
+          : undefined,
       acquireExpansionMaxAdaLovelace,
       acquireExpansionMaxAda: acquireExpansionMaxAdaLovelace ? acquireExpansionMaxAdaLovelace / 1_000_000 : undefined,
       acquireExpansionMaxUsd: acquireExpansionMaxAdaLovelace
