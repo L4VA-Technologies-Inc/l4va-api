@@ -144,6 +144,46 @@ export class EvmAllocationService {
       order: { on_chain_contribution_id: 'ASC' },
     });
 
+    // The DB only learns of a contributor's own cancelContribution from the
+    // webhook. Re-read every row from the vault before allocating: a row the
+    // contract no longer holds as Active must not earn VT.
+    const cancelledOnChain: EvmContribution[] = [];
+    for (const c of [...contributions]) {
+      const onchain = await this.contractReader.getContribution(
+        vault.contract_address as Address,
+        BigInt(c.on_chain_contribution_id)
+      );
+      if (onchain.status !== 0 /* ContributionStatus.Active */) {
+        cancelledOnChain.push(c);
+        contributions.splice(contributions.indexOf(c), 1);
+      }
+    }
+    if (cancelledOnChain.length > 0) {
+      await this.contribsRepository.update(
+        cancelledOnChain.map(c => c.id),
+        { status: EvmContributionRowStatus.refunded, refunded_at: new Date() }
+      );
+      this.logger.warn(
+        `Vault ${vaultId} cycle ${cycleId}: contribution(s) ${cancelledOnChain
+          .map(c => c.on_chain_contribution_id)
+          .join(', ')} are cancelled on-chain but were active in the DB — marked refunded and excluded`
+      );
+    }
+
+    // Every native wei the cycle still holds must be accounted for by an
+    // active row, and nothing more: a mismatch means the DB is missing or
+    // overstating contributions, and the root would mint against it.
+    const cycleOnChain = await this.contractReader.getCycle(vault.contract_address as Address, cycleId);
+    const nativeInDb = contributions
+      .filter(c => c.kind === EvmAssetKindOnchain.Native)
+      .reduce((sum, c) => sum + BigInt(c.amount), 0n);
+    if (nativeInDb !== cycleOnChain.nativeCollected) {
+      throw new BadRequestException(
+        `Vault ${vaultId} cycle ${cycleId}: active native contributions in the DB total ${nativeInDb} wei, ` +
+          `but the vault holds ${cycleOnChain.nativeCollected} — refusing to allocate until they agree`
+      );
+    }
+
     if (contributions.length === 0) {
       throw new BadRequestException(
         `Vault ${vaultId} cycle ${cycleId} has no active contributions — nothing to allocate`

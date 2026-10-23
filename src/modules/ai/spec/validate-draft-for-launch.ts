@@ -229,8 +229,10 @@ export function validateVaultDraftForLaunch(
     });
   }
 
-  // --- Asset whitelist (not applicable to acquire-only vaults) -------------
-  if (view.isAcquireOnly !== true) {
+  // --- Asset whitelist (not applicable to acquire-only or index vaults) ----
+  // An index vault's tokens are its basket, so asking for a whitelist on top
+  // of it would make the user pick the same tokens twice.
+  if (view.isAcquireOnly !== true && spec.archetype !== VaultArchetype.index_weighted) {
     const validAssets = countValidAssetRows(view.assetsWhitelist, spec);
     if (validAssets < 1) {
       missingFields.push('assetsWhitelist');

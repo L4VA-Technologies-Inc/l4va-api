@@ -320,14 +320,14 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Creation threshold percentage (between 0.50 and 100.00)',
     required: true,
-    minimum: 0.5,
+    minimum: 0.1,
     maximum: 100,
     type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
   @Type(() => Number)
-  @Min(0.5)
+  @Min(0.1)
   @Max(100)
   @Expose()
   creationThreshold: number;

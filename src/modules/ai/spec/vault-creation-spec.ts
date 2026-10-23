@@ -484,6 +484,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
           'Never invent token addresses, symbols or weights, and offer the "choose_basket" option when it is ' +
           'still missing.',
         'Describe the vault in terms of the basket it will buy, not the assets people contribute.',
+        'Never ask for per-token minimum or maximum contribution amounts, asset caps, or a whitelist: ' +
+          'an index vault has none of them. Once the basket is chosen, do not ask for its tokens again.',
         'Never offer or mention NFT or real-world-asset (RWA) vaults, or tags for them: only the index ' +
           'acquire flow exists.',
       ],
