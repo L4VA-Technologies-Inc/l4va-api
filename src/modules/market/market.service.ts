@@ -538,6 +538,7 @@ export class MarketService implements OnModuleInit {
       script_hash: mapped.script_hash ?? null,
       asset_vault_name: mapped.asset_vault_name ?? null,
       has_active_lp: Boolean(item.vault?.has_active_lp),
+      tags: (item.vault?.tags ?? []).map(tag => tag.name),
     };
   }
 

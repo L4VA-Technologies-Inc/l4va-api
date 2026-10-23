@@ -428,6 +428,7 @@ export class TokensService {
       seed_fdv?: number | null;
       seed_market_cap?: number | null;
       type?: string | null;
+      tags?: string[];
     }>
   ) {
     let live = new Map<string, any>();
@@ -459,6 +460,7 @@ export class TokensService {
         image: item.image ?? null,
         holders_count: item.holders_count ?? null,
         type: item.type ?? null,
+        tags: item.tags ?? [],
         price_usd: priceUsd,
         price_eth: price.eth,
         price_ada: price.ada,
@@ -484,6 +486,13 @@ export class TokensService {
     });
   }
 
+  /** Seed tokens carry no vault tags, so the Tokens page filters on the tag their JSON category implies. */
+  private tagsForTokenKind(kind: MarketTokenKind | null): string[] {
+    if (kind === MarketTokenKind.rwa) return ['RWA'];
+    if (kind === MarketTokenKind.memecoin) return ['Memecoins'];
+    return [];
+  }
+
   private marketToTokenSeed(market: Market) {
     const toNum = (value: unknown): number | null => {
       if (value == null || value === '') return null;
@@ -503,6 +512,7 @@ export class TokensService {
       seed_change_24h: toNum(market.price_change_24h),
       seed_fdv: toNum(market.fdv),
       seed_market_cap: toNum(market.mcap),
+      tags: this.tagsForTokenKind(market.token_kind),
     };
   }
 
