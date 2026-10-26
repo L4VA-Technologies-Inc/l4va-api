@@ -19,7 +19,10 @@ import { VaultAiToolContext } from './tools/vault-ai-tool.types';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PresetsService } from '@/modules/presets/presets.service';
-import { VaultArchetype } from '@/types/index-vault.types';
+import { IndexSupportedAsset, IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
+import { INDEX_MAX_ASSETS, VaultArchetype } from '@/types/index-vault.types';
+
+const BPS = 10_000;
 
 interface AssistantCompletion {
   message?: unknown;
@@ -28,6 +31,7 @@ interface AssistantCompletion {
   options?: unknown;
   vaultDraft?: unknown;
   resetDraft?: unknown;
+  basketSymbols?: unknown;
 }
 
 interface AssistantTurnContext {
@@ -35,6 +39,8 @@ interface AssistantTurnContext {
   messages: ChatMessage[];
   schema: Record<string, unknown>;
   toolContext: VaultAiToolContext;
+  /** Tokens an index basket may hold; empty when the chain has no fixed list or the vault is not an index. */
+  basketAssets: IndexSupportedAsset[];
 }
 
 export type VaultAssistantStreamEvent =
@@ -81,7 +87,8 @@ export class VaultAssistantService {
     private readonly presetsService: PresetsService,
     private readonly storageService: GoogleCloudStorageService,
     private readonly toolRegistry: VaultAiToolRegistry,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly indexVaultService: IndexVaultService
   ) {}
 
   async respond(userId: string, request: VaultAssistantMessageReq): Promise<VaultAssistantMessageRes> {
@@ -99,7 +106,7 @@ export class VaultAssistantService {
           continue;
         }
 
-        return this.toResponse(this.parseCompletion(turn.content), context.spec, action);
+        return this.toResponse(this.parseCompletion(turn.content), context, action);
       }
     } catch (error) {
       this.logger.error(`Vault assistant completion failed: ${(error as Error).message}`);
@@ -186,7 +193,7 @@ export class VaultAssistantService {
         return;
       }
 
-      const response = this.toResponse(completion, context.spec, action);
+      const response = this.toResponse(completion, context, action);
       if (response.message.startsWith(streamedMessage) && response.message.length > streamedMessage.length) {
         yield { type: 'delta', text: response.message.slice(streamedMessage.length) };
       } else if (!streamedMessage && response.message) {
@@ -271,6 +278,14 @@ export class VaultAssistantService {
     const spec = resolveVaultCreationSpec(chain, request.network, archetype);
 
     const presets = await this.presetsService.getAllPresets(userId);
+    // The assistant may only fill a basket from this fixed list; it never sees or invents addresses.
+    const basketAssets =
+      archetype === VaultArchetype.index_weighted
+        ? await this.indexVaultService
+            .getSupportedAssets()
+            .then(supported => supported.assets)
+            .catch(() => [])
+        : [];
     const presetContext: PresetContext[] = presets.map(preset => ({
       id: preset.id,
       name: preset.name,
@@ -290,6 +305,7 @@ export class VaultAssistantService {
       // collections it cannot set itself, which the sanitized draft above deliberately drops.
       completion: buildVaultCompletionContext(request.currentDraft ?? {}, spec),
       validationErrors: request.validationErrors,
+      basketSymbols: basketAssets.map(asset => asset.symbol),
     });
 
     return {
@@ -298,7 +314,11 @@ export class VaultAssistantService {
         { role: 'system', content: systemPrompt },
         ...request.messages.map(message => ({ role: message.role, content: message.content })),
       ],
-      schema: buildVaultDraftJsonSchema(spec, { presetIds: presetContext.map(preset => preset.id) }),
+      schema: buildVaultDraftJsonSchema(spec, {
+        presetIds: presetContext.map(preset => preset.id),
+        basketSymbols: basketAssets.map(asset => asset.symbol),
+      }),
+      basketAssets,
       toolContext: {
         userId,
         chain: request.chain as SpecChain,
@@ -311,11 +331,44 @@ export class VaultAssistantService {
     };
   }
 
+  /**
+   * Turn the symbols the user named into basket targets with equal weights, using only the supported
+   * list. Unknown symbols are dropped; nothing is returned unless at least one matched.
+   */
+  private resolveBasket(raw: unknown, assets: IndexSupportedAsset[]): VaultAssistantMessageRes['indexBasket'] {
+    if (!Array.isArray(raw) || !assets.length) return null;
+    const bySymbol = new Map(assets.map(asset => [asset.symbol.toLowerCase(), asset]));
+    const picked = [
+      ...new Map(
+        raw
+          .filter((item): item is string => typeof item === 'string')
+          .map(symbol => bySymbol.get(symbol.trim().toLowerCase()))
+          .filter((asset): asset is IndexSupportedAsset => !!asset)
+          .map(asset => [asset.assetAddress, asset])
+      ).values(),
+    ].slice(0, INDEX_MAX_ASSETS);
+    if (!picked.length) return null;
+
+    // Whole bps that always sum to 10000; the rounding remainder goes to the first assets.
+    const base = Math.floor(BPS / picked.length);
+    const remainder = BPS - base * picked.length;
+    return {
+      targets: picked.map((asset, index) => ({
+        assetAddress: asset.assetAddress,
+        symbol: asset.symbol,
+        name: asset.name,
+        image: asset.image,
+        weightBps: base + (index < remainder ? 1 : 0),
+      })),
+    };
+  }
+
   private toResponse(
     completion: AssistantCompletion,
-    spec: ResolvedVaultCreationSpec,
+    context: AssistantTurnContext,
     action?: VaultAssistantAction
   ): VaultAssistantMessageRes {
+    const { spec } = context;
     const { draft, rejected } = sanitizeVaultDraft(completion.vaultDraft, spec);
     if (rejected.length) {
       this.logger.warn(`Vault assistant produced rejected values: ${rejected.join('; ')}`);
@@ -338,6 +391,7 @@ export class VaultAssistantService {
       // An action only exists because a tool produced it after server-side validation — the model
       // cannot put one here by claiming the vault is ready.
       action: action ?? null,
+      indexBasket: this.resolveBasket(completion.basketSymbols, context.basketAssets),
     };
   }
 }

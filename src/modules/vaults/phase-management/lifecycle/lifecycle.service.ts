@@ -118,6 +118,7 @@ export class LifecycleService {
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
       await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
       await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
+      await this.handleEvmScheduledAcquireOpen(); // EVM: acquire-only vaults with a scheduled start: published → acquire at that time
       await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
       await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
       await this.handleEvmLiquidity(); // EVM: seed the VT/WETH pool for raises that closed with an LP carveout
@@ -2569,6 +2570,36 @@ export class LifecycleService {
       }
     } catch (error) {
       this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
+    }
+  }
+
+  /**
+   * EVM: acquire-only vaults that scheduled their acquire window for a later
+   * date stay `published` after creation (the webhook only opens immediate
+   * ones). The contract already holds the scheduled window, so this is a
+   * DB-only flip at that time, with the phase start pinned to the scheduled
+   * moment so the DB and on-chain windows end together.
+   */
+  private async handleEvmScheduledAcquireOpen(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      const result = await this.vaultRepository
+        .createQueryBuilder()
+        .update(Vault)
+        .set({ vault_status: VaultStatus.acquire, acquire_phase_start: () => 'acquire_open_window_time' })
+        .where('chain_type = :evmChain', { evmChain: ChainType.robinhood })
+        .andWhere('vault_status = :status', { status: VaultStatus.published })
+        .andWhere('is_acquire_only = true')
+        .andWhere('contract_address IS NOT NULL')
+        .andWhere('acquire_open_window_type = :type', { type: InvestmentWindowType.custom })
+        .andWhere('acquire_open_window_time IS NOT NULL')
+        .andWhere('acquire_open_window_time <= :now', { now: new Date() })
+        .execute();
+      if (result.affected) {
+        this.logger.log(`EVM scheduled acquire opened for ${result.affected} vault(s)`);
+      }
+    } catch (error) {
+      this.logger.error(`EVM scheduled acquire open failed: ${(error as Error).message}`);
     }
   }
 

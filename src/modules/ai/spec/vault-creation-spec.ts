@@ -480,9 +480,10 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       rules: [
         'This is an index-weighted vault: it is always acquire-only with 100% of vault tokens for acquirers, ' +
           'and it never has an asset contribution window or an asset whitelist. Never propose otherwise.',
-        'The basket — which tokens the vault buys and at what weights — is chosen by the user in the UI. ' +
-          'Never invent token addresses, symbols or weights, and offer the "choose_basket" option when it is ' +
-          'still missing.',
+        'The basket — which tokens the vault buys — comes from the user: either they name the tokens (fill ' +
+          'basketSymbols from the supported list; weights are split evenly) or they pick them in the UI. ' +
+          'Never invent token addresses or weights, and offer the "choose_basket" option only when the ' +
+          'basket is still missing and the user has not named any tokens.',
         'Describe the vault in terms of the basket it will buy, not the assets people contribute.',
         'Never ask for per-token minimum or maximum contribution amounts, asset caps, or a whitelist: ' +
           'an index vault has none of them. Once the basket is chosen, do not ask for its tokens again.',
