@@ -47,7 +47,7 @@ function jsonTypeFor(field: VaultFieldSpec): string {
  */
 export function buildVaultDraftJsonSchema(
   spec: ResolvedVaultCreationSpec,
-  options: { presetIds?: string[] } = {}
+  options: { presetIds?: string[]; basketSymbols?: string[] } = {}
 ): Record<string, unknown> {
   const properties: Record<string, JsonSchemaProperty> = {};
   const names = aiEditableFieldNames(spec);
@@ -78,8 +78,16 @@ export function buildVaultDraftJsonSchema(
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['message', 'status', 'missingFields', 'options', 'vaultDraft', 'resetDraft'],
+    required: ['message', 'status', 'missingFields', 'options', 'vaultDraft', 'resetDraft', 'basketSymbols'],
     properties: {
+      basketSymbols: {
+        type: ['array', 'null'],
+        description: options.basketSymbols?.length
+          ? 'Symbols of the tokens the user wants in the index basket, from the supported list only. ' +
+            'Null when the user has not named basket tokens this turn.'
+          : 'Always null.',
+        items: options.basketSymbols?.length ? { type: 'string', enum: options.basketSymbols } : { type: 'string' },
+      },
       message: {
         type: 'string',
         description: 'Reply shown to the user in the chat. Ask for whatever is still missing.',

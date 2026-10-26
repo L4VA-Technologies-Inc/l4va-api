@@ -11,7 +11,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 // ---------------------------------------------------------------------------
 // ABI parameter definitions — mirrors V4 VaultTypes.sol exactly.
@@ -104,6 +104,12 @@ export interface EvmCreationPayload {
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
+
+/** A form date arrives as epoch ms (number or numeric string) or an ISO string. */
+function toEpochMs(value: string | number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : new Date(value).getTime();
+}
 
 @Injectable()
 export class EvmVaultSignerService {
@@ -302,12 +308,19 @@ export class EvmVaultSignerService {
     // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
     // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
     const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
-    const acquireWindowStart = skipsAcquirePhase ? 0n : now;
+    // An acquire-only vault can schedule its acquire window for a later date; the
+    // contract keeps acquisitions closed until then. A date already past opens now.
+    const scheduledStart =
+      data.isAcquireOnly && data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
+        ? BigInt(Math.floor(toEpochMs(data.acquireOpenWindowTime) / 1000))
+        : 0n;
+    const acquireStart = scheduledStart > now ? scheduledStart : now;
+    const acquireWindowStart = skipsAcquirePhase ? 0n : acquireStart;
     const acquireWindowEnd = skipsAcquirePhase
       ? 0n
       : data.acquireWindowDuration
-        ? now + BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000))
-        : now + oneDay * 7n;
+        ? acquireStart + BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000))
+        : acquireStart + oneDay * 7n;
 
     return {
       vaultId: evmVaultId,

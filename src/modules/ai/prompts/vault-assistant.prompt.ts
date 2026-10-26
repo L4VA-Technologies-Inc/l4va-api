@@ -38,8 +38,9 @@ export function buildVaultAssistantPrompt(params: {
   currentDraft: Record<string, unknown>;
   completion: VaultCompletionContext;
   validationErrors?: string[];
+  basketSymbols?: string[];
 }): string {
-  const { spec, presets, currentDraft, completion, validationErrors } = params;
+  const { spec, presets, currentDraft, completion, validationErrors, basketSymbols = [] } = params;
 
   const correction = validationErrors?.length
     ? `\n# Corrections required\nThe previous draft was rejected by the live validators. Fix exactly these problems and keep everything else:\n${validationErrors
@@ -255,7 +256,19 @@ Only index vaults that raise ${spec.currency} exist here. If the user asks for a
 (RWA) vault, or a vault people contribute assets to, say in one sentence that those are not available
 yet and steer them to an index of fungible tokens. Never set NFT or RWA tags.
 
+${
+  basketSymbols.length
+    ? `# Index basket
+Tokens the basket can hold: ${basketSymbols.join(', ')}.
+When the user names basket tokens (or a theme that clearly maps to some of them), put those symbols in
+basketSymbols; the backend builds the basket with equal weights, so never ask the user to pick them
+again. Match loosely: "Tesla" or "TSLA" means the supported Tesla token. If a named token is not in the
+list, say so in one sentence. Leave basketSymbols null on turns where the user did not name tokens.
+Choose tags that fit the basket's theme (e.g. tech or stocks), never unrelated ones like Gaming.
+
 `
+    : ''
+}`
     : `# Asset type inference
 Infer the asset type from what the user means, never from the default:
 - one NFT / a single NFT / one collectible -> type = "single"

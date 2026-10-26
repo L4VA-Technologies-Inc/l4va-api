@@ -51,4 +51,20 @@ export class VaultAssistantMessageRes {
   @Type(() => VaultAssistantAction)
   @Expose()
   action: VaultAssistantAction | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Index basket built from the tokens the user named, matched against the supported list with equal weights',
+  })
+  @Expose()
+  indexBasket: {
+    targets: {
+      assetAddress: string;
+      symbol: string;
+      name: string | null;
+      image: string | null;
+      weightBps: number;
+    }[];
+  } | null;
 }

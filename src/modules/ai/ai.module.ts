@@ -9,9 +9,10 @@ import { VaultAssistantService } from './vault-assistant.service';
 
 import { GoogleCloudStorageModule } from '@/modules/google_cloud/google_bucket/bucket.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 
 @Module({
-  imports: [PresetsModule, GoogleCloudStorageModule],
+  imports: [PresetsModule, GoogleCloudStorageModule, IndexVaultModule],
   controllers: [VaultAssistantController],
   providers: [
     OpenAiClient,
