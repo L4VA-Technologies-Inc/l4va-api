@@ -31,6 +31,8 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import {
   ActivityType,
+  IndexRebalanceActivityAsset,
+  IndexRebalanceActivityEvent,
   PhaseTransitionEvent,
   ProposalActivityEvent,
   TransactionActivityEvent,
@@ -56,6 +58,7 @@ import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
+import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -216,6 +219,8 @@ export class VaultsService {
     private readonly tokenVerificationRepository: Repository<TokenVerification>,
     @InjectRepository(EvmContribution)
     private readonly evmContributionsRepository: Repository<EvmContribution>,
+    @InjectRepository(EvmIndexRebalance)
+    private readonly indexRebalanceRepository: Repository<EvmIndexRebalance>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -2518,7 +2523,15 @@ export class VaultsService {
   ): Promise<PaginatedResponseDto<VaultActivityItem>> {
     const vault = await this.vaultsRepository.findOne({
       where: { id: vault_id },
-      select: ['id', 'contribution_phase_start', 'acquire_phase_start', 'locked_at', 'vault_status', 'created_at'],
+      select: [
+        'id',
+        'contribution_phase_start',
+        'acquire_phase_start',
+        'locked_at',
+        'vault_status',
+        'created_at',
+        'vault_archetype',
+      ],
     });
 
     if (!vault) {
@@ -2527,7 +2540,11 @@ export class VaultsService {
 
     const allActivities: VaultActivityItem[] = [];
 
-    const shouldFetchTransactions = filter !== VaultActivityFilter.GOVERNANCE;
+    const shouldFetchTransactions =
+      filter !== VaultActivityFilter.GOVERNANCE && filter !== VaultActivityFilter.REBALANCE;
+    const shouldFetchRebalances =
+      vault.vault_archetype === VaultArchetype.index_weighted &&
+      (filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.REBALANCE);
     const shouldFetchProposals = filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.GOVERNANCE;
 
     if (shouldFetchTransactions) {
@@ -2604,6 +2621,10 @@ export class VaultsService {
       allActivities.push(...proposalEvents);
     }
 
+    if (shouldFetchRebalances) {
+      allActivities.push(...(await this.getIndexRebalancesActivity(vault_id)));
+    }
+
     allActivities.sort((a, b) => {
       const dateA = new Date(a.created_at).getTime();
       const dateB = new Date(b.created_at).getTime();
@@ -2622,6 +2643,66 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * Basket trades of an index-weighted vault — initial buy and governance
+   * re-weights — one event per run with its swap legs. Runs that never
+   * planned a leg are noise and skipped.
+   */
+  private async getIndexRebalancesActivity(vault_id: string): Promise<IndexRebalanceActivityEvent[]> {
+    const runs = await this.indexRebalanceRepository.find({
+      where: { vault_id },
+      order: { created_at: 'DESC' },
+    });
+
+    const native: IndexRebalanceActivityAsset = {
+      address: '0x0000000000000000000000000000000000000000',
+      symbol: 'ETH',
+      decimals: 18,
+    };
+
+    return runs
+      .filter(run => run.legs?.length > 0)
+      .map(run => {
+        // Assets sold during a re-weight may have left the current basket; the
+        // run's own frozen targets plus native cover every leg it planned.
+        const known = new Map<string, IndexRebalanceActivityAsset>(
+          (run.targets ?? []).map(t => [
+            t.assetAddress.toLowerCase(),
+            { address: t.assetAddress, symbol: t.symbol, decimals: t.decimals, image: t.image ?? null },
+          ])
+        );
+        const resolve = (address: string): IndexRebalanceActivityAsset => {
+          if (BigInt(address || 0) === 0n) return native;
+          return known.get(address.toLowerCase()) ?? { address, symbol: `${address.slice(0, 6)}…`, decimals: 18 };
+        };
+
+        return {
+          id: run.id,
+          activityType: ActivityType.INDEX_REBALANCE as const,
+          vaultId: run.vault_id,
+          trigger: run.trigger,
+          status: run.status,
+          proposalId: run.proposal_id ?? null,
+          navNative: run.nav_native ?? null,
+          legs: run.legs.map(leg => ({
+            index: leg.index,
+            side: leg.side,
+            status: leg.status,
+            assetIn: resolve(leg.assetIn),
+            assetOut: resolve(leg.assetOut),
+            amountIn: leg.amountIn,
+            amountOut: leg.grossOut ?? leg.quotedOut ?? null,
+            fee: leg.fee ?? null,
+            txHash: leg.txHash ?? null,
+            error: leg.error ?? null,
+          })),
+          lastError: run.last_error ?? null,
+          completedAt: run.completed_at ?? null,
+          created_at: run.completed_at ?? run.created_at,
+        };
+      });
   }
 
   private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
