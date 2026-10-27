@@ -32,6 +32,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     TypeOrmModule.forFeature([Vault, Claim, User, Transaction, Asset]),
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     BlockchainModule,
     AssetsModule,

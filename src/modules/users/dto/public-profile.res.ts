@@ -43,6 +43,13 @@ export class PublicProfileRes {
 
   @ApiProperty({ required: false })
   @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  emailVerified?: boolean;
+
+  @ApiProperty({ required: false })
+  @DtoRepresent({
     transform: ({ value }) => {
       if (!value) return null;
       if (typeof value === 'string') return value;

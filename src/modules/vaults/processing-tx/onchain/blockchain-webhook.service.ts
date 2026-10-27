@@ -3,21 +3,24 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { keccak256 } from 'viem';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
+import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 import { RewardActivityType } from '@/types/rewards.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType, EvmReconciliationStatus } from '@/types/transaction.types';
 import { ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
@@ -25,6 +28,7 @@ export class BlockchainWebhookService {
   private readonly logger = new Logger(BlockchainWebhookService.name);
   private readonly webhookAuthToken: string;
   private readonly maxEventAge: number;
+  private readonly vaultCreatedTopic: string;
 
   // Status mapping for blockchain events
   private readonly STATUS_MAP: Record<OnchainTransactionStatus, TransactionStatus> = {
@@ -39,6 +43,7 @@ export class BlockchainWebhookService {
     private readonly configService: ConfigService,
     private readonly assetsService: AssetsService,
     private readonly rewardEventProducer: RewardEventProducer,
+    private readonly evmVaultSignerService: EvmVaultSignerService,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Claim)
@@ -46,10 +51,15 @@ export class BlockchainWebhookService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
+    this.vaultCreatedTopic = keccak256(
+      new TextEncoder().encode('VaultCreated(bytes32,address,address,address,address)')
+    ).toLowerCase();
   }
 
   /**
@@ -104,13 +114,30 @@ export class BlockchainWebhookService {
    * Process individual transaction from webhook
    */
   private async processTransaction({ tx }: BlockfrostTransactionEvent): Promise<string> {
+    const internalStatus = this.determineInternalTransactionStatus(tx);
+    return this.applyTransactionStatus(tx.hash, tx.index, internalStatus);
+  }
+
+  /**
+   * Update a local transaction status by hash and run the chain-agnostic
+   * post-confirmation side effects (locking assets, indexing rewards,
+   * claim/cancel handling, createVault transition).
+   *
+   * Shared between the Cardano (Blockfrost) and EVM (Alchemy) webhooks so that
+   * both chains converge on identical downstream logic.
+   *
+   * @param txHash On-chain transaction hash
+   * @param txIndex Transaction index within its block
+   * @param internalStatus Resolved internal transaction status
+   * @returns Updated local transaction id, or null if no matching transaction
+   */
+  async applyTransactionStatus(
+    txHash: string,
+    txIndex: number,
+    internalStatus: TransactionStatus
+  ): Promise<string | null> {
     try {
-      const internalStatus = this.determineInternalTransactionStatus(tx);
-      const transaction = await this.transactionsService.updateTransactionStatusByHash(
-        tx.hash,
-        tx.index,
-        internalStatus
-      );
+      const transaction = await this.transactionsService.updateTransactionStatusByHash(txHash, txIndex, internalStatus);
 
       if (!transaction) {
         return null;
@@ -119,10 +146,10 @@ export class BlockchainWebhookService {
       if (internalStatus === TransactionStatus.confirmed) {
         if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
           const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
-          this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
+          this.logger.log(`Locked ${lockedCount} assets for transaction ${txHash}`);
 
           // Index reward activity events for confirmed on-chain transactions
-          await this.indexRewardEvent(transaction, tx.hash);
+          await this.indexRewardEvent(transaction, txHash);
         }
 
         // NOTE: Token metadata PR submission has been moved to lifecycle.service.ts
@@ -151,7 +178,7 @@ export class BlockchainWebhookService {
             this.logger.log(`WH: Updated status to CLAIMED for ${claimIds.length} claims`);
           } catch (claimError) {
             this.logger.error(
-              `WH: Failed to update claims for transaction ${tx.hash}: ${claimError.message}`,
+              `WH: Failed to update claims for transaction ${txHash}: ${claimError.message}`,
               claimError.stack
             );
           }
@@ -188,7 +215,7 @@ export class BlockchainWebhookService {
           } catch (extractError) {
             // Don't throw - this is expected if claims were already processed via UTXO validation
             this.logger.warn(
-              `WH: Partial processing for extractDispatch transaction ${tx.hash}: ${extractError.message}`
+              `WH: Partial processing for extractDispatch transaction ${txHash}: ${extractError.message}`
             );
           }
         }
@@ -222,19 +249,95 @@ export class BlockchainWebhookService {
             }
           } catch (releaseError) {
             this.logger.error(
-              `WH: Failed to release assets for cancellation tx ${tx.hash}: ${releaseError.message}`,
+              `WH: Failed to release assets for cancellation tx ${txHash}: ${releaseError.message}`,
               releaseError.stack
             );
           }
         }
       }
 
-      this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);
+      this.logger.log(`WH: Transaction ${txHash} status updated to ${internalStatus}`);
       return transaction.id;
     } catch (error) {
-      this.logger.error(`WH: Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
+      this.logger.error(`WH: Failed to process transaction ${txHash}: ${error.message}`, error.stack);
       return null;
     }
+  }
+
+  /**
+   * Unified EVM confirmation handler shared by both the Alchemy webhook and the
+   * health-check cron job. Parses any VaultCreated events from the transaction
+   * logs BEFORE applying the status transition so that contract addresses are
+   * persisted before handleCreateVaultConfirmation runs.
+   *
+   * @param txHash  On-chain EVM transaction hash
+   * @param txIndex Transaction index within its block
+   * @param status  Resolved internal status (confirmed / failed)
+   * @param logs    Normalized log entries for this transaction
+   */
+  async applyEvmTransactionStatus(
+    txHash: string,
+    txIndex: number,
+    status: TransactionStatus,
+    logs: { topics: string[]; data: string }[]
+  ): Promise<string | null> {
+    // Parse VaultCreated events first so vault contract addresses are set
+    // before handleCreateVaultConfirmation is called inside applyTransactionStatus
+    for (const log of logs) {
+      const topics = log.topics ?? [];
+      if (topics[0]?.toLowerCase() === this.vaultCreatedTopic) {
+        try {
+          await this.evmVaultSignerService.updateVaultFromCreatedEvent(txHash, topics, log.data);
+        } catch (error) {
+          this.logger.error(
+            `WH: Failed to update vault from VaultCreated event in tx ${txHash}: ${(error as Error).message}`
+          );
+        }
+      }
+    }
+
+    return this.applyTransactionStatus(txHash, txIndex, status);
+  }
+
+  /**
+   * Idempotently mark an EVM transaction fully reconciled (domain events
+   * applied). Only flips from NULL → success — never overwrites 'success'
+   * or 'failed'. Used by the Alchemy webhook fast path; the health-check
+   * cron is the durable retry path.
+   */
+  async markEvmTransactionReconciled(txHash: string): Promise<void> {
+    await this.transactionRepository
+      .createQueryBuilder()
+      .update(Transaction)
+      .set({
+        reconciliation_status: EvmReconciliationStatus.success,
+        reconciled_at: () => 'CURRENT_TIMESTAMP',
+      })
+      .where(
+        'tx_hash = :hash AND reconciled_at IS NULL AND (reconciliation_status IS NULL OR reconciliation_status = :pending)',
+        {
+          hash: txHash,
+          pending: EvmReconciliationStatus.pending,
+        }
+      )
+      .execute();
+  }
+
+  /**
+   * Find the Transaction row that owns an EVM tx hash. Two paths:
+   *   1. `transactions.tx_hash = hash` — the classic case.
+   *   2. Any Transaction whose `metadata.evmChildTxHashes` array contains
+   *      `hash` — for the multi-child contribution flow.
+   */
+  async findEvmTransactionByHashOrChildHash(hash: string): Promise<Transaction | null> {
+    const direct = await this.transactionRepository.findOne({ where: { tx_hash: hash } });
+    if (direct) return direct;
+    return this.transactionRepository
+      .createQueryBuilder('t')
+      .where(`t.metadata -> 'evmChildTxHashes' @> :hashArray::jsonb`, {
+        hashArray: JSON.stringify([hash]),
+      })
+      .getOne();
   }
 
   /**

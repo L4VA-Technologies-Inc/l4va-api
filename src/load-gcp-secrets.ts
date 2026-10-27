@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv';
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file (for local/development configuration only)
   // This file should only contain non-sensitive config committed to git
-  dotenv.config();
+  dotenv.config({ path: process.env.ENV_FILE || '.env' });
 
   const nodeEnv = process.env.NODE_ENV;
 

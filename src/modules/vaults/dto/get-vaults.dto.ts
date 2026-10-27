@@ -4,6 +4,9 @@ import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString,
 
 import { PaginationDto } from './pagination.dto';
 
+import { VaultArchetype } from '@/types/index-vault.types';
+import { ChainType } from '@/types/vault.types';
+
 export enum VaultFilter {
   open = 'open',
   locked = 'locked',
@@ -63,6 +66,7 @@ export enum VaultTagFilter {
 export enum TVLCurrency {
   ADA = 'ADA',
   USD = 'USD',
+  ETH = 'ETH',
 }
 
 export class DateRangeDto {
@@ -288,7 +292,7 @@ export class GetVaultsDto extends PaginationDto {
     enum: TVLCurrency,
     required: false,
     default: TVLCurrency.USD,
-    description: 'Currency for TVL filtering (ADA or USD)',
+    description: 'Currency for TVL filtering (ADA, USD or ETH)',
   })
   @Expose()
   tvlCurrency?: TVLCurrency = TVLCurrency.USD;
@@ -326,7 +330,7 @@ export class GetVaultsDto extends PaginationDto {
     enum: TVLCurrency,
     required: false,
     default: TVLCurrency.USD,
-    description: 'Currency for FDV filtering (ADA or USD)',
+    description: 'Currency for FDV filtering (ADA, USD or ETH)',
   })
   @Expose()
   fdvCurrency?: TVLCurrency = TVLCurrency.USD;
@@ -397,4 +401,24 @@ export class GetVaultsDto extends PaginationDto {
   @Expose()
   @IsOptional()
   search?: string;
+
+  @IsEnum(ChainType)
+  @IsOptional()
+  @ApiProperty({
+    enum: ChainType,
+    required: false,
+    description: 'Filter by chain type (cardano or robinhood)',
+  })
+  @Expose()
+  chainType?: ChainType;
+
+  @IsEnum(VaultArchetype)
+  @IsOptional()
+  @ApiProperty({
+    enum: VaultArchetype,
+    required: false,
+    description: 'Filter by vault archetype (standard or index_weighted)',
+  })
+  @Expose()
+  vaultArchetype?: VaultArchetype;
 }

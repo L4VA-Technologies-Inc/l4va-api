@@ -8,6 +8,7 @@ import { TaptoolsModule } from '../taptools/taptools.module';
 import { WayUpPricingModule } from '../wayup/wayup-pricing.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { TokenVerificationRefreshService } from './token-verification-refresh.service';
 import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
@@ -17,6 +18,7 @@ import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { EvmContribution } from '@/database/evm-contribution.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -28,6 +30,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
@@ -50,6 +53,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
     WayUpPricingModule,
     DexHunterModule,
     ClaimsModule,
+    IndexVaultModule,
     TypeOrmModule.forFeature([
       Vault,
       User,
@@ -64,6 +68,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
       Proposal,
       Snapshot,
       TokenVerification,
+      EvmContribution,
     ]),
     HttpModule,
   ],
@@ -74,6 +79,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
     VaultFilesCleanupService,
     TokenVerificationRefreshService,
     VaultsAdminService,
+    EvmVaultSignerService,
   ],
   controllers: [VaultsController, VaultsAdminController],
   exports: [VaultsService, DraftVaultsService],

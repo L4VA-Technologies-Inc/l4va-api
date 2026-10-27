@@ -198,12 +198,18 @@ export class AssetsService {
         const totalValueAda = assets.reduce((sum, asset) => sum + asset.valueAda, 0);
 
         // Update vault TVL
+        const [adaPrice, ethPrice] = await Promise.all([
+          this.priceService.getAdaPrice(),
+          this.priceService.getEthPrice(),
+        ]);
         vault.total_assets_cost_ada = totalValueAda;
-        vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
+        vault.total_assets_cost_usd = totalValueAda * adaPrice;
+        vault.total_assets_cost_eth = ethPrice > 0 ? vault.total_assets_cost_usd / ethPrice : 0;
 
         await this.vaultsRepository.update(vault.id, {
           total_assets_cost_ada: vault.total_assets_cost_ada,
           total_assets_cost_usd: vault.total_assets_cost_usd,
+          total_assets_cost_eth: vault.total_assets_cost_eth,
         });
       } catch (error) {
         this.logger.error(`Failed to update vault totals after VLRM asset creation for vault ${vault.id}:`, error);
@@ -273,6 +279,9 @@ export class AssetsService {
       queryBuilder.andWhere('asset.type = :type', { type });
     }
 
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
+    const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+
     // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
     statsQuery
@@ -281,6 +290,8 @@ export class AssetsService {
           CASE 
             WHEN asset.type = :ftType THEN 
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+            WHEN asset.type = :ethType THEN
+              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
             ELSE 
               asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
           END
@@ -292,6 +303,7 @@ export class AssetsService {
         `SUM(
           CASE 
             WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
+            WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
             ELSE 0 
           END
         )`,
@@ -300,6 +312,8 @@ export class AssetsService {
       .setParameters({
         nftType: AssetType.NFT,
         ftType: AssetType.FT,
+        ethType: AssetType.ETH,
+        ethPriceInAda,
       });
 
     const rawStats = await statsQuery.getRawOne();
@@ -307,13 +321,10 @@ export class AssetsService {
     const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
     const adjustedTotalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
-    const [assets, total] = await queryBuilder
-      .skip((page - 1) * limit)
-      .take(limit)
-      .orderBy('asset.added_at', 'DESC')
-      .getManyAndCount();
-
-    const adaPrice = await this.priceService.getAdaPrice();
+    // Fetch all matching rows, then identity-merge fungibles only.
+    // NFTs stay one row each (already unique by asset_id); FTs/ETH with the same
+    // policy_id+asset_id are collapsed and quantities summed.
+    const assets = await queryBuilder.orderBy('asset.added_at', 'DESC').getMany();
 
     const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
     // Calculate average per token (including all assets)
@@ -321,22 +332,32 @@ export class AssetsService {
     const assetsAvgAda = totalTokens > 0 ? adjustedTotalValueAda / totalTokens : 0;
     const assetsAvgUsd = assetsAvgAda * adaPrice;
 
-    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
-
-    assetsWithUsd.forEach(asset => {
+    const itemsSource = assets.map(asset => {
       const isNft = asset.type === AssetType.NFT;
+      // dex_price is in ADA per whole token for all FT assets (Cardano and EVM).
+      // For ETH assets, use ethPriceInAda if no dex_price/floor_price is set.
+      const effectivePriceAda =
+        asset.type === AssetType.ETH
+          ? (asset.dex_price ?? asset.floor_price ?? ethPriceInAda)
+          : (asset.dex_price ?? asset.floor_price ?? 0);
+      const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
+      const plain = instanceToPlain(asset) as Record<string, unknown>;
 
-      // Use the Asset entity getters for computed values
-      // Note: normalizedQuantity and valueAda are now automatic via getters
-      asset.valueUsd = asset.valueAda * adaPrice;
-
-      // FloorPriceUsd is only for NFTs
+      plain.quantity = asset.normalizedQuantity;
+      plain.valueAda = effectiveValueAda;
+      plain.valueUsd = effectiveValueAda * adaPrice;
       if (isNft && asset.floor_price) {
-        asset.floorPriceUsd = asset.floor_price * adaPrice;
+        plain.floorPriceUsd = asset.floor_price * adaPrice;
       }
+
+      return plain;
     });
 
-    const items = plainToInstance(AssetItemDto, assetsWithUsd, {
+    const aggregatedSource = this.aggregateFungibleAssets(itemsSource);
+    const total = aggregatedSource.length;
+    const pageItems = aggregatedSource.slice((page - 1) * limit, page * limit);
+
+    const items = plainToInstance(AssetItemDto, pageItems, {
       excludeExtraneousValues: true,
     });
 
@@ -345,7 +366,7 @@ export class AssetsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit) || 0,
       statistics: {
         totalAssetValueAda: adjustedTotalValueAda,
         totalAssetValueUsd,
@@ -355,6 +376,52 @@ export class AssetsService {
         totalFTAssets: adjustedTotalFTAssets,
       },
     };
+  }
+
+  /**
+   * Collapse duplicate FT/ETH rows that share policy_id + asset_id.
+   * NFTs are left untouched — each is already a unique asset.
+   */
+  private aggregateFungibleAssets(items: Record<string, unknown>[]): Record<string, unknown>[] {
+    const ftByKey = new Map<string, Record<string, unknown>>();
+    const result: Record<string, unknown>[] = [];
+
+    for (const item of items) {
+      const type = item.type as AssetType;
+      const isFungible = type === AssetType.FT || type === AssetType.ETH || type === AssetType.ADA;
+
+      if (!isFungible) {
+        result.push(item);
+        continue;
+      }
+
+      const key = `${item.policyId ?? item.policy_id}_${item.assetId ?? item.asset_id}_${type}`;
+      const existing = ftByKey.get(key);
+
+      if (!existing) {
+        const clone = { ...item };
+        ftByKey.set(key, clone);
+        result.push(clone);
+        continue;
+      }
+
+      existing.quantity = Number(existing.quantity || 0) + Number(item.quantity || 0);
+      existing.valueAda = Number(existing.valueAda || 0) + Number(item.valueAda || 0);
+      existing.valueUsd = Number(existing.valueUsd || 0) + Number(item.valueUsd || 0);
+
+      // Keep the most recent contribution metadata on the merged row
+      const existingAdded = existing.addedAt ?? existing.added_at;
+      const itemAdded = item.addedAt ?? item.added_at;
+      if (itemAdded && (!existingAdded || new Date(String(itemAdded)) > new Date(String(existingAdded)))) {
+        existing.addedAt = item.addedAt ?? item.added_at;
+        existing.updatedAt = item.updatedAt ?? item.updated_at;
+        existing.status = item.status;
+        existing.addedBy = item.addedBy ?? item.added_by;
+        existing.originType = item.originType ?? item.origin_type;
+      }
+    }
+
+    return result;
   }
 
   async getAcquiredAssets(
@@ -426,17 +493,58 @@ export class AssetsService {
       });
     }
 
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
+    const ethPriceInAda = adaPrice > 0 ? ethPrice / adaPrice : 0;
+
     const statsResult = await queryBuilder
       .clone()
-      .select('SUM(asset.quantity)', 'totalAcquired')
+      .select(
+        `SUM(
+          CASE
+            WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
+            WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
+            ELSE asset.quantity
+          END
+        )`,
+        'totalAcquired'
+      )
+      .addSelect(
+        `SUM(
+          CASE
+            WHEN asset.type = :nftType THEN asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+            WHEN asset.type = :ftType THEN
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+            WHEN asset.type = :ethType THEN
+              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
+            ELSE asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+          END
+        )`,
+        'totalAcquiredValueAda'
+      )
+      .addSelect(
+        `SUM(
+          CASE
+            WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
+            ELSE 0
+          END
+        )`,
+        'totalAcquiredEth'
+      )
       .addSelect('COUNT(DISTINCT transaction.user_id)', 'totalAcquirers')
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+        ethType: AssetType.ETH,
+        ethPriceInAda,
+      })
       .getRawOne();
 
     const totalAcquired = parseFloat(statsResult?.totalAcquired || '0');
+    const totalAcquiredValueAda = parseFloat(statsResult?.totalAcquiredValueAda || '0');
+    const totalAcquiredEth = parseFloat(statsResult?.totalAcquiredEth || '0');
     const totalAcquirers = parseInt(statsResult?.totalAcquirers || '0', 10);
 
-    const [adaPrice, marketData, [assets, total]] = await Promise.all([
-      this.priceService.getAdaPrice(),
+    const [marketData, [assets, total]] = await Promise.all([
       this.marketRepository.findOne({ where: { vault_id: vaultId } }),
       queryBuilder
         .skip((page - 1) * limit)
@@ -445,19 +553,30 @@ export class AssetsService {
         .getManyAndCount(),
     ]);
 
-    const totalAcquiredUsd = totalAcquired * adaPrice;
+    const totalAcquiredUsd = totalAcquiredValueAda * adaPrice;
 
     const totalAdaLiquidityAda = marketData?.totalAdaLiquidity != null ? Number(marketData.totalAdaLiquidity) : null;
     const totalAdaLiquidityUsd = totalAdaLiquidityAda != null ? totalAdaLiquidityAda * adaPrice : null;
 
     return {
-      items: assets.map(asset => instanceToPlain(asset)),
+      items: assets.map(asset => {
+        const plain = instanceToPlain(asset) as Record<string, unknown>;
+        // Acquired assets are always native (ADA or ETH) — use ethPriceInAda for ETH type.
+        const effectivePriceAda =
+          asset.type === AssetType.ETH ? ethPriceInAda : (asset.dex_price ?? asset.floor_price ?? 0);
+        const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
+        plain.quantity = asset.normalizedQuantity;
+        plain.valueAda = effectiveValueAda;
+        plain.valueUsd = effectiveValueAda * adaPrice;
+        return plain;
+      }),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       totalAcquired,
       totalAcquiredUsd,
+      totalAcquiredEth,
       totalAcquirers,
       totalAdaLiquidityAda,
       totalAdaLiquidityUsd,
@@ -781,12 +900,16 @@ export class AssetsService {
 
       if (vaultCosts.size === 0) return; // No vaults with valid pricing
 
-      // Get current ADA price in USD
-      const adaPriceUsd = await this.priceService.getAdaPrice();
+      // Get current ADA and ETH prices in USD
+      const [adaPriceUsd, ethPriceUsd] = await Promise.all([
+        this.priceService.getAdaPrice(),
+        this.priceService.getEthPrice(),
+      ]);
 
       // Update each vault's cost fields to reflect the newly acquired assets
       for (const [vaultId, totalCostAda] of vaultCosts.entries()) {
         const totalCostUsd = totalCostAda * adaPriceUsd;
+        const totalCostEth = ethPriceUsd > 0 ? totalCostUsd / ethPriceUsd : 0;
 
         await this.vaultsRepository
           .createQueryBuilder()
@@ -794,6 +917,7 @@ export class AssetsService {
           .set({
             total_assets_cost_ada: () => `total_assets_cost_ada + ${totalCostAda}`,
             total_assets_cost_usd: () => `total_assets_cost_usd + ${totalCostUsd}`,
+            total_assets_cost_eth: () => `total_assets_cost_eth + ${totalCostEth}`,
             last_valuation_update: new Date(),
           })
           .where('id = :vaultId', { vaultId })

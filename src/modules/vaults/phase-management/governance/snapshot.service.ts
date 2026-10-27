@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
@@ -11,6 +11,8 @@ import { User } from '@/database/user.entity';
  */
 @Injectable()
 export class SnapshotService {
+  private readonly logger = new Logger(SnapshotService.name);
+
   constructor(
     @InjectRepository(Snapshot)
     private readonly snapshotsRepository: Repository<Snapshot>,
@@ -28,13 +30,20 @@ export class SnapshotService {
    */
   async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
     if (!addressBalances) return [];
-    const addresses = Object.keys(addressBalances);
+    const addresses = [...new Set(Object.keys(addressBalances).map(address => address?.trim().toLowerCase()))].filter(
+      (address): address is string => !!address
+    );
     if (addresses.length === 0) return [];
 
-    const users = await this.userRepository.find({
-      where: { address: In(addresses) },
-      select: ['id'],
-    });
+    const users = await this.userRepository
+      .createQueryBuilder('user')
+      .select('user.id', 'id')
+      .where('LOWER(user.address) IN (:...addresses)', { addresses })
+      .getRawMany<{ id: string }>();
+
+    if (users.length === 0) {
+      this.logger.debug(`No token-holder users matched snapshot addresses (addresses=${addresses.length}).`);
+    }
 
     // Deduplicate user IDs (though DB should already ensure uniqueness)
     return [...new Set(users.map(u => u.id))];

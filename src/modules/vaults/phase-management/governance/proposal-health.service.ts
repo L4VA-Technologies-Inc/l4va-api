@@ -28,10 +28,11 @@ export class ProposalHealthService {
   ) {}
 
   /**
-   * Fallback cron job to catch any missed proposals (runs every 6 hours)
-   * This ensures that even if the dynamic scheduling fails, proposals will eventually be processed
+   * Fallback cron job to catch missed activations/executions.
+   * One-shot in-memory jobs can be lost on restart or timezone mismatch;
+   * running every minute keeps short testnet votes from staying stuck on upcoming.
    */
-  @Cron(CronExpression.EVERY_6_HOURS)
+  @Cron(CronExpression.EVERY_MINUTE)
   async fallbackProcessProposals(): Promise<void> {
     try {
       // Handle overdue activations using scheduler service

@@ -12,6 +12,7 @@ import { GoogleSecretService } from './google-secret.service';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     HttpModule,
     TransactionsModule,

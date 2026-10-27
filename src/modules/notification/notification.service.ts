@@ -27,7 +27,15 @@ export interface IEmailNotificationBody {
   vaultName: string;
 }
 
-export type GovernanceActionStatus = 'started' | 'executed' | 'rejected';
+export interface IEmailVerificationBody {
+  email: string;
+  address: string;
+  firstName: string;
+  verificationUrl: string;
+  expiresInHours: number;
+}
+
+export type GovernanceActionStatus = 'started' | 'executed' | 'rejected' | 'ending_soon';
 
 export interface IGovernanceEmailBody {
   email: string;
@@ -80,13 +88,19 @@ export class NotificationService {
   }
 
   async sendBulkNotification(body: INotificationBody, bulkOptions: string[]): Promise<void> {
-    if (!bulkOptions || !Array.isArray(bulkOptions) || bulkOptions.length === 0) {
-      this.logger.warn('Bulk options are empty or invalid. No notifications will be sent.');
+    if (!bulkOptions || !Array.isArray(bulkOptions)) {
+      this.logger.warn('Bulk options are invalid. No notifications will be sent.');
+      return;
+    }
+
+    const recipientIds = [...new Set(bulkOptions.filter(id => typeof id === 'string' && id.trim().length > 0))];
+    if (recipientIds.length === 0) {
+      this.logger.debug('Bulk notification skipped: recipient list is empty.');
       return;
     }
 
     const users = await this.userRepository.findBy({
-      id: In(bulkOptions),
+      id: In(recipientIds),
     });
 
     if (users.length === 0) {
@@ -94,11 +108,22 @@ export class NotificationService {
       return;
     }
 
+    const usersWithAddress = users.filter(user => !!user.address);
+    if (usersWithAddress.length === 0) {
+      this.logger.warn(
+        `Bulk notification skipped: resolved ${users.length} user(s), but none have a wallet address on profile.`
+      );
+      return;
+    }
+
+    if (usersWithAddress.length < users.length) {
+      this.logger.debug(
+        `Bulk notification: ${users.length - usersWithAddress.length} user(s) skipped due to missing wallet address.`
+      );
+    }
+
     await Promise.all(
-      users.map(async user => {
-        if (!user.address) {
-          return;
-        }
+      usersWithAddress.map(async user => {
         await this.sendNotification({ ...body, address: user.address });
       })
     );
@@ -128,6 +153,7 @@ export class NotificationService {
 
   async sendFailedEmailNotification(body: IEmailNotificationBody): Promise<EventsControllerTriggerResponse> {
     try {
+      const footerPayload = this.getEmailFooterPayload();
       const res = await this.novu.trigger({
         workflowId: 'failed',
         to: {
@@ -142,6 +168,7 @@ export class NotificationService {
           vaultUrl: body.vaultUrl,
           failed_at: body.failed_at || new Date(),
           vaultName: body.vaultName,
+          ...footerPayload,
         },
       });
       return res;
@@ -152,6 +179,7 @@ export class NotificationService {
 
   async sendPhaseEmailNotification(body: any): Promise<EventsControllerTriggerResponse> {
     try {
+      const footerPayload = this.getEmailFooterPayload();
       const res = await this.novu.trigger({
         workflowId: 'phase',
         to: {
@@ -165,6 +193,7 @@ export class NotificationService {
           phase: body.phase,
           phaseStatus: body.phaseStatus,
           timeAt: body.timeAt,
+          ...footerPayload,
         },
       });
       return res;
@@ -175,6 +204,7 @@ export class NotificationService {
 
   async sendLaunchEmailNotification(body: any): Promise<EventsControllerTriggerResponse> {
     try {
+      const footerPayload = this.getEmailFooterPayload();
       const res = await this.novu.trigger({
         workflowId: 'created',
         to: {
@@ -186,12 +216,49 @@ export class NotificationService {
           vaultUrl: body.vaultUrl,
           vaultName: body.vaultName,
           timeAt: body.timeAt,
+          ...footerPayload,
         },
       });
       return res;
     } catch (err) {
       return err;
     }
+  }
+
+  /**
+   * Unlike the other senders this one throws, so callers can tell the user the email was not sent.
+   */
+  async sendEmailVerification(body: IEmailVerificationBody): Promise<EventsControllerTriggerResponse> {
+    const footerPayload = this.getEmailFooterPayload();
+    let res: EventsControllerTriggerResponse;
+    try {
+      res = await this.novu.trigger({
+        workflowId: 'email-confrim',
+        to: {
+          subscriberId: body.address,
+          email: body.email,
+        },
+        payload: {
+          firstName: body.firstName,
+          email: body.email,
+          verificationUrl: body.verificationUrl,
+          expiresInHours: body.expiresInHours,
+          ...footerPayload,
+        },
+      });
+    } catch (err) {
+      // SDK wraps unexpected error bodies (e.g. "workflow not found") as "Response validation failed"; surface the raw body
+      const raw = err?.rawValue ?? err?.body;
+      throw new Error(`${err?.message || err}${raw ? `: ${typeof raw === 'string' ? raw : JSON.stringify(raw)}` : ''}`);
+    }
+
+    // Novu answers 201 even when nothing is sent (e.g. workflow missing/inactive), so check the status explicitly
+    if (res.result?.status !== 'processed') {
+      const details = res.result?.error?.join('; ');
+      throw new Error(`Novu trigger status "${res.result?.status}"${details ? `: ${details}` : ''}`);
+    }
+
+    return res;
   }
 
   async sendGovernanceEmailNotification(body: IGovernanceEmailBody): Promise<EventsControllerTriggerResponse> {

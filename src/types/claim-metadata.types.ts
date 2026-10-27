@@ -16,6 +16,10 @@ export interface BaseClaimMetadata {
 export interface ContributorClaimMetadata extends BaseClaimMetadata {
   /** True if vault has no acquirers (100% contributors) */
   noAcquirers?: boolean;
+  /** EVM: on-chain cycle ID this claim belongs to */
+  evmCycleId?: string;
+  /** EVM: Merkle leaf claim_index for deduplication */
+  evmClaimIndex?: string;
 }
 
 /**
@@ -42,6 +46,8 @@ export interface CancellationClaimMetadata extends BaseClaimMetadata {
   expansionProposalId?: string;
   /** Required minimum that wasn't met (for expansion refunds) */
   requiredMin?: number;
+  /** Original transaction hash (contribution or acquisition tx that is being refunded) */
+  originalTxHash?: string;
 }
 
 /**
@@ -93,6 +99,27 @@ export interface DistributionClaimMetadata extends BaseClaimMetadata {
   address: string;
   /** Batch processing information */
   batchId?: string;
+}
+
+/**
+ * Metadata for EVM pro-rata distribution claims.
+ *
+ * Separate from `DistributionClaimMetadata`, which is Cardano-shaped (batch
+ * processing against a treasury wallet). On EVM there are no batches: the pot
+ * is reserved in the vault contract and each holder pulls their own share, so
+ * what is worth recording is the on-chain identity of that payout.
+ */
+export interface EvmDistributionClaimMetadata extends BaseClaimMetadata {
+  /** On-chain distribution id. */
+  evmDistributionId: string;
+  /** `address(0)` for native, else the ERC-20 distributed. */
+  evmAsset: string;
+  /** The VT holder whose snapshot balance earned the share. */
+  evmHolder: string;
+  /** Where the funds were sent — differs from the holder when redirected. */
+  evmRecipient: string;
+  /** The claim transaction. */
+  evmTxHash: string;
 }
 
 /**
@@ -152,6 +179,10 @@ export interface AcquirerClaimMetadata extends BaseClaimMetadata {
   adaSent?: number;
   /** True if this claim is from an expansion phase */
   isExpansion?: boolean;
+  /** EVM: on-chain cycle ID this claim belongs to */
+  evmCycleId?: string;
+  /** EVM: Merkle leaf claim_index for deduplication */
+  evmClaimIndex?: string;
 }
 
 /**
@@ -164,6 +195,7 @@ export type ClaimMetadata =
   | TerminationClaimMetadata
   | LpClaimMetadata
   | DistributionClaimMetadata
+  | EvmDistributionClaimMetadata
   | L4vaClaimMetadata
   | ExpansionClaimMetadata
   | AcquirerClaimMetadata

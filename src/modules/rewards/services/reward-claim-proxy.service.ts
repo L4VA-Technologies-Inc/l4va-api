@@ -1,5 +1,12 @@
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable, Logger, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  ConflictException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
@@ -309,6 +316,43 @@ export class RewardClaimProxy {
   }
 
   /**
+   * Robinhood Chain claim: reserve + treasury ERC-20 transfer in one round-trip.
+   * No unsigned tx / CIP-30 signature — the rewards service broadcasts from treasury.
+   */
+  async claimEvm(
+    walletAddress: string,
+    payload: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
+  ): Promise<SubmitClaimResponseDto> {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      throw new BadRequestException('EVM claim is only available for Robinhood wallets');
+    }
+
+    try {
+      const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/claim-evm`;
+      const { data } = await firstValueFrom(
+        this.httpService.post(url, payload, {
+          headers: { 'X-Internal-Service-Token': this.internalToken },
+        })
+      );
+
+      this.logger.log(
+        `EVM claim submitted for ${walletAddress.slice(0, 10)}...: tx ${data.txHash} ` +
+          `${(data.totalClaimedAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+      );
+
+      return {
+        success: true,
+        txHash: data.txHash,
+        claimedAmount: data.totalClaimedAmount / 10 ** this.l4vaDecimals,
+        claimedImmediateAmount: data.claimableImmediateAmount / 10 ** this.l4vaDecimals,
+        claimedVestedAmount: data.claimableVestedAmount / 10 ** this.l4vaDecimals,
+      };
+    } catch (error: any) {
+      throw this.mapRewardsClaimError(error, 'EVM claim failed');
+    }
+  }
+
+  /**
    * Cancel a pending reservation — called when the user declines signing in their wallet.
    * Safe to call at any time; a missing or already-processed reservation is a no-op.
    */
@@ -361,5 +405,34 @@ export class RewardClaimProxy {
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
     );
     return data;
+  }
+
+  private mapRewardsClaimError(error: unknown, fallback: string): never {
+    const axiosError = error as {
+      response?: { status?: number; data?: { message?: string | string[] } };
+      message?: string;
+    };
+    const status = axiosError.response?.status;
+    const raw = axiosError.response?.data?.message;
+    const message = Array.isArray(raw) ? raw.join(', ') : raw || axiosError.message || fallback;
+
+    if (status === 409) {
+      throw new ConflictException(message);
+    }
+    if (status === 404) {
+      throw new NotFoundException(message);
+    }
+    if (status === 503) {
+      throw new ServiceUnavailableException(message);
+    }
+    if (
+      error instanceof BadRequestException ||
+      error instanceof ConflictException ||
+      error instanceof NotFoundException ||
+      error instanceof ServiceUnavailableException
+    ) {
+      throw error;
+    }
+    throw new BadRequestException(message);
   }
 }

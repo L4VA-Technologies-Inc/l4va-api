@@ -59,12 +59,23 @@ export class Claim {
   status: ClaimStatus;
 
   @Expose({ name: 'amount' })
-  @Column({ type: 'bigint', default: 0 })
-  amount: number;
+  @Column({
+    type: 'numeric',
+    precision: 78,
+    scale: 0,
+    default: 0,
+  })
+  amount: string;
 
   @Expose({ name: 'lovelaceAmount' })
-  @Column({ name: 'lovelace_amount', type: 'bigint', nullable: true })
-  lovelace_amount?: number;
+  @Column({
+    name: 'lovelace_amount',
+    type: 'numeric',
+    precision: 78,
+    scale: 0,
+    nullable: true,
+  })
+  lovelace_amount?: string;
 
   @Expose({ name: 'multiplier' })
   @Column({ type: 'numeric', nullable: true })

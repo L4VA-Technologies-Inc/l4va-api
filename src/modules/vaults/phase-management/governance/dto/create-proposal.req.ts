@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 
 import { AssetWhitelistDto } from '@/modules/vaults/dto/assetWhitelist.dto';
+import { IndexBasketReq } from '@/modules/vaults/index-vault/dto/index-basket.dto';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
@@ -108,6 +109,8 @@ export enum ExecType {
   SELL = 'SELL',
   UNLIST = 'UNLIST',
   UPDATE_LISTING = 'UPDATE_LISTING',
+  /** EVM only — close an open adapter position by positionId. */
+  CLOSE_POSITION = 'CLOSE_POSITION',
 }
 
 export enum SellType {
@@ -236,6 +239,83 @@ export class MarketplaceActionDto {
   @IsOptional()
   useMarketPrice?: boolean;
 
+  // ===== EVM NFT SELL fields =====
+  // Every field below is fixed by the proposal and passed straight to
+  // `Vault.sellNft`; nothing is recomputed at execution time. All optional so
+  // Cardano/WayUp proposals are unaffected.
+
+  @ApiProperty({
+    description: 'EVM NFT contract address (ERC-721/ERC-1155 SELL on an EVM vault)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  nftContract?: string;
+
+  @ApiProperty({ description: 'EVM token ID being sold', required: false })
+  @IsOptional()
+  @IsNumberString({}, { message: 'tokenId must be a valid numeric string' })
+  tokenId?: string;
+
+  @ApiProperty({
+    description: 'VaultTypes.AssetKind: 2 = ERC721, 3 = ERC1155. Selects the sellNft path.',
+    required: false,
+    example: 2,
+  })
+  @IsOptional()
+  @IsNumber()
+  assetKind?: number;
+
+  @ApiProperty({
+    description: 'Approved marketplace adapter. Falls back to EVM_NFT_SALE_ADAPTER_ADDRESS.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  adapter?: string;
+
+  @ApiProperty({
+    description: 'Proceeds asset; address(0) for native. Must not be the vault token.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  paymentAsset?: string;
+
+  @ApiProperty({
+    description: 'Floor on proceeds the vault KEEPS, after the protocol trade fee (wei)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumberString({}, { message: 'minNetProceeds must be a valid numeric string' })
+  minNetProceeds?: string;
+
+  @ApiProperty({
+    description: 'Unix seconds. Must be non-zero — the vault rejects a sale with no deadline.',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumberString({}, { message: 'deadline must be a valid numeric string' })
+  deadline?: string;
+
+  @ApiProperty({
+    description: 'ABI-encoded marketplace-specific calldata, opaque to the vault',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  protocolParams?: string;
+
+  @ApiProperty({
+    description:
+      'Contribution record IDs backing this NFT slot. Released before the sale; ' +
+      'a slot that still backs a refundable contribution cannot be sold.',
+    required: false,
+    type: [String],
+  })
+  @IsOptional()
+  contributionIds?: string[];
+
   @ApiProperty({
     description: 'Custom limit price in ADA per token (used when useMarketPrice is false)',
     required: false,
@@ -268,6 +348,47 @@ export class MarketplaceActionDto {
     assetName: string;
     collectionName: string | null;
   };
+
+  // ===== EVM-only fields (Uniswap swaps / close-position) =====
+  @ApiProperty({ description: 'EVM: ERC-20 input token address (0x…)', required: false })
+  @ValidateIf(o => o.inputAsset !== undefined)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'inputAsset must be a 20-byte hex EVM address' })
+  inputAsset?: string;
+
+  @ApiProperty({ description: 'EVM: ERC-20 expected output token address (0x…)', required: false })
+  @ValidateIf(o => o.expectedOutputAsset !== undefined)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'expectedOutputAsset must be a 20-byte hex EVM address' })
+  expectedOutputAsset?: string;
+
+  @ApiProperty({ description: 'EVM: raw token amount in smallest unit (wei-scale string)', required: false })
+  @ValidateIf(o => o.amount !== undefined)
+  @IsNumberString({}, { message: 'amount must be a valid unsigned integer string' })
+  amount?: string;
+
+  @ApiProperty({ description: 'EVM: human-readable token amount for display', required: false })
+  @IsOptional()
+  @IsString()
+  humanAmount?: string;
+
+  @ApiProperty({ description: 'EVM: on-chain positionId for CLOSE_POSITION actions', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @IsNumberString({}, { message: 'positionId must be a valid unsigned integer string' })
+  positionId?: string;
+
+  @ApiProperty({ description: 'EVM: position asset address for CLOSE_POSITION', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'positionAsset must be a 20-byte hex EVM address' })
+  positionAsset?: string;
+
+  @ApiProperty({ description: 'EVM: underlying asset address to receive on CLOSE_POSITION', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'underlyingAsset must be a 20-byte hex EVM address' })
+  underlyingAsset?: string;
+
+  @ApiProperty({ description: 'EVM: raw position amount for CLOSE_POSITION', required: false })
+  @ValidateIf(o => o.exec === ExecType.CLOSE_POSITION)
+  @IsNumberString({}, { message: 'positionAmount must be a valid unsigned integer string' })
+  positionAmount?: string;
 }
 
 export class ExpansionPolicyIdDto {
@@ -293,6 +414,23 @@ export class ExpansionPolicyIdDto {
 }
 
 export class AssetWhitelistProposalDto extends OmitType(AssetWhitelistDto, ['countCapMin', 'countCapMax'] as const) {}
+
+// EVM expansion: ERC-20 / ERC-721 contract address selected for the new cycle
+export class ExpansionEvmAssetDto {
+  @ApiProperty({
+    description: 'ERC-20 or ERC-721 contract address (0x-prefixed)',
+    example: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, { message: 'Must be a valid EVM address (0x followed by 40 hex chars)' })
+  contractAddress: string;
+
+  @ApiProperty({ description: 'Human-readable label for display', required: false })
+  @IsOptional()
+  @IsString()
+  label?: string;
+}
 
 export class CreateProposalReq {
   @ApiProperty({
@@ -380,6 +518,28 @@ export class CreateProposalReq {
   distributionLovelaceAmount?: number;
 
   @ApiProperty({
+    description:
+      'EVM only. Asset to distribute: the zero address for native, or an ERC-20 address. Defaults to native.',
+    example: '0x0000000000000000000000000000000000000000',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  distributionAsset?: string;
+
+  @ApiProperty({
+    description:
+      'EVM only. Amount to distribute in BASE UNITS as a decimal string (wei for native). A string rather than a number because 18-decimal amounts exceed the safe integer range. Do not use distributionLovelaceAmount for EVM vaults — that field is 6-decimal ADA.',
+    example: '1000000000000000000',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  distributionAmount?: string;
+
+  @ApiProperty({
     description: 'Marketplace actions for marketplace proposals (buy, offer, cancel offer, sell, unlist, update)',
     type: [MarketplaceActionDto],
     required: false,
@@ -412,6 +572,19 @@ export class CreateProposalReq {
   @Type(() => ExpansionPolicyIdDto)
   @Expose()
   expansionPolicyIds?: ExpansionPolicyIdDto[];
+
+  @ApiProperty({
+    description:
+      'EVM: ERC-20/ERC-721 contract addresses accepted during expansion (replaces expansionPolicyIds for Robinhood vaults)',
+    type: [ExpansionEvmAssetDto],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ExpansionEvmAssetDto)
+  @Expose()
+  expansionEvmAssets?: ExpansionEvmAssetDto[];
 
   @ApiProperty({
     description: 'Duration in milliseconds for vault expansion period',
@@ -544,6 +717,17 @@ export class CreateProposalReq {
   @Type(() => AssetWhitelistProposalDto)
   @Expose()
   assetsWhitelist?: AssetWhitelistProposalDto[];
+
+  @ApiProperty({
+    description: 'New target basket for index re-weight proposals (index-weighted Robinhood vaults only)',
+    type: IndexBasketReq,
+    required: false,
+  })
+  @ValidateIf(o => o.type === ProposalType.INDEX_REWEIGHT)
+  @ValidateNested()
+  @Type(() => IndexBasketReq)
+  @Expose()
+  indexReweight?: IndexBasketReq;
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

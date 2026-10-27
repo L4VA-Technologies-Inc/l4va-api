@@ -4,43 +4,120 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AssetsModule } from '../../assets/assets.module';
+import { TransactionHealthService } from '../offchain-tx/transaction-health.service';
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
+import { EvmAdapterRegistryService } from './evm-adapter-registry.service';
+import { EvmAdminSigner } from './evm-admin-signer.service';
+import { EvmAirdropOrchestrator } from './evm-airdrop-orchestrator.service';
+import { EvmAllocationService } from './evm-allocation.service';
+import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
+import { EvmCycleCloseService } from './evm-cycle-close.service';
+import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
+import { EvmLiquidityController } from './evm-liquidity.controller';
+import { EvmLiquidityService } from './evm-liquidity.service';
+import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
+import { EvmOpenCycleService } from './evm-open-cycle.service';
+import { EvmPauseService } from './evm-pause.service';
+import { EvmPositionService } from './evm-position.service';
+import { EvmProtocolFeeSyncService } from './evm-protocol-fee-sync.service';
+import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
+import { EvmSwapService } from './evm-swap.service';
+import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
+import { EvmTerminationService } from './evm-termination.service';
+import { EvmVaultContributionService } from './evm-vault-contribution.service';
+import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
+import { EvmVaultSignerService } from './evm-vault-signer.service';
+import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
+import { UniswapQuoteService } from './uniswap-quote.service';
 import { VaultContributionService } from './vault-contribution.service';
 import { VaultManagingService } from './vault-managing.service';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmAllocation } from '@/database/evm-allocation.entity';
+import { EvmContributionValuation } from '@/database/evm-contribution-valuation.entity';
+import { EvmContribution } from '@/database/evm-contribution.entity';
+import { EvmExternalPosition } from '@/database/evm-external-position.entity';
+import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
+import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
+import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
+import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     HttpModule,
     TransactionsModule,
     AssetsModule,
     RewardsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset, Claim, User, Proposal]),
+    TypeOrmModule.forFeature([
+      Vault,
+      Transaction,
+      AssetsWhitelistEntity,
+      TokenRegistry,
+      Asset,
+      Claim,
+      User,
+      Proposal,
+      EvmContribution,
+      EvmValuationSnapshot,
+      EvmContributionValuation,
+      EvmAllocation,
+      EvmAssetPriceFeedEntity,
+      EvmExternalPosition,
+      EvmIndexRebalance,
+    ]),
   ],
-  controllers: [BlockchainController],
+  controllers: [BlockchainController, EvmLiquidityController],
   providers: [
     MetadataRegistryApiService,
     BlockchainService,
     VaultContributionService,
     BlockchainWebhookService,
+    EvmContractReader,
+    EvmAdminSigner,
+    EvmAllocationService,
+    EvmLockTimePricingService,
+    EvmCycleCloseService,
+    EvmLiquidityService,
+    EvmAirdropOrchestrator,
+    EvmRefundOrchestrator,
+    EvmVaultSignerService,
+    EvmVaultContributionService,
+    EvmVaultEventReconciler,
+    EvmContributionBackfillService,
+    EvmWebhookService,
+    EvmOpenCycleService,
+    EvmFeeWithdrawService,
+    // Owned here so EVM contribution prepare can verify protocol-fee payments;
+    // GovernanceModule gets it through its BlockchainModule import.
+    EvmGovernanceFeeService,
+    EvmProtocolFeeSyncService,
+    EvmPositionService,
+    EvmSwapService,
+    EvmTerminationPreflightService,
+    EvmTerminationService,
+    EvmAdapterRegistryService,
+    EvmPauseService,
+    UniswapQuoteService,
     VaultManagingService,
+    TransactionHealthService,
   ],
   exports: [
     BlockchainService,
@@ -48,6 +125,26 @@ import { RewardsModule } from '@/modules/rewards/rewards.module';
     BlockchainWebhookService,
     VaultManagingService,
     MetadataRegistryApiService,
+    TransactionHealthService,
+    EvmContractReader,
+    EvmAdminSigner,
+    EvmAllocationService,
+    EvmLockTimePricingService,
+    EvmCycleCloseService,
+    EvmLiquidityService,
+    EvmAirdropOrchestrator,
+    EvmRefundOrchestrator,
+    EvmContributionBackfillService,
+    EvmOpenCycleService,
+    EvmFeeWithdrawService,
+    EvmGovernanceFeeService,
+    EvmPositionService,
+    EvmSwapService,
+    EvmTerminationPreflightService,
+    EvmTerminationService,
+    EvmAdapterRegistryService,
+    EvmPauseService,
+    UniswapQuoteService,
   ],
 })
 export class BlockchainModule {}

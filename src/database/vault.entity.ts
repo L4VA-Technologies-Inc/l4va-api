@@ -14,8 +14,10 @@ import {
   JoinTable,
 } from 'typeorm';
 
+import { IndexConfig, VaultArchetype } from '../types/index-vault.types';
 import {
   ApplyParamsResult,
+  ChainType,
   ContributionWindowType,
   InvestmentWindowType,
   SmartContractVaultStatus,
@@ -397,6 +399,16 @@ export class Vault {
   })
   total_assets_cost_ada: number;
 
+  @Expose({ name: 'totalAssetsCostEth' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'total_assets_cost_eth',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  total_assets_cost_eth: number;
+
   @Expose({ name: 'lastValuationUpdate' })
   @Transform(({ value }) => (value ? new Date(value).getTime() : null))
   @Column({
@@ -776,6 +788,80 @@ export class Vault {
   @Column({ name: 'is_official_partner', type: 'boolean', default: false })
   is_official_partner: boolean;
 
+  @Expose({ name: 'chainType' })
+  @Column({
+    name: 'chain_type',
+    type: 'varchar',
+    default: ChainType.cardano,
+    nullable: false,
+  })
+  chain_type: ChainType;
+
+  /**
+   * Numeric EVM chain ID (e.g. 46630 for Robinhood testnet, 1 for Ethereum mainnet).
+   * Null for Cardano vaults.
+   */
+  @Expose({ name: 'chainId' })
+  @Column({ name: 'chain_id', type: 'bigint', nullable: true })
+  chain_id?: number;
+
+  /**
+   * The bytes32 vaultId registered in the EVM VaultFactory contract.
+   * Null for Cardano vaults.
+   * For EVM: maps to VaultFactory.vaults(evmVaultId) → vault address.
+   */
+  @Expose({ name: 'evmVaultId' })
+  @Column({ name: 'evm_vault_id', nullable: true })
+  evm_vault_id?: string;
+
+  // ---------------------------------------------------------------------------
+  // EVM cycle-close bookkeeping (Phase A of claim/refund/cycle-close work).
+  // All null for Cardano rows.
+  //
+  // No `min_acquire_threshold_eth` column: Vault.getCycle().minAcquireThreshold
+  // + nativeCollected on-chain are the source of truth for close-vs-cancel
+  // decisions. Any DB-side threshold would just be a stale copy.
+  // ---------------------------------------------------------------------------
+
+  /** Cycle currently active on-chain (1 for the initial cycle; incremented on reopen). */
+  @Expose({ name: 'evmCurrentCycleId' })
+  @Column({ name: 'evm_current_cycle_id', type: 'bigint', nullable: true })
+  evm_current_cycle_id?: string;
+
+  /** Merkle root committed to the contract by `closeCycle`. */
+  @Expose({ name: 'evmAllocationRoot' })
+  @Column({ name: 'evm_allocation_root', nullable: true })
+  evm_allocation_root?: string;
+
+  /** Hash of the admin `closeCycle` transaction. */
+  @Expose({ name: 'evmCloseCycleTxHash' })
+  @Column({ name: 'evm_close_cycle_tx_hash', nullable: true })
+  evm_close_cycle_tx_hash?: string;
+
+  /**
+   * Set ONLY after a CycleClosed event is decoded from the receipt AND every
+   * field (cycleId, root, valuationHash, totalVt, totalNative) exactly matches
+   * the prepared snapshot. Never write earlier.
+   */
+  @Expose({ name: 'evmRootCommittedAt' })
+  @Column({ name: 'evm_root_committed_at', type: 'timestamptz', nullable: true })
+  evm_root_committed_at?: Date;
+
+  /** Hash of the admin `cancelCurrentCycle` transaction (failed-vault path). */
+  @Expose({ name: 'evmCancelCycleTxHash' })
+  @Column({ name: 'evm_cancel_cycle_tx_hash', nullable: true })
+  evm_cancel_cycle_tx_hash?: string;
+
+  /** Product archetype. `index_weighted` vaults buy and hold a governed basket. */
+  @Expose({ name: 'vaultArchetype' })
+  @Column({ name: 'vault_archetype', type: 'varchar', nullable: false, default: VaultArchetype.standard })
+  vault_archetype: VaultArchetype;
+
+  /** Target basket of an index-weighted vault. Null for every other archetype. */
+  @Expose({ name: 'indexConfig' })
+  @Column({ name: 'index_config', type: 'jsonb', nullable: true })
+  index_config?: IndexConfig | null;
+
   @BeforeInsert()
   setDate(): void {
     const now = new Date();
@@ -841,5 +927,31 @@ export class Vault {
     claimsCreatedAt?: string;
     lastCheckedAt?: string;
     error?: string;
+    /**
+     * EVM (Robinhood) termination state. Separate sub-object because the EVM
+     * flow shares nothing with the Cardano one above: it is rate-based rather
+     * than LP-removal-based, and it has a hard claim deadline after which
+     * holders can no longer redeem.
+     */
+    evm?: {
+      /** claim_window_open → claim_window_closed → swept */
+      phase: string;
+      valuationHash: string;
+      vtSupply: string;
+      /** Unix seconds. Redemption and deferred claims stop here. */
+      terminationDeadline: string;
+      sweepDelaySeconds: string;
+      committedAt: string;
+      assets: Array<{ asset: string; rate: string; implied: string }>;
+      waived: string[];
+      deferredAssets?: string[];
+      sweptAssets?: string[];
+      preflight?: {
+        ok: boolean;
+        outcome: string;
+        poolVtBps: string;
+        blockers: string[];
+      } | null;
+    };
   };
 }

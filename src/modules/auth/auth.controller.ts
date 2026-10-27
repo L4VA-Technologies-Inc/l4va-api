@@ -20,7 +20,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('login')
   @ApiResponse({ type: LoginRes, status: 200 })
-  async login(@Body() signatureData: LoginReq): Promise<LoginRes> {
-    return this.authService.verifySignature(signatureData);
+  async login(@Body() body: LoginReq): Promise<LoginRes> {
+    return this.authService.login(body);
   }
 }

@@ -3,8 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import {
+  bigintDecimalAdjustedToNumber,
   getContributionQuantityForLimits,
   normalizeContributionAssets,
+  parseFtRawQuantity,
+  resolveFtDecimals,
   sumContributionQuantitiesForLimits,
 } from './contribution-asset.utils';
 import { countAssetsForProtocolFee } from './contribution-fee.utils';
@@ -19,12 +22,11 @@ import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/
 import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
-// Maximum safe quantity for JavaScript number handling
-// Using Number.MAX_SAFE_INTEGER (2^53 - 1) to prevent precision loss
-const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
-const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000000; // 1 trillion
+// Threshold for logging warnings about large token quantities (decimal-adjusted)
+// Set to 1 trillion tokens to catch potentially suspicious contributions
+const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000000; // 1 trillion tokens
 
 @Injectable()
 export class ContributionService {
@@ -84,6 +86,7 @@ export class ContributionService {
         'vault.id',
         'vault.vault_status',
         'vault.max_contribute_assets',
+        'vault.chain_type',
         'owner.id',
         'assets_whitelist.id',
         'assets_whitelist.policy_id',
@@ -94,6 +97,14 @@ export class ContributionService {
 
     if (!vaultData) {
       throw new NotFoundException('Vault not found');
+    }
+
+    if (
+      vaultData.chain_type === ChainType.robinhood &&
+      !this.systemSettingsService.evmNftAssetsEnabled &&
+      normalizedAssets.some(asset => asset.type === AssetType.NFT)
+    ) {
+      throw new BadRequestException('NFT contributions are temporarily disabled for this chain.');
     }
 
     let currentAssetCount = 0;
@@ -116,18 +127,21 @@ export class ContributionService {
         })
         .getRawMany();
 
-      // Calculate decimal-adjusted counts per policy
+      // Calculate decimal-adjusted counts per policy.
+      // `asset.rawQuantity` is a base-unit string (numeric(78,0) via
+      // ColumnBigintStringTransformer) — parse as bigint so tokens with
+      // 18 decimals do not silently overflow Number.MAX_SAFE_INTEGER.
       const policyCountsMap = new Map<string, number>();
       existingAssets.forEach(asset => {
-        const rawQuantity = Number(asset.rawQuantity) || 0;
         let decimalQuantity: number;
 
         if (asset.assetType === AssetType.NFT) {
           decimalQuantity = 1;
         } else {
-          // FT: convert raw to decimal
-          const decimals = Number(asset.decimals) || 6;
-          decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+          const rawStr = asset.rawQuantity != null ? String(asset.rawQuantity).trim() : '0';
+          const rawBigInt = rawStr === '' || !/^\d+$/.test(rawStr) ? 0n : BigInt(rawStr);
+          const decimals = Number.isInteger(Number(asset.decimals)) ? Number(asset.decimals) : 6;
+          decimalQuantity = bigintDecimalAdjustedToNumber(rawBigInt, decimals);
         }
 
         const currentCount = policyCountsMap.get(asset.policyId) || 0;
@@ -198,7 +212,10 @@ export class ContributionService {
       }> = [];
 
       for (const policyId of requestedPolicyIds) {
-        const whitelistedAsset = vaultData.assets_whitelist?.find(wa => wa.policy_id === policyId);
+        // Case-insensitive comparison for EVM addresses (0x...)
+        const whitelistedAsset = vaultData.assets_whitelist?.find(
+          wa => wa.policy_id.toLowerCase() === policyId.toLowerCase()
+        );
 
         if (!whitelistedAsset) {
           invalidAssets.push(policyId);
@@ -212,18 +229,26 @@ export class ContributionService {
           0
         );
 
-        // Additional safety check: prevent individual FT quantities from exceeding reasonable limits
+        // Additional safety check: prevent unreasonably large FT quantities.
+        // Perform threshold comparisons entirely in bigint base units so raw
+        // wei values (up to uint256) are handled without floating-point loss.
         for (const asset of assetsByPolicy[policyId]) {
-          const qty = Number(asset.quantity) || 0;
-          if (asset.type === 'ft' && qty > MAX_SAFE_QUANTITY) {
-            throw new BadRequestException(`Asset quantity ${qty} exceeds maximum safe value for policy ${policyId}`);
-          }
+          if (asset.type === 'ft') {
+            const rawQuantity = parseFtRawQuantity(asset);
+            const decimals = resolveFtDecimals(asset);
+            const warnRawThreshold = BigInt(LARGE_QUANTITY_WARNING_THRESHOLD) * 10n ** BigInt(decimals);
+            const rejectRawThreshold = warnRawThreshold * 1000n;
 
-          // Log warning for very large quantities
-          if (qty > LARGE_QUANTITY_WARNING_THRESHOLD) {
-            this.logger.warn(
-              `Large quantity contribution detected: ${qty} tokens for policy ${policyId} by user ${userId}`
-            );
+            if (rawQuantity > warnRawThreshold) {
+              this.logger.warn(
+                `Large quantity contribution detected: raw=${rawQuantity.toString(10)} decimals=${decimals} for policy ${policyId} by user ${userId}`
+              );
+              if (rawQuantity > rejectRawThreshold) {
+                throw new BadRequestException(
+                  `Asset quantity ${rawQuantity.toString(10)} (base units) exceeds maximum reasonable value for policy ${policyId}`
+                );
+              }
+            }
           }
         }
 
@@ -306,16 +331,22 @@ export class ContributionService {
 
     const expansionConfig = expansionProposal.metadata.expansion;
 
-    // Validate contributed assets are from whitelisted policies
+    // Validate contributed assets are from whitelisted policies/contracts
     const contributedPolicyIds = [...new Set(contributeReq.assets.map(a => a.policyId))];
+
+    // EVM expansions store allowed contracts in evmAssets; Cardano uses policyIds
+    const allowedIds: string[] = expansionConfig.evmAssets?.length
+      ? expansionConfig.evmAssets.map((a: { contractAddress: string }) => a.contractAddress.toLowerCase())
+      : (expansionConfig.policyIds ?? []);
+
     const invalidPolicies = contributedPolicyIds.filter(
-      policyId => !expansionConfig.policyIds.includes(policyId as any)
+      policyId => !allowedIds.some(id => id.toLowerCase() === (policyId as string).toLowerCase())
     );
 
     if (invalidPolicies.length > 0) {
       throw new BadRequestException(
         `Assets from policies [${invalidPolicies.join(', ')}] are not whitelisted for this expansion. ` +
-          `Allowed policies: [${expansionConfig.policyIds.join(', ')}]`
+          `Allowed: [${allowedIds.join(', ')}]`
       );
     }
 
@@ -347,11 +378,12 @@ export class ContributionService {
         if (asset.assetType === AssetType.NFT) {
           return total + 1;
         }
-        // FT: convert raw to decimal
-        const rawQuantity = Number(asset.rawQuantity) || 0;
-        const decimals = Number(asset.decimals) || 6;
-        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-        return total + decimalQuantity;
+        // FT raw quantities are stored as numeric(78,0) strings — parse as
+        // bigint to preserve exact 18-decimal wei values before scaling down.
+        const rawStr = asset.rawQuantity != null ? String(asset.rawQuantity).trim() : '0';
+        const rawBigInt = rawStr === '' || !/^\d+$/.test(rawStr) ? 0n : BigInt(rawStr);
+        const decimals = Number.isInteger(Number(asset.decimals)) ? Number(asset.decimals) : 6;
+        return total + bigintDecimalAdjustedToNumber(rawBigInt, decimals);
       }, 0);
 
       const projectedCount = currentAssetCount + contributionAssetCount;

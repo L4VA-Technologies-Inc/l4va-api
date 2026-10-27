@@ -5,6 +5,8 @@ export enum TransactionStatus {
   confirmed = 'confirmed',
   failed = 'failed',
   stuck = 'stuck',
+  /** Contribution was refunded on-chain (either via self-cancel or after cycle cancel). */
+  refunded = 'refunded',
 }
 
 export enum TransactionType {
@@ -33,5 +35,74 @@ export enum TransactionType {
   updateVault = 'update-vault',
   /** WayUp marketplace transaction (listing, unlisting, update, offer, purchase) */
   wayup = 'wayup',
+  /** EVM: admin-signed `closeCycle(root, hash, totalVt, totalNative)`. */
+  evmCloseCycle = 'evm-close-cycle',
+  /** EVM: admin-signed `claimAllocations([...])` batch airdrop. */
+  evmClaim = 'evm-claim',
+  /** EVM: admin-signed `refundContributions([...])` batch refund. */
+  evmRefund = 'evm-refund',
+  /** EVM: admin-signed `cancelCurrentCycle()`. */
+  evmCancelCycle = 'evm-cancel-cycle',
+  /** EVM: admin-signed `openCycle(CycleConfig)`. */
+  evmOpenCycle = 'evm-open-cycle',
+  /** EVM: admin-signed `openPosition(OpenPositionParams)`. */
+  evmOpenPosition = 'evm-open-position',
+  /** EVM: admin-signed `closePosition(ClosePositionParams)`. */
+  evmClosePosition = 'evm-close-position',
+  evmSellNft = 'evm-sell-nft',
+  /** EVM: admin-signed position-less `swap(SwapParams)` (index-vault basket trades). */
+  evmSwap = 'evm-swap',
+  evmReleaseNftRefundable = 'evm-release-nft-refundable',
+  /** EVM: admin-signed `beginTerminationPreparing()`. */
+  evmBeginTerminationPreparing = 'evm-begin-termination-preparing',
+  /** EVM: admin-signed `beginTermination(assets[])`. */
+  evmBeginTermination = 'evm-begin-termination',
+  /** EVM: admin-signed `finalizeTermination()`. */
+  evmFinalizeTermination = 'evm-finalize-termination',
+  /** EVM: admin-signed `redeemFor(holder)` — operator push before the deadline. */
+  evmRedeemFor = 'evm-redeem-for',
+  /** EVM: admin-signed `deferTerminationAsset(asset)`. */
+  evmDeferTerminationAsset = 'evm-defer-termination-asset',
+  /** EVM: admin-signed `resumeTerminationAsset(asset)`. */
+  evmResumeTerminationAsset = 'evm-resume-termination-asset',
+  /** EVM: admin-signed `sweepTerminationRemainder(asset)` after the deadline. */
+  evmSweepTerminationRemainder = 'evm-sweep-termination-remainder',
+  /** EVM: admin-signed `withdrawFees(asset)`. */
+  evmWithdrawFees = 'evm-withdraw-fees',
+  /** EVM: admin-signed `pause()`. */
+  evmPause = 'evm-pause',
+  /** EVM: admin-signed `unpause()`. */
+  evmUnpause = 'evm-unpause',
   all = 'all',
+}
+
+/**
+ * Status of the domain-event reconciliation for a confirmed EVM transaction.
+ * The webhook path is the fast path; the transaction-health checker is the
+ * durable retry path. A tx is only "fully processed" when this reaches
+ * `success`.
+ *
+ *   pending                 — awaiting first reconciliation or retrying after error.
+ *   success                 — every expected event was decoded and applied. reconciled_at set.
+ *   failed                  — terminal: reverted receipt or unrecoverable error.
+ *   manual_review_required  — retry cap hit while still pending. Explicit `retry`
+ *                             endpoint can reset it back to `pending`.
+ */
+export enum EvmReconciliationStatus {
+  pending = 'pending',
+  success = 'success',
+  failed = 'failed',
+  manual_review_required = 'manual_review_required',
+}
+
+/**
+ * Shape of a single entry in `transactions.expected_events`. Callers that
+ * broadcast admin transactions must attach a spec so the reconciler knows
+ * what must be present in the receipt for the tx to count as successful.
+ *   name  — one of the VAULT_ABI event names
+ *   count — required occurrences of that event (default 1)
+ */
+export interface ExpectedEventSpec {
+  name: string;
+  count?: number;
 }

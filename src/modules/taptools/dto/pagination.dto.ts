@@ -48,11 +48,11 @@ export class PaginationQueryDto {
 
   @ApiProperty({
     description: 'Vault ID to get custom asset prices from whitelist',
-    required: false,
+    required: true,
   })
-  @IsOptional()
   @IsString()
-  vaultId?: string;
+  @IsNotEmpty()
+  vaultId: string;
 }
 
 export class PaginationMetaDto {

@@ -69,6 +69,37 @@ export interface DistributionMetadata {
 }
 
 /**
+ * EVM distribution metadata, stored at `proposal.metadata.evmDistribution`.
+ *
+ * Deliberately NOT reusing `DistributionMetadata`. That type is Cardano-shaped
+ * — lovelace amounts and a `batches` array — and the batch-retry cron keys off
+ * `metadata.distribution.batches` to call the Cardano `retryFailedBatches`.
+ * Writing EVM state under that key would hand EVM proposals to Cardano retry
+ * logic. There are no batches here anyway: one on-chain call reserves the pot
+ * and holders claim it themselves.
+ */
+export interface EvmDistributionMetadata {
+  /** On-chain id from the `DistributionOpened` event. */
+  distributionId: string;
+  /** `address(0)` for native, else the ERC-20. */
+  asset: string;
+  /** Post-fee pot in base units. */
+  netPot: string;
+  /** `circulatingSupplyAt(timepoint)` — the payout denominator. */
+  supply: string;
+  /** Chain timestamp the shares are computed against. */
+  timepoint: string;
+  /** Unix seconds after which claims close and the remainder can be swept. */
+  deadline: string;
+  txHash: string | null;
+  openedAt: string;
+  /** Set once every snapshot holder with a share has been paid by the auto-claim cron. */
+  autoClaimCompletedAt?: string;
+  /** Failed auto-claim attempts per holder; a holder that keeps failing is skipped (it can still claim itself). */
+  autoClaimFailures?: Record<string, number>;
+}
+
+/**
  * Treasury balance information for UI
  */
 export class TreasuryBalanceDto {

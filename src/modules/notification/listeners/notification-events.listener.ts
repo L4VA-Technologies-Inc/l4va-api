@@ -72,10 +72,15 @@ export class NotificationEventsListener {
               headline: `The proposal ${event.proposalName} has been executed`,
               statusPhrase: 'been executed',
             }
-          : {
-              headline: `The proposal ${event.proposalName} has been rejected`,
-              statusPhrase: 'been rejected',
-            };
+          : event.actionStatus === 'ending_soon'
+            ? {
+                headline: `Time running out to vote on "${event.proposalName}"`,
+                statusPhrase: 'not received your vote yet and is ending soon',
+              }
+            : {
+                headline: `The proposal ${event.proposalName} has been rejected`,
+                statusPhrase: 'been rejected',
+              };
 
     await this.notificationService.sendBulkGovernanceEmailNotification(
       {
@@ -198,10 +203,16 @@ export class NotificationEventsListener {
 
   @OnEvent('vault.failed.email')
   async handleVaultFailedEmail(event: { vault: any }) {
+    const ownerId = event?.vault?.owner?.id;
+    if (!ownerId) {
+      this.logger.warn(`Skipping vault.failed.email for vault ${event?.vault?.id || 'unknown'}: missing owner id`);
+      return;
+    }
+
     const user = await this.userRepository.findOne({
-      where: { id: event.vault.owner.id },
+      where: { id: ownerId },
     });
-    if (!user.email) return;
+    if (!user?.email) return;
 
     await this.notificationService.sendFailedEmailNotification({
       email: user.email,
@@ -458,10 +469,11 @@ export class NotificationEventsListener {
     );
   }
 
-  @OnEvent('governance.vote_time_running_out') // Haven`t added
+  @OnEvent('governance.vote_time_running_out')
   async handleVoteTimeRunningOut(event: {
     vaultId: string;
     vaultName: string;
+    proposalId: string;
     proposalName: string;
     nonVoterIds: string[];
   }) {
@@ -474,6 +486,20 @@ export class NotificationEventsListener {
       },
       event.nonVoterIds
     );
+
+    try {
+      await this.sendGovernanceActionEmails({
+        vaultName: event.vaultName,
+        proposalId: event.proposalId,
+        proposalName: event.proposalName,
+        tokenHolderIds: event.nonVoterIds,
+        actionStatus: 'ending_soon',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send governance ending-soon emails for proposal ${event.proposalId}: ${error?.message || error}`
+      );
+    }
   }
 
   @OnEvent('distribution.claim_available')

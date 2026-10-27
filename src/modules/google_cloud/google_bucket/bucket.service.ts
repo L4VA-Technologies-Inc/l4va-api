@@ -370,6 +370,37 @@ export class GoogleCloudStorageService {
     }
   }
 
+  /**
+   * Store an AI-generated image as a square WebP and return its file entity.
+   * The same asset backs both the vault image and the vault token image.
+   */
+  async uploadGeneratedImage(buffer: Buffer, size = 640): Promise<FileEntity> {
+    try {
+      const processed = await sharp(buffer)
+        .resize(size, size, { fit: 'cover', position: 'center' })
+        .webp({ quality: 80, lossless: false, alphaQuality: 80 })
+        .toBuffer();
+
+      const fileKey = `${uuid()}`;
+      const uploadResult = await this.uploadFile(processed, fileKey, 'image/webp');
+      if (!uploadResult) throw new BadRequestException('Failed to upload generated image to Google Cloud Storage');
+
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+      const newFile = this.fileRepository.create({
+        file_key: uploadResult.Key,
+        file_url: `${protocol}${this.appHost}/api/v1/image/${uploadResult.Key}`,
+        file_name: `ai-generated-${fileKey}.webp`,
+        file_type: 'image/webp',
+      });
+
+      await this.fileRepository.save(newFile);
+      return newFile;
+    } catch (error) {
+      this.logger.error('Error uploading generated image:', error);
+      throw new BadRequestException('Failed to store generated image');
+    }
+  }
+
   /** Decodes `data:*;base64,...` payload into a buffer. */
   private bufferFromDataUrl(dataUrl: string): Buffer | null {
     const comma = dataUrl.indexOf(',');

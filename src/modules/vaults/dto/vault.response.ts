@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
+import { IndexConfig, VaultArchetype } from '../../../types/index-vault.types';
 import {
   VaultPrivacy,
   VaultStatus,
@@ -10,6 +11,7 @@ import {
   InvestmentWindowType,
   TerminationType,
   VaultFailureReason,
+  ChainType,
 } from '../../../types/vault.types';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -97,6 +99,16 @@ export class VaultShortResponse {
     expose: true,
   })
   totalValueAda: number;
+
+  @ApiProperty({
+    description: 'Total value of locked vaults in ETH',
+    example: 3500000,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  totalValueEth: number;
 
   @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({
@@ -187,6 +199,27 @@ export class VaultShortResponse {
     expose: { name: 'isOfficialPartner' },
   })
   isOfficialPartner: boolean;
+
+  @ApiProperty({ description: 'Blockchain the vault belongs to', enum: ChainType })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'chainType' },
+  })
+  chainType: ChainType;
+
+  @ApiProperty({ description: 'Product archetype of the vault', enum: VaultArchetype })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'vaultArchetype' },
+  })
+  vaultArchetype: VaultArchetype;
+
+  @ApiProperty({ description: 'Target basket of an index-weighted vault', required: false, nullable: true })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'indexConfig' },
+  })
+  indexConfig?: IndexConfig | null;
 }
 
 export class VaultFullResponse extends VaultShortResponse {
@@ -197,12 +230,43 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   type: VaultType;
 
+  @ApiProperty({
+    description:
+      'Minimum acquire threshold in native units (ADA for Cardano, ETH for Robinhood). Approximate JS number for display only.',
+    required: false,
+    nullable: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'minAcquireThreshold' },
+  })
+  minAcquireThreshold?: number | null;
+
+  @ApiProperty({
+    description:
+      'Exact minimum acquire threshold as a base-unit decimal string. Cardano: lovelace (1 ADA = 1e6). Robinhood: whole-ETH units as stored in the DB — the on-chain uint256 threshold (wei) is held in the V3 contract cycle, not here. Use this field when precision matters.',
+    required: false,
+    nullable: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'minAcquireThresholdRaw' },
+  })
+  minAcquireThresholdRaw?: string | null;
+
   @ApiProperty({ description: 'Required values cost for success acquire phase in ada' })
   @DtoRepresent({
     transform: false,
     expose: { name: 'requireReservedCostAda' },
   })
   requireReservedCostAda: number;
+
+  @ApiProperty({ description: 'Required values cost for success acquire phase in eth', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'requireReservedCostEth' },
+  })
+  requireReservedCostEth?: number;
 
   @ApiProperty({ description: 'Count of contributed assets  ' })
   @DtoRepresent({
@@ -337,6 +401,33 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: { name: 'protocolAcquiresFeeUsd' },
   })
   protocolAcquiresFeeUsd?: number;
+
+  @ApiProperty({
+    description: 'EVM protocol fee per asset entry, in wei as a decimal string',
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolFeePerAssetWei' },
+  })
+  protocolFeePerAssetWei?: string;
+
+  @ApiProperty({ description: 'EVM protocol fee for acquirers, in wei as a decimal string', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquiresFeeWei' },
+  })
+  protocolAcquiresFeeWei?: string;
+
+  @ApiProperty({
+    description: 'EVM on-chain acquire fee in bps, taken from the ETH raised when the vault locks',
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquireFeeBps' },
+  })
+  protocolAcquireFeeBps?: number;
 
   @ApiProperty({ description: 'Whether protocol fees are enabled', required: false })
   @DtoRepresent({

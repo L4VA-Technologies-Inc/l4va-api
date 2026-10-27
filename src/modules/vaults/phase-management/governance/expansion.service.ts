@@ -310,7 +310,7 @@ export class ExpansionService {
               proposal: { id: expansionProposal.id },
               type: ClaimType.EXPANSION,
               status: ClaimStatus.PENDING,
-              amount: Number(vtAmount),
+              amount: String(vtAmount),
               proposal_id: expansionProposal.id,
               description: `Expansion contribution: ${transaction.assets.length} asset(s) → ${Number(vtAmount) / decimalMultiplier} VT`,
               metadata: {
@@ -390,7 +390,7 @@ export class ExpansionService {
 
           for (const claim of savedClaims) {
             this.logger.log(
-              `Recalculated claim ${claim.id}: ${claim.amount / decimalMultiplier} VT (${recalculatedClaimAmounts.get(claim.id) || 0} base units)`
+              `Recalculated claim ${claim.id}: ${Number(claim.amount) / decimalMultiplier} VT (${recalculatedClaimAmounts.get(claim.id) || 0} base units)`
             );
           }
 
@@ -795,7 +795,7 @@ export class ExpansionService {
               proposal: { id: expansionProposal.id },
               type: ClaimType.ACQUIRER,
               status: ClaimStatus.PENDING,
-              amount: Number(vtAmount),
+              amount: String(vtAmount),
               proposal_id: expansionProposal.id,
               description: `Acquire expansion: ${transaction.amount} ADA → ${Number(vtAmount) / decimalMultiplier} VT`,
               is_treasury_claim: true,

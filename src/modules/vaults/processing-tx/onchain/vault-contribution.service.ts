@@ -140,7 +140,10 @@ export class VaultContributionService {
 
       // Determine what tokens the user is contributing
       if (isAda) {
-        quantity = params.outputs[0].assets[0].quantity * 1000000;
+        // Cardano acquire/contribution API passes lovelace in base units.
+        // Do not scale again, otherwise 230 ADA (230_000_000 lovelace)
+        // becomes 230_000_000 ADA.
+        quantity = Number(params.outputs[0].assets[0].quantity || 0);
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
         const { utxos, totalAdaCollected } = await getUtxosExtract(

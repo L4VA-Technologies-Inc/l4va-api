@@ -37,13 +37,17 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 import { WayUpModule } from './modules/wayup/wayup.module';
 
+import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
+import { BurnLockModule } from '@/modules/burn-lock/burn-lock.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
 import { PresaleModule } from '@/modules/presale/presale.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { StakeModule } from '@/modules/stake/stake.module';
+import { TokensModule } from '@/modules/tokens/tokens.module';
+import { UniswapModule } from '@/modules/uniswap/uniswap.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 @Module({
@@ -52,6 +56,8 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
+      // ENV_FILE lets a second local stack (e.g. Robinhood mainnet) run from its own file.
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     BullModule.forRootAsync({
       inject: [ConfigService],
@@ -61,6 +67,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
           port: 6379,
           role: 'master',
           password: configService.get<string>('REDIS_PASSWORD'),
+          db: Number(configService.get<string>('REDIS_DB') ?? 0),
         },
       }),
     }),
@@ -91,6 +98,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     SystemSettingsModule,
     PriceModule,
     AuthModule,
+    AiModule,
     AlertsModule,
     AssetsModule,
     BlockchainModule,
@@ -116,9 +124,12 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     EventEmitterModule.forRoot(),
     PresetsModule,
     PresaleModule,
+    BurnLockModule,
     OgModule,
     RewardsModule,
     StakeModule,
+    TokensModule,
+    UniswapModule,
   ],
   controllers: [AppController],
   providers: [

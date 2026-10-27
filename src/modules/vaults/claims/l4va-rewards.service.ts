@@ -84,7 +84,7 @@ export class L4vaRewardsService {
     // L4VA Token Config
     this.L4VA_POLICY_ID = this.configService.get<string>('L4VA_POLICY_ID');
     this.L4VA_ASSET_NAME = this.configService.get<string>('L4VA_ASSET_NAME');
-    this.L4VA_DECIMALS = this.configService.get<number>('L4VA_DECIMALS') || 3;
+    this.L4VA_DECIMALS = this.configService.get<number>('L4VA_DECIMALS') || 6;
     this.L4VA_MONTHLY_BUDGET = this.configService.get<number>('L4VA_MONTHLY_BUDGET');
 
     // Admin Config (L4VA tokens distributed from admin wallet)
@@ -275,7 +275,7 @@ export class L4vaRewardsService {
       user: { id: vault.owner.id } as any,
       vault: { id: vaultId } as any,
       type: ClaimType.L4VA,
-      amount: creatorAmount,
+      amount: String(creatorAmount),
       status: ClaimStatus.PENDING,
       metadata: {
         l4va_role: 'AU',
@@ -309,7 +309,7 @@ export class L4vaRewardsService {
         user: { id: user.id } as any,
         vault: { id: vaultId } as any,
         type: ClaimType.L4VA,
-        amount: holderAmount,
+        amount: String(holderAmount),
         status: ClaimStatus.PENDING,
         metadata: {
           l4va_role: 'AC/VI',

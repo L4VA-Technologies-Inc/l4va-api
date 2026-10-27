@@ -2,7 +2,10 @@ import { ApiProperty } from '@nestjs/swagger';
 
 import { FungibleTokenDto, NonFungibleTokenDto } from './create-proposal.req';
 
+import { PaginationDto } from '@/modules/vaults/dto/pagination.dto';
 import { ProposalStatus } from '@/types/proposal.types';
+
+export class GetProposalsDto extends PaginationDto {}
 
 // For base proposal data
 class BaseProposalDto {

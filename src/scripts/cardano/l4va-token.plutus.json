@@ -1,0 +1,248 @@
+{
+  "preamble": {
+    "title": "l4va/l4va-token",
+    "description": "L4VA Cardano token: one-shot 100M mint to treasury, holder burns forever",
+    "version": "0.1.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.10+b25afa2"
+    },
+    "license": "Apache-2.0"
+  },
+  "validators": [
+    {
+      "title": "l4va.l4va.mint",
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/l4va~1Action"
+        }
+      },
+      "parameters": [
+        {
+          "title": "seed",
+          "schema": {
+            "$ref": "#/definitions/cardano~1transaction~1OutputReference"
+          }
+        },
+        {
+          "title": "treasury",
+          "schema": {
+            "$ref": "#/definitions/cardano~1address~1Address"
+          }
+        }
+      ],
+      "compiledCode": "59029a0101002229800aba2aba1aba0aab9faab9eaab9dab9a488888896600264653001300800198041804800cdc3a400130080024888966002600460106ea800e266446644b300130060018acc004c034dd5004400a2c80722b300130030018acc004c034dd5004400a2c80722c805900b099192cc004c018c030dd500444c966002660026eb0c044c038dd5003119baf3012300f375400202d15980099baf374c00498010fa1444c3456411b00005af3107a4000008998009bac301130123012300e375400c4b30013375e6024601e6ea8004056266e1cc966002600c601e6ea80062900044dd6980998081baa001403864b30013006300f375400314c0103d87a8000899198008009bab30143011375400444b30010018a6103d87a8000899192cc004cdc8a45044c345641000018acc004cdc7a441044c34564100001899ba548000cc058c0500092f5c114c0103d87a80004049133004004301800340486eb8c048004c054005013201c33004375660246026601e6ea8004019208080d287e2bc2d8a50403514a08062294100c111919800800801912cc00400629422b3001300330140018a51899801001180a800a01e40491325980080140062b300130120028992cc004cdc79bae300e0014881044c34564100899b88375a601e00290004528201a3011002800a01e403c294100b192cc004c00cc030dd5000c52f5bded8c1137566020601a6ea800500b198009bab300f3010301030103010300c375400800644646600200200644b30010018a60103d87a8000899192cc004cdc8802800c56600266e3c014006266e9520003301330110024bd7045300103d87a8000403d1330040043015003403c6eb8c03c004c04800501018051baa006375c601860126ea800cdc3a400516401c300800130033754011149a26cac8009",
+      "hash": "9d0092e0d6529ddd8dee003709e87a83717df330f2120bca0c522f3b"
+    },
+    {
+      "title": "l4va.l4va.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "parameters": [
+        {
+          "title": "seed",
+          "schema": {
+            "$ref": "#/definitions/cardano~1transaction~1OutputReference"
+          }
+        },
+        {
+          "title": "treasury",
+          "schema": {
+            "$ref": "#/definitions/cardano~1address~1Address"
+          }
+        }
+      ],
+      "compiledCode": "59029a0101002229800aba2aba1aba0aab9faab9eaab9dab9a488888896600264653001300800198041804800cdc3a400130080024888966002600460106ea800e266446644b300130060018acc004c034dd5004400a2c80722b300130030018acc004c034dd5004400a2c80722c805900b099192cc004c018c030dd500444c966002660026eb0c044c038dd5003119baf3012300f375400202d15980099baf374c00498010fa1444c3456411b00005af3107a4000008998009bac301130123012300e375400c4b30013375e6024601e6ea8004056266e1cc966002600c601e6ea80062900044dd6980998081baa001403864b30013006300f375400314c0103d87a8000899198008009bab30143011375400444b30010018a6103d87a8000899192cc004cdc8a45044c345641000018acc004cdc7a441044c34564100001899ba548000cc058c0500092f5c114c0103d87a80004049133004004301800340486eb8c048004c054005013201c33004375660246026601e6ea8004019208080d287e2bc2d8a50403514a08062294100c111919800800801912cc00400629422b3001300330140018a51899801001180a800a01e40491325980080140062b300130120028992cc004cdc79bae300e0014881044c34564100899b88375a601e00290004528201a3011002800a01e403c294100b192cc004c00cc030dd5000c52f5bded8c1137566020601a6ea800500b198009bab300f3010301030103010300c375400800644646600200200644b30010018a60103d87a8000899192cc004cdc8802800c56600266e3c014006266e9520003301330110024bd7045300103d87a8000403d1330040043015003403c6eb8c03c004c04800501018051baa006375c601860126ea800cdc3a400516401c300800130033754011149a26cac8009",
+      "hash": "9d0092e0d6529ddd8dee003709e87a83717df330f2120bca0c522f3b"
+    }
+  ],
+  "definitions": {
+    "ByteArray": {
+      "title": "ByteArray",
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "Option$StakeCredential": {
+      "title": "Option",
+      "anyOf": [
+        {
+          "title": "Some",
+          "description": "An optional value.",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/StakeCredential"
+            }
+          ]
+        },
+        {
+          "title": "None",
+          "description": "Nothing.",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "PaymentCredential": {
+      "title": "PaymentCredential",
+      "description": "A general structure for representing an on-chain `Credential`.\n\n Credentials are always one of two kinds: a direct public/private key\n pair, or a script (native or Plutus).",
+      "anyOf": [
+        {
+          "title": "VerificationKey",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/VerificationKeyHash"
+            }
+          ]
+        },
+        {
+          "title": "Script",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": [
+            {
+              "$ref": "#/definitions/ScriptHash"
+            }
+          ]
+        }
+      ]
+    },
+    "ScriptHash": {
+      "title": "ScriptHash",
+      "dataType": "bytes"
+    },
+    "StakeCredential": {
+      "title": "StakeCredential",
+      "description": "Represent a type of object that can be represented either inline (by hash)\n or via a reference (i.e. a pointer to an on-chain location).\n\n This is mainly use for capturing pointers to a stake credential\n registration certificate in the case of so-called pointer addresses.",
+      "anyOf": [
+        {
+          "title": "Inline",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/cardano~1address~1Credential"
+            }
+          ]
+        },
+        {
+          "title": "Pointer",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": [
+            {
+              "title": "slot_number",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "transaction_index",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "certificate_index",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "VerificationKeyHash": {
+      "title": "VerificationKeyHash",
+      "dataType": "bytes"
+    },
+    "cardano/address/Address": {
+      "title": "Address",
+      "description": "A Cardano `Address` typically holding one or two credential references.\n\n Note that legacy bootstrap addresses (a.k.a. 'Byron addresses') are\n completely excluded from Plutus contexts. Thus, from an on-chain\n perspective only exists addresses of type 00, 01, ..., 07 as detailed\n in [CIP-0019 :: Shelley Addresses](https://github.com/cardano-foundation/CIPs/tree/master/CIP-0019/#shelley-addresses).",
+      "anyOf": [
+        {
+          "title": "Address",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "payment_credential",
+              "$ref": "#/definitions/PaymentCredential"
+            },
+            {
+              "title": "stake_credential",
+              "$ref": "#/definitions/Option$StakeCredential"
+            }
+          ]
+        }
+      ]
+    },
+    "cardano/address/Credential": {
+      "title": "Credential",
+      "description": "A general structure for representing an on-chain `Credential`.\n\n Credentials are always one of two kinds: a direct public/private key\n pair, or a script (native or Plutus).",
+      "anyOf": [
+        {
+          "title": "VerificationKey",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/VerificationKeyHash"
+            }
+          ]
+        },
+        {
+          "title": "Script",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": [
+            {
+              "$ref": "#/definitions/ScriptHash"
+            }
+          ]
+        }
+      ]
+    },
+    "cardano/transaction/OutputReference": {
+      "title": "OutputReference",
+      "description": "An `OutputReference` is a unique reference to an output on-chain. The `output_index`\n corresponds to the position in the output list of the transaction (identified by its id)\n that produced that output",
+      "anyOf": [
+        {
+          "title": "OutputReference",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "transaction_id",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "output_index",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "l4va/Action": {
+      "title": "Action",
+      "anyOf": [
+        {
+          "title": "Mint",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "Burn",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    }
+  }
+}

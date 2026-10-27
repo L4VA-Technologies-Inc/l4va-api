@@ -157,7 +157,7 @@ export class ClaimsVerificationService {
     if (expectedClaimsByType.acquirer.length > 0) {
       const minMultiplier = Math.min(...expectedClaimsByType.acquirer.map(c => c.multiplier));
       for (const claim of expectedClaimsByType.acquirer) {
-        claim.vtAmount = minMultiplier * claim.adaSent * 1_000_000;
+        claim.vtAmount = minMultiplier * claim.adaSent;
         claim.multiplier = minMultiplier;
         expectedClaims.set(claim.transactionId, {
           vtAmount: claim.vtAmount,

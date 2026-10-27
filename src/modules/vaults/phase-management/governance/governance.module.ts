@@ -8,6 +8,9 @@ import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module'
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { DistributionService } from './distribution.service';
+import { EvmDistributionService } from './evm-distribution.service';
+import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
+import { EvmSnapshotService } from './evm-snapshot.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceFeeService } from './governance-fee.service';
@@ -24,6 +27,7 @@ import { VoteCountingService } from './vote-counting.service';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { TokenVerification } from '@/database/token-verification.entity';
@@ -39,6 +43,7 @@ import { RedisModule } from '@/modules/redis/redis.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
@@ -57,6 +62,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       VaultTreasuryWallet,
       AssetsWhitelistEntity,
       TokenVerification,
+      EvmExternalPosition,
     ]),
     RedisModule,
     SnapshotModule,
@@ -72,12 +78,16 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     RewardsModule,
     WayUpPricingModule,
     TapToolsPricingModule,
+    IndexVaultModule,
   ],
   controllers: [GovernanceController, TerminationController],
   providers: [
     GovernanceService,
     GovernanceFeeService,
     GovernanceExecutionService,
+    EvmGovernanceExecutionService,
+    EvmSnapshotService,
+    EvmDistributionService,
     GovernanceRefundService,
     ProposalSchedulerService,
     ExpansionService,
@@ -103,6 +113,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     GovernanceExecutionService,
     TerminationService,
     DistributionService,
+    EvmDistributionService,
     ExpansionService,
   ],
 })

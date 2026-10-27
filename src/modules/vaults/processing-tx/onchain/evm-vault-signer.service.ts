@@ -1,0 +1,439 @@
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { decodeEventLog, encodeAbiParameters, keccak256, parseAbiItem, parseEther, type Address, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+
+import { CreateVaultReq } from '../../dto/createVault.req';
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
+import { EvmContractReader } from './evm-contract-reader.service';
+
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { InvestmentWindowType, VaultStatus } from '@/types/vault.types';
+
+// ---------------------------------------------------------------------------
+// ABI parameter definitions — mirrors V4 VaultTypes.sol exactly.
+// V4 changes vs V3:
+//   - added `archetype` (bytes32) and `vaultDeployer` (address) for deployer-registry
+//   - `admin` split into `creationApprover` (signs config, no runtime power)
+//     and `authority` (runtime lifecycle power, two-step transferable)
+// Keep in sync with the Solidity structs if the contract is ever upgraded.
+// ---------------------------------------------------------------------------
+
+const TIME_WINDOW = {
+  type: 'tuple' as const,
+  components: [
+    { name: 'start', type: 'uint64' as const },
+    { name: 'end', type: 'uint64' as const },
+  ],
+};
+
+const CYCLE_CONFIG = {
+  type: 'tuple' as const,
+  components: [
+    { name: 'assetWindow', ...TIME_WINDOW },
+    { name: 'acquireWindow', ...TIME_WINDOW },
+    { name: 'minAcquireThreshold', type: 'uint256' as const },
+    { name: 'adaPairVtPerNativeUnit', type: 'uint256' as const },
+    { name: 'assetWhitelist', type: 'address[]' as const },
+    { name: 'contributorWhitelist', type: 'address[]' as const },
+  ],
+};
+
+/** ABI type for the full VaultConfig struct — used by encodeAbiParameters. */
+const VAULT_CONFIG_ABI = [
+  {
+    name: 'cfg',
+    type: 'tuple' as const,
+    components: [
+      { name: 'vaultId', type: 'bytes32' as const },
+      { name: 'archetype', type: 'bytes32' as const },
+      { name: 'vaultDeployer', type: 'address' as const },
+      { name: 'creator', type: 'address' as const },
+      { name: 'creationApprover', type: 'address' as const },
+      { name: 'authority', type: 'address' as const },
+      { name: 'mintingKey', type: 'address' as const },
+      { name: 'treasury', type: 'address' as const },
+      { name: 'vtName', type: 'string' as const },
+      { name: 'vtSymbol', type: 'string' as const },
+      { name: 'vtDecimals', type: 'uint8' as const },
+      { name: 'initialCycle', ...CYCLE_CONFIG },
+    ],
+  },
+] as const;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface EvmCycleConfig {
+  assetWindow: { start: bigint; end: bigint };
+  acquireWindow: { start: bigint; end: bigint };
+  minAcquireThreshold: bigint;
+  adaPairVtPerNativeUnit: bigint;
+  assetWhitelist: Address[];
+  contributorWhitelist: Address[];
+}
+
+export interface EvmVaultConfig {
+  vaultId: Hex;
+  archetype: Hex;
+  vaultDeployer: Address;
+  creator: Address;
+  creationApprover: Address;
+  authority: Address;
+  mintingKey: Address;
+  treasury: Address;
+  vtName: string;
+  vtSymbol: string;
+  vtDecimals: number;
+  initialCycle: EvmCycleConfig;
+}
+
+export interface EvmCreationPayload {
+  dbVaultId: string;
+  transactionId: string;
+  evmVaultConfig: EvmVaultConfig;
+  adminNonce: string;
+  deadline: number;
+  adminSignature: Hex;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+const VAULT_INITIALIZED_EVENT = parseAbiItem(
+  'event VaultInitialized(bytes32 indexed vaultId, address indexed admin, address mintingKey, address indexed vaultToken)'
+);
+
+/** A form date arrives as epoch ms (number or numeric string) or an ISO string. */
+function toEpochMs(value: string | number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : new Date(value).getTime();
+}
+
+@Injectable()
+export class EvmVaultSignerService {
+  private readonly logger = new Logger(EvmVaultSignerService.name);
+
+  private readonly factoryAddress: Address;
+  private readonly adminAddress: Address;
+  private readonly mintingSignerAddress: Address;
+  private readonly treasuryAddress: Address;
+  private readonly chainId: number;
+  private readonly adminPrivateKey: Hex;
+
+  constructor(
+    @InjectRepository(Vault)
+    private readonly vaultsRepository: Repository<Vault>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+    private readonly configService: ConfigService,
+    private readonly transactionsService: TransactionsService,
+    private readonly contractReader: EvmContractReader
+  ) {
+    this.factoryAddress = this.configService.get<string>('EVM_FACTORY_ADDRESS') as Address;
+    this.adminAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS') as Address;
+    this.mintingSignerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS') as Address;
+    this.treasuryAddress = this.configService.get<string>('EVM_TREASURY_ADDRESS') as Address;
+    this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
+    this.adminPrivateKey = this.configService.get<string>('EVM_ADMIN_PRIVATE_KEY') as Hex;
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API
+  // --------------------------------------------------------------------------
+
+  /**
+   * Prepare EVM vault creation with an existing vault entity (vault already saved in DB).
+   * Vault creation is now handled by vaults.service.ts to consolidate all vault creation logic.
+   */
+  async prepareVaultCreationWithExistingVault(
+    userId: string,
+    dbVaultId: string,
+    evmVaultId: Hex,
+    data: CreateVaultReq
+  ): Promise<Omit<EvmCreationPayload, 'dbVaultId'>> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'address'],
+    });
+    if (!user) throw new BadRequestException('User not found');
+
+    const cfg = this.buildVaultConfig(evmVaultId, user.address as Address, data);
+
+    const adminNonce = BigInt(Date.now());
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+
+    const adminSignature = await this.signCreationAuthorization(cfg, adminNonce, deadline);
+
+    // Create transaction record for vault creation
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: dbVaultId,
+      type: TransactionType.createVault,
+      userId,
+      assets: [],
+    });
+
+    this.logger.log(
+      `EVM vault prepared (existing) — dbId=${dbVaultId} evmVaultId=${cfg.vaultId} txId=${transaction.id}`
+    );
+
+    return {
+      transactionId: transaction.id,
+      evmVaultConfig: this.serializeBigInts(cfg) as EvmVaultConfig,
+      adminNonce: adminNonce.toString(),
+      deadline: Number(deadline),
+      adminSignature,
+    };
+  }
+
+  async confirmVaultCreation(userId: string, dbVaultId: string, txHash: string, transactionId: string): Promise<void> {
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: dbVaultId },
+      relations: ['owner'],
+    });
+    if (!vault) throw new BadRequestException('Vault not found');
+    if (vault.owner.id !== userId) throw new BadRequestException('Not the vault owner');
+
+    try {
+      // Update transaction record with the tx hash
+      await this.transactionsService.updateTransactionHash(transactionId, txHash);
+
+      // Mark vault as published. The actual vault contract address will be filled
+      // when the VaultCreated event arrives via webhook (see updateVaultFromCreatedEvent).
+      vault.vault_status = VaultStatus.published;
+      vault.publication_hash = txHash;
+      vault.last_update_tx_hash = txHash;
+      // Note: contract_address remains null/factory until webhook updates it
+      await this.vaultsRepository.save(vault);
+
+      this.logger.log(`EVM vault confirmed — dbId=${dbVaultId} txHash=${txHash} txId=${transactionId}`);
+    } catch (error) {
+      // Update transaction status to failed on error
+      await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
+      this.logger.error(`Failed to confirm vault creation: ${(error as Error).message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Update vault contract address from VaultCreated event (called by webhook handler).
+   * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
+   * topics[0] = event signature, topics[1] = vaultId, topics[2] = vault address, topics[3] = creator
+   * data = abi.encode(admin, vaultToken)
+   */
+  async updateVaultFromCreatedEvent(txHash: string, topics: string[], _data: string): Promise<void> {
+    if (topics.length < 4) {
+      this.logger.warn(`VaultCreated event has insufficient topics: ${topics.length}`);
+      return;
+    }
+
+    const evmVaultId = topics[1]; // indexed bytes32
+    const vaultAddress = '0x' + topics[2].slice(-40); // indexed address (last 20 bytes)
+
+    const vault = await this.vaultsRepository.findOne({
+      where: { evm_vault_id: evmVaultId },
+    });
+
+    if (!vault) {
+      this.logger.debug(`VaultCreated event for unknown evmVaultId=${evmVaultId} (might be external vault)`);
+      return;
+    }
+
+    // The factory does not check who approved the config, so anyone could create a vault under
+    // our vaultId first. Bind it only if its creator, authority and minting key are the ones we signed for.
+    const mismatch = await this.findCreatedVaultMismatch(txHash, vaultAddress as Address, topics, vault);
+    if (mismatch) {
+      this.logger.error(
+        `Refusing to bind VaultCreated for evmVaultId=${evmVaultId} vault=${vaultAddress} tx=${txHash}: ${mismatch}`
+      );
+      return;
+    }
+
+    // Update the vault contract address
+    vault.contract_address = vaultAddress.toLowerCase();
+    await this.vaultsRepository.save(vault);
+
+    this.logger.log(
+      `Vault contract address updated from VaultCreated event — ` +
+        `dbId=${vault.id} evmVaultId=${evmVaultId} vaultAddr=${vaultAddress} txHash=${txHash}`
+    );
+  }
+
+  /** Why a created vault does not match the config we authorized, or null when it does. */
+  private async findCreatedVaultMismatch(
+    txHash: string,
+    vaultAddress: Address,
+    topics: string[],
+    vault: Vault
+  ): Promise<string | null> {
+    const creator = ('0x' + topics[3].slice(-40)).toLowerCase();
+    const owner = (
+      await this.vaultsRepository.findOne({
+        where: { id: vault.id },
+        relations: ['owner'],
+        select: { id: true, owner: { id: true, address: true } },
+      })
+    )?.owner;
+    if (owner?.address && owner.address.toLowerCase() !== creator) {
+      return `creator ${creator} is not the vault owner ${owner.address}`;
+    }
+
+    const receipt = await this.contractReader.publicClient.getTransactionReceipt({
+      hash: txHash as Hex,
+    });
+    const initialized = receipt.logs
+      .filter(log => log.address.toLowerCase() === vaultAddress.toLowerCase())
+      .map(log => {
+        try {
+          return decodeEventLog({
+            abi: [VAULT_INITIALIZED_EVENT],
+            data: log.data,
+            topics: log.topics,
+          });
+        } catch {
+          return null;
+        }
+      })
+      .find(Boolean);
+    if (!initialized) return 'no VaultInitialized event from the vault in this transaction';
+
+    const { admin, mintingKey } = initialized.args as {
+      admin: Address;
+      mintingKey: Address;
+    };
+    if (admin.toLowerCase() !== this.adminAddress.toLowerCase()) return `authority ${admin} is not ours`;
+    if (mintingKey.toLowerCase() !== this.mintingSignerAddress.toLowerCase()) {
+      return `minting key ${mintingKey} is not ours`;
+    }
+    return null;
+  }
+
+  // --------------------------------------------------------------------------
+  // EIP-712 signing
+  // --------------------------------------------------------------------------
+
+  private async signCreationAuthorization(cfg: EvmVaultConfig, adminNonce: bigint, deadline: bigint): Promise<Hex> {
+    const configHash = this.computeConfigHash(cfg);
+
+    const account = privateKeyToAccount(this.adminPrivateKey);
+
+    const signature = await account.signTypedData({
+      domain: {
+        name: 'L4VA-VaultFactory',
+        version: '1',
+        chainId: this.chainId,
+        verifyingContract: this.factoryAddress,
+      },
+      types: {
+        CreationAuthorization: [
+          { name: 'creator', type: 'address' },
+          { name: 'configHash', type: 'bytes32' },
+          { name: 'adminNonce', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+        ],
+      },
+      primaryType: 'CreationAuthorization',
+      message: {
+        creator: cfg.creator,
+        configHash,
+        adminNonce,
+        deadline,
+      },
+    });
+
+    return signature;
+  }
+
+  /** keccak256(abi.encode(cfg)) — mirrors VaultCreationAuthorizations.configHash(). */
+  private computeConfigHash(cfg: EvmVaultConfig): Hex {
+    const encoded = encodeAbiParameters(VAULT_CONFIG_ABI, [cfg as any]);
+    return keccak256(encoded);
+  }
+
+  // --------------------------------------------------------------------------
+  // VaultConfig builder
+  // --------------------------------------------------------------------------
+
+  private buildVaultConfig(evmVaultId: Hex, creatorAddress: Address, data: CreateVaultReq): EvmVaultConfig {
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const oneDay = BigInt(86400);
+
+    // Asset (contribution) window — default 7 days from now if not specified
+    const assetWindowStart = now;
+    const assetWindowEnd = data.contributionDuration
+      ? now + BigInt(Math.floor(Number(data.contributionDuration) / 1000))
+      : now + oneDay * 7n;
+
+    // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
+    // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
+    const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
+    // An acquire-only vault can schedule its acquire window for a later date; the
+    // contract keeps acquisitions closed until then. A date already past opens now.
+    const scheduledStart =
+      data.isAcquireOnly && data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
+        ? BigInt(Math.floor(toEpochMs(data.acquireOpenWindowTime) / 1000))
+        : 0n;
+    const acquireStart = scheduledStart > now ? scheduledStart : now;
+    const acquireWindowStart = skipsAcquirePhase ? 0n : acquireStart;
+    const acquireWindowEnd = skipsAcquirePhase
+      ? 0n
+      : data.acquireWindowDuration
+        ? acquireStart + BigInt(Math.floor(Number(data.acquireWindowDuration) / 1000))
+        : acquireStart + oneDay * 7n;
+
+    return {
+      vaultId: evmVaultId,
+      archetype: '0xaf85f1959fc2aa8b532f1218046c19fa780e1da2664cec6949ee750524d8ccfd' as Hex, // BatchVaultDeployer.BATCH = keccak256("L4VA.Vault.Batch")
+      vaultDeployer: this.configService.get<string>('EVM_BATCH_DEPLOYER_ADDRESS') as Address,
+      creator: creatorAddress,
+      creationApprover: this.adminAddress,
+      authority: this.adminAddress,
+      mintingKey: this.mintingSignerAddress,
+      treasury: this.treasuryAddress,
+      vtName: data.name,
+      vtSymbol: (data.vaultTokenTicker || 'VT').toUpperCase(),
+      vtDecimals: 18,
+      initialCycle: {
+        assetWindow: { start: assetWindowStart, end: assetWindowEnd },
+        acquireWindow: { start: acquireWindowStart, end: acquireWindowEnd },
+        // The request carries ETH (not wei), so it is converted here; the DB keeps its own
+        // wei copy. The cycle cancels and refunds if less than this is raised.
+        minAcquireThreshold:
+          data.minAcquireThreshold != null && Number(data.minAcquireThreshold) > 0
+            ? parseEther(String(data.minAcquireThreshold))
+            : 0n,
+        // V3: LP-pair multiplier only. Contribution-time rates are gone —
+        // final VT / native allocations are committed off-chain and
+        // published on-chain as a Merkle root at `closeCycle`.
+        adaPairVtPerNativeUnit: 0n,
+        assetWhitelist: [],
+        contributorWhitelist: [],
+      },
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Serialization helpers
+  // --------------------------------------------------------------------------
+
+  /** Recursively convert BigInt values to strings so Express can JSON.stringify the response.
+   *  The frontend's normalizeBigInts() in useCreateEvmVault.js converts them back before wagmi. */
+  private serializeBigInts(obj: unknown): unknown {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'bigint') return obj.toString();
+    if (Array.isArray(obj)) return obj.map(v => this.serializeBigInts(v));
+    if (typeof obj === 'object') {
+      return Object.fromEntries(
+        Object.entries(obj as Record<string, unknown>).map(([k, v]) => [k, this.serializeBigInts(v)])
+      );
+    }
+    return obj;
+  }
+}

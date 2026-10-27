@@ -1,6 +1,7 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
@@ -21,7 +22,7 @@ import {
   GetTransactionType,
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 @Injectable()
@@ -42,7 +43,8 @@ export class TransactionsService {
     private readonly proposalRepository: Repository<Proposal>,
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService,
-    private readonly gcsService: GoogleCloudStorageService
+    private readonly gcsService: GoogleCloudStorageService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -53,7 +55,13 @@ export class TransactionsService {
     vault_id: string;
     type: TransactionType;
     assets: Asset[];
-    amount?: number;
+    /**
+     * Smallest units (lovelace / wei). Accepts a decimal string so wei above
+     * Number.MAX_SAFE_INTEGER is stored exactly in the decimal(30,0) column —
+     * note the entity reads it back via parseFloat, so callers dealing in wei
+     * should treat the metadata copy as authoritative.
+     */
+    amount?: number | string;
     userId?: string;
     fee?: number;
     metadata?: object;
@@ -65,7 +73,7 @@ export class TransactionsService {
       type: data.type,
       status: TransactionStatus.created,
       assets: data.assets,
-      amount: data.amount,
+      amount: data.amount as number,
       user_id: data.userId,
       fee: data.fee,
       metadata: data.metadata,
@@ -83,11 +91,12 @@ export class TransactionsService {
       throw new NotFoundException('Transaction not found');
     }
 
-    // Handle metadata structure for acquire transactions
-    // New format: { assets: [...], isExpansion: boolean }
-    // Old format: [...] (array directly)
+    // Handle metadata structure:
+    // - Contribute: array [...] OR { assets: [...], evmChildTxHashes: [...] }
+    // - Acquire: { assets: [...], isExpansion: boolean } OR [...] (legacy)
     let pendingAssets = transaction.metadata || [];
-    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
+    if (transaction.metadata && !Array.isArray(transaction.metadata)) {
+      // Metadata is an object - extract the assets array
       pendingAssets = (transaction.metadata as any).assets || [];
     }
 
@@ -104,12 +113,33 @@ export class TransactionsService {
 
     if (transaction.type === TransactionType.acquire) {
       pendingAssets.forEach(assetItem => {
+        const rawType = String(assetItem.type ?? assetItem.asset_type ?? '')
+          .trim()
+          .toLowerCase();
+        const policyId = String(assetItem.policyId ?? assetItem.policy_id ?? '')
+          .trim()
+          .toLowerCase();
+        const assetName = String(assetItem.assetName ?? assetItem.asset_id ?? '')
+          .trim()
+          .toLowerCase();
+        const isNativeEthAddress = policyId === '0x0000000000000000000000000000000000000000';
+
+        // Acquire flow supports only native assets: ADA (Cardano) or ETH (EVM).
+        if (rawType && rawType !== AssetType.ADA && rawType !== AssetType.ETH) {
+          throw new BadRequestException(
+            `Invalid acquire asset type "${rawType}". Acquire supports only "${AssetType.ADA}" or "${AssetType.ETH}".`
+          );
+        }
+
+        const resolvedType: AssetType =
+          rawType === AssetType.ETH || isNativeEthAddress || assetName === 'eth' ? AssetType.ETH : AssetType.ADA;
+
         assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
-          type: AssetType.ADA, // Using ADA type for acquire
-          policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          type: resolvedType,
+          policy_id: policyId,
+          asset_id: assetName || (resolvedType === AssetType.ETH ? 'eth' : ''),
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
@@ -128,7 +158,12 @@ export class TransactionsService {
           return { assetItem, blockfrostMetadata: null };
         }
 
-        // Otherwise fetch from Blockfrost
+        // Skip Blockfrost for EVM assets (Blockfrost is Cardano-specific)
+        if (assetItem.policyId?.startsWith('0x')) {
+          return { assetItem, blockfrostMetadata: null };
+        }
+
+        // Otherwise fetch from Blockfrost for Cardano assets
         try {
           const unit = assetItem.policyId + assetItem.assetName;
           const assetInfo = await this.blockfrost.assetsById(unit);
@@ -217,7 +252,7 @@ export class TransactionsService {
           vault: { id: transaction.vault_id } as Vault,
           type: assetItem.type,
           policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          asset_id: assetItem.assetName || '', // Default to empty string for EVM ERC20 tokens
           quantity: rawQuantity, // Store raw blockchain quantity
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
@@ -249,8 +284,12 @@ export class TransactionsService {
 
       await this.assetRepository.save(assetsToCreate);
 
-      // Clear metadata after successful asset creation
-      await this.transactionRepository.update({ id: transaction.id }, { metadata: null });
+      // Preserve evmChildTxHashes so the reconciler can find parent transactions for child tx hashes.
+      const evmChildTxHashes = (transaction.metadata as any)?.evmChildTxHashes;
+      await this.transactionRepository.update(
+        { id: transaction.id },
+        { metadata: evmChildTxHashes ? { evmChildTxHashes } : null }
+      );
     }
 
     return {
@@ -599,10 +638,21 @@ export class TransactionsService {
       return 0;
     }
 
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<
+      Vault,
+      | 'id'
+      | 'chain_type'
+      | 'acquire_reserve'
+      | 'require_reserved_cost_ada'
+      | 'require_reserved_cost_usd'
+      | 'total_assets_cost_ada'
+      | 'total_assets_cost_usd'
+      | 'total_acquired_value_ada'
+    > = await this.vaultRepository.findOne({
       where: { id: transaction.vault_id },
       select: [
         'id',
+        'chain_type',
         'acquire_reserve',
         'require_reserved_cost_ada',
         'require_reserved_cost_usd',
@@ -634,7 +684,6 @@ export class TransactionsService {
       }
     );
 
-    // Calculate and update vault values
     const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(transaction.vault_id);
 
     await this.vaultRepository.update(vault.id, {
@@ -642,6 +691,7 @@ export class TransactionsService {
       require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
       total_assets_cost_ada: assetsPrices.totalValueAda,
       total_assets_cost_usd: assetsPrices.totalValueUsd,
+      total_assets_cost_eth: assetsPrices.totalValueEth,
       total_acquired_value_ada: assetsPrices.totalAcquiredAda,
     });
 
@@ -729,6 +779,7 @@ export class TransactionsService {
             require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
             total_assets_cost_ada: assetsPrices.totalValueAda,
             total_assets_cost_usd: assetsPrices.totalValueUsd,
+            total_assets_cost_eth: assetsPrices.totalValueEth,
             total_acquired_value_ada: assetsPrices.totalAcquiredAda,
           });
 
@@ -865,10 +916,11 @@ export class TransactionsService {
   private async updateExpansionProposalAssetCount(vaultId: string): Promise<void> {
     try {
       // Check if vault is in expansion status
-      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'expansion_phase_start'],
-      });
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'chain_type'> =
+        await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'vault_status', 'expansion_phase_start', 'chain_type'],
+        });
 
       if (!vault || vault.vault_status !== VaultStatus.expansion) {
         // Not in expansion mode, nothing to update
@@ -926,6 +978,21 @@ export class TransactionsService {
       await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
 
       this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
+
+      // For EVM vaults: signal closeAssetWindow when asset max is hit so the on-chain
+      // asset window closes immediately rather than waiting for the configured duration.
+      const assetMax = expansionProposal.metadata.expansion.assetMax;
+      if (
+        vault.chain_type === ChainType.robinhood &&
+        assetMax &&
+        !expansionProposal.metadata.expansion.noMax &&
+        currentAssetCount >= assetMax
+      ) {
+        this.logger.log(
+          `EVM vault ${vaultId} hit expansion asset max (${currentAssetCount}/${assetMax}) — emitting closeAssetWindow`
+        );
+        this.eventEmitter.emit('vault.expansion.asset_max_reached', { vaultId });
+      }
     } catch (error) {
       this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
       // Don't throw - this is a secondary operation that shouldn't fail the main transaction

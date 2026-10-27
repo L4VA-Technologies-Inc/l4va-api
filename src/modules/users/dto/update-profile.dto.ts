@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsOptional, IsArray, IsNumber, IsObject } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsNumber, IsObject, IsEmail } from 'class-validator';
 
 import { SocialLink } from '@/modules/vaults/types';
 
@@ -93,10 +93,11 @@ export class UpdateProfileDto {
   socialLinks: SocialLink[];
 
   @ApiProperty({
-    description: 'User email for notification',
+    description: 'User email for notification. Changing it resets verification and sends a verification email',
     required: false,
   })
   @IsString()
+  @IsEmail()
   @IsOptional()
   @Expose()
   email: string;
