@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsObject, ValidateNested, ValidateIf } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsObject, IsOptional, IsString, ValidateNested, ValidateIf } from 'class-validator';
 
 import { ChainType } from '@/types/vault.types';
 
@@ -27,16 +27,17 @@ export class SignatureData {
 
 export class LoginReq {
   @Expose()
-  @IsNotEmpty()
-  @IsString()
+  @IsOptional()
+  @IsEnum(ChainType)
   @ApiProperty({
-    description: 'Wallet address for the wallet',
-    example: 'addr1q934ccfkwy292....',
+    description: 'Chain of the wallet; defaults to cardano for clients that predate EVM login',
+    enum: ChainType,
+    required: false,
   })
-  chainType: ChainType;
+  chainType?: ChainType;
 
   @Expose()
-  @ValidateIf((o: LoginReq) => o.chainType === ChainType.cardano)
+  @ValidateIf((o: LoginReq) => o.chainType !== ChainType.robinhood)
   @IsNotEmpty()
   @IsObject()
   @ValidateNested()
@@ -48,7 +49,7 @@ export class LoginReq {
   signature: SignatureData;
 
   @Expose()
-  @ValidateIf((o: LoginReq) => o.chainType === ChainType.cardano)
+  @ValidateIf((o: LoginReq) => o.chainType !== ChainType.robinhood)
   @IsNotEmpty()
   @IsString()
   @ApiProperty({

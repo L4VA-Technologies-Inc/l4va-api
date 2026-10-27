@@ -192,6 +192,11 @@ export class EvmVaultContributionService {
     if (vault.chain_type !== ChainType.robinhood) {
       throw new BadRequestException('Vault is not an EVM (Robinhood) vault');
     }
+    if (!this.systemSettingsService.evmEnabled) {
+      throw new BadRequestException(
+        'Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.'
+      );
+    }
     if (!vault.contract_address) {
       throw new BadRequestException('Vault contract address is not set — the vault may not yet be created on-chain');
     }

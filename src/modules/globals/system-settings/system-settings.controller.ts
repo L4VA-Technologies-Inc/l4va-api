@@ -69,6 +69,7 @@ export class SystemSettingsController {
   })
   getVaultCreationFlags(): VaultCreationFlagsResponseDto {
     return {
+      evm_enabled: this.systemSettingsService.evmEnabled,
       evm_nft_assets_enabled: this.systemSettingsService.evmNftAssetsEnabled,
       vault_archetypes_enabled: {
         [ChainType.cardano]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.cardano),

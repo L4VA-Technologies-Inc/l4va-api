@@ -4,6 +4,9 @@ import { VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
 export class VaultCreationFlagsResponseDto {
+  @ApiProperty({ description: 'Whether EVM (Robinhood-chain) vault flows are available at all' })
+  evm_enabled: boolean;
+
   @ApiProperty({ description: 'Whether NFT (ERC721/ERC1155) assets are enabled on EVM (Robinhood-chain) vaults' })
   evm_nft_assets_enabled: boolean;
 

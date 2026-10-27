@@ -598,6 +598,12 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
+    if (vault.chain_type === ChainType.robinhood && !this.systemSettingsService.evmEnabled) {
+      throw new BadRequestException(
+        'Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.'
+      );
+    }
+
     // Allow governance for locked, expansion, and acquire_expansion statuses
     // Expansion windows can be long/indefinite, so governance should continue
     if (

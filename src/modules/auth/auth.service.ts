@@ -29,6 +29,7 @@ export class AuthService {
   ) {}
 
   async login(payload: LoginReq): Promise<LoginRes> {
+    payload.chainType ??= ChainType.cardano;
     if (payload.chainType === ChainType.cardano) {
       return await this.handleCardano(payload);
     }

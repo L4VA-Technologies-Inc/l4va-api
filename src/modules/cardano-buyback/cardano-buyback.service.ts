@@ -21,6 +21,7 @@ import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/com
 import { getBurnWallet } from '@/common/cardano/burn-wallet';
 import { L4VA_BURN_REDEEMER, findL4vaPolicy } from '@/common/cardano/l4va-token-policy';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
@@ -106,6 +107,7 @@ export class CardanoBuybackService {
     private readonly blockchainService: BlockchainService,
     private readonly dexHunterService: DexHunterService,
     private readonly transactionsService: TransactionsService,
+    private readonly systemSettingsService: SystemSettingsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
     const get = (key: string): string | undefined =>
@@ -282,6 +284,9 @@ export class CardanoBuybackService {
   /** One buyback cycle: distribute pending L4VA, else swap spendable ADA. */
   async runCycle(): Promise<BuybackCycleResult> {
     this.assertConfigured();
+    if (!this.systemSettingsService.cardanoBuybackEnabled) {
+      return { action: 'skipped', reason: 'Cardano buyback is disabled in system settings' };
+    }
 
     const acquired = (await this.redis.set(LOCK_KEY, '1', 'EX', LOCK_TTL_SECONDS, 'NX')) === 'OK';
     if (!acquired) return { action: 'skipped', reason: 'Another buyback cycle is running' };

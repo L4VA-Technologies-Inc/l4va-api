@@ -595,6 +595,11 @@ export class VaultsService {
       // Which vault types a chain offers is operational policy, not a code
       // constant: Robinhood is index-only until RWA and NFT vaults land there.
       const chainType = data.chainType === ChainType.robinhood ? ChainType.robinhood : ChainType.cardano;
+      if (chainType === ChainType.robinhood && !this.systemSettingsService.evmEnabled) {
+        throw new BadRequestException(
+          'Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.'
+        );
+      }
       if (!this.systemSettingsService.isVaultArchetypeEnabled(chainType, archetype)) {
         throw new BadRequestException(
           `${archetype === VaultArchetype.index_weighted ? 'Index-weighted' : 'Standard'} vaults are not available on ` +
