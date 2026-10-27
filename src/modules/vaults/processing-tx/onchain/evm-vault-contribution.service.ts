@@ -22,7 +22,7 @@ import {
 } from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 import { AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 /**
  * Numeric values mirror the on-chain enum in
@@ -203,6 +203,19 @@ export class EvmVaultContributionService {
     })) as boolean;
     if (isPaused) throw new BadRequestException('Vault is paused — contributions are temporarily suspended');
 
+    // An acquire-expansion cycle ends on its governance duration, but the on-chain acquire
+    // window stays open far longer. ETH sent after the DB snapshot would sit in no Merkle leaf
+    // and could not be refunded once the cycle locks, so stop authorizing at the governance end.
+    const expansionEndMs =
+      vault.vault_status === VaultStatus.acquire_expansion &&
+      vault.expansion_phase_start &&
+      vault.expansion_duration != null
+        ? new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration)
+        : null;
+    if (expansionEndMs !== null && expansionEndMs <= Date.now()) {
+      throw new BadRequestException('The acquire expansion window has closed');
+    }
+
     const contributor = transaction.user?.address as Address | undefined;
     if (!contributor) throw new BadRequestException('User has no EVM address on record');
 
@@ -231,7 +244,10 @@ export class EvmVaultContributionService {
       };
     }
 
-    const deadline = Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS;
+    const deadline = Math.min(
+      Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS,
+      ...(expansionEndMs !== null ? [Math.floor(expansionEndMs / 1000)] : [])
+    );
 
     // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
     const currentCycleId = await this.contractReader.currentCycleId(vaultAddress);

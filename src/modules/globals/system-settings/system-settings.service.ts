@@ -429,8 +429,12 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   get minAcquireWindowDuration(): number {
-    // Environment-based: 10 min (preprod) / 24 hours (mainnet)
-    return this.isMainnet ? 86400000 : 600000;
+    // Environment-based: 5 min (preprod, matches the client form) / 24 hours (mainnet)
+    return this.isMainnet ? 86400000 : 300000;
+  }
+
+  get maxAcquireWindowDuration(): number {
+    return 604800000; // 7 days
   }
 
   get minExpansionDuration(): number {

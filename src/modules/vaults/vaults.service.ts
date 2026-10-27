@@ -549,6 +549,32 @@ export class VaultsService {
       // ========================================================================
       // CHAIN-SPECIFIC: Build and save the vault entity
       // ========================================================================
+      // 0.1% proposal threshold is the Robinhood launch default; Cardano governance keeps its 0.5% floor.
+      if (data.chainType !== ChainType.robinhood && Number(data.creationThreshold) < 0.5) {
+        throw new BadRequestException('Proposal threshold must be at least 0.5% on Cardano');
+      }
+
+      if (Number(data.tokensForAcquires) !== 0) {
+        const duration = Number(data.acquireWindowDuration);
+        const { minAcquireWindowDuration: min, maxAcquireWindowDuration: max } = this.systemSettingsService;
+        if (!Number.isFinite(duration) || duration < min || duration > max) {
+          throw new BadRequestException(
+            `Acquire window must be between ${Math.round(min / 60000)} minutes and ${max / 86400000} days`
+          );
+        }
+        // A custom start in the past would silently open at creation instead; make the user pick again.
+        if (
+          data.isAcquireOnly &&
+          data.acquireOpenWindowType === InvestmentWindowType.custom &&
+          acquireOpenWindowTime &&
+          acquireOpenWindowTime.getTime() < Date.now()
+        ) {
+          throw new BadRequestException(
+            'The acquire launch date is in the past. Pick a future date or "Upon vault launch".'
+          );
+        }
+      }
+
       let evmVaultId: `0x${string}` | undefined;
 
       const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;

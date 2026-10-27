@@ -2586,7 +2586,11 @@ export class LifecycleService {
       const result = await this.vaultRepository
         .createQueryBuilder()
         .update(Vault)
-        .set({ vault_status: VaultStatus.acquire, acquire_phase_start: () => 'acquire_open_window_time' })
+        // The signer opens the on-chain window at max(scheduled, creation), so the DB phase start must match.
+        .set({
+          vault_status: VaultStatus.acquire,
+          acquire_phase_start: () => 'GREATEST(acquire_open_window_time, created_at)',
+        })
         .where('chain_type = :evmChain', { evmChain: ChainType.robinhood })
         .andWhere('vault_status = :status', { status: VaultStatus.published })
         .andWhere('is_acquire_only = true')

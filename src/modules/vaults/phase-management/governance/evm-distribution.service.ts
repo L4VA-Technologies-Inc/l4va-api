@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import Redis from 'ioredis';
 import { Repository } from 'typeorm';
 import { encodeAbiParameters, keccak256, zeroAddress, type Address, type Hex } from 'viem';
 
@@ -13,6 +14,7 @@ import { EvmSnapshotService } from './evm-snapshot.service';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { ChainType } from '@/types/vault.types';
 
@@ -24,6 +26,11 @@ export const DEFAULT_CLAIM_WINDOW_SECONDS = 180 * 24 * 60 * 60;
 
 /** Most `claimDistributionFor` transactions sent per cron tick, across all distributions. */
 const AUTO_CLAIM_MAX_PER_TICK = 50;
+/** After this many failed auto-claims a holder is skipped, so one bad recipient cannot keep a pot open. */
+const AUTO_CLAIM_MAX_FAILURES_PER_HOLDER = 5;
+/** Shared across API replicas: only one worker sends claims at a time (one admin key, one nonce). */
+const AUTO_CLAIM_LOCK_KEY = 'evm:distribution:auto-claim:lock';
+const AUTO_CLAIM_LOCK_TTL_SECONDS = 300;
 
 export interface EvmDistributionValidation {
   valid: boolean;
@@ -67,7 +74,8 @@ export class EvmDistributionService {
     @InjectRepository(Snapshot) private readonly snapshotRepository: Repository<Snapshot>,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
-    private readonly evmSnapshotService: EvmSnapshotService
+    private readonly evmSnapshotService: EvmSnapshotService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {}
 
   /**
@@ -278,6 +286,11 @@ export class EvmDistributionService {
   async autoClaimOpenDistributions(): Promise<void> {
     if (this.autoClaimRunning) return;
     if (['false', '0'].includes(process.env.EVM_DISTRIBUTION_AUTO_CLAIM ?? '')) return;
+    const lockToken = `${process.pid}:${Date.now()}`;
+    const locked = await this.redis
+      .set(AUTO_CLAIM_LOCK_KEY, lockToken, 'EX', AUTO_CLAIM_LOCK_TTL_SECONDS, 'NX')
+      .catch(() => null);
+    if (locked !== 'OK') return;
     this.autoClaimRunning = true;
     try {
       const proposals = await this.proposalRepository
@@ -298,6 +311,10 @@ export class EvmDistributionService {
       this.logger.error(`EVM distribution auto-claim sweep failed: ${(err as Error).message}`);
     } finally {
       this.autoClaimRunning = false;
+      // Release only our own lock; an expired one may already belong to another worker.
+      if ((await this.redis.get(AUTO_CLAIM_LOCK_KEY).catch(() => null)) === lockToken) {
+        await this.redis.del(AUTO_CLAIM_LOCK_KEY).catch(() => undefined);
+      }
     }
   }
 
@@ -356,7 +373,12 @@ export class EvmDistributionService {
 
     let sent = 0;
     let pending = false;
+    const failures: Record<string, number> = { ...(dist.autoClaimFailures ?? {}) };
+    let failuresChanged = false;
     for (const holder of Object.keys(snapshot.addressBalances ?? {})) {
+      // A holder whose claim keeps reverting (e.g. a contract that rejects ETH) is skipped;
+      // it can still claim itself until the deadline.
+      if ((failures[holder] ?? 0) >= AUTO_CLAIM_MAX_FAILURES_PER_HOLDER) continue;
       const claimable = (await this.contractReader.publicClient.readContract({
         address: vaultAddress,
         abi: VAULT_ABI,
@@ -385,15 +407,33 @@ export class EvmDistributionService {
         );
       } catch (err) {
         // Left for the next tick; the contract refuses a double payment.
-        pending = true;
+        failures[holder] = (failures[holder] ?? 0) + 1;
+        failuresChanged = true;
+        if (failures[holder] < AUTO_CLAIM_MAX_FAILURES_PER_HOLDER) pending = true;
         this.logger.warn(
-          `Distribution ${dist.distributionId} on ${vaultAddress}: claim for ${holder} failed — ${(err as Error).message}`
+          `Distribution ${dist.distributionId} on ${vaultAddress}: claim for ${holder} failed ` +
+            `(${failures[holder]}/${AUTO_CLAIM_MAX_FAILURES_PER_HOLDER}) — ${(err as Error).message}`
         );
       }
     }
 
+    if (failuresChanged) await this.saveAutoClaimFailures(proposal, failures);
     if (!pending) await this.markAutoClaimDone(proposal, `paid ${sent} holder(s) this pass`);
     return sent;
+  }
+
+  private async saveAutoClaimFailures(proposal: Proposal, failures: Record<string, number>): Promise<void> {
+    const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id } });
+    if (!fresh?.metadata?.evmDistribution) return;
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...fresh.metadata,
+          evmDistribution: { ...fresh.metadata.evmDistribution, autoClaimFailures: failures },
+        },
+      }
+    );
   }
 
   private async markAutoClaimDone(proposal: Proposal, reason: string): Promise<void> {

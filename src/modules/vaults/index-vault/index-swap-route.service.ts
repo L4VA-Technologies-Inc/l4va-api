@@ -21,9 +21,12 @@ export enum SwapAdapterKind {
 const ROUTE_KIND_V3_EXACT_IN = 0;
 const ROUTE_KIND_V4_EXACT_IN_SINGLE = 1;
 
-/** Uniswap v4 on Robinhood Chain 4663 (developers.uniswap.org v4 deployments). */
-const V4_QUOTER = '0x8dc178efb8111bb0973dd9d722ebeff267c98f94' as Address;
-const V4_STATE_VIEW = '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b' as Address;
+/** Uniswap v4 on Robinhood Chain 4663 (developers.uniswap.org v4 deployments). Other chains set them in env. */
+const MAINNET_CHAIN_ID = 4663;
+const MAINNET_V4_QUOTER = '0x8dc178efb8111bb0973dd9d722ebeff267c98f94' as Address;
+const MAINNET_V4_STATE_VIEW = '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b' as Address;
+/** A missing pool is re-checked after this, so a pool created later is found without a restart. */
+const V4_MISSING_POOL_TTL_MS = 10 * 60_000;
 const NO_HOOKS = NATIVE;
 
 /**
@@ -115,6 +118,9 @@ export class IndexSwapRouteService {
   readonly adapter: Address | null;
   readonly kind: SwapAdapterKind;
   private readonly weth: Address;
+  /** Null on chains without a configured v4 deployment: the v4 fallback is then skipped. */
+  private readonly v4Quoter: Address | null;
+  private readonly v4StateView: Address | null;
 
   constructor(
     private readonly contractReader: EvmContractReader,
@@ -128,6 +134,13 @@ export class IndexSwapRouteService {
       (configService.get<string>('EVM_SWAP_ADAPTER_KIND') as SwapAdapterKind) ??
       (isTestnet ? SwapAdapterKind.testnetFixedRate : SwapAdapterKind.universalRouter);
     this.weth = (configService.get<string>('EVM_WETH_ADDRESS') ?? ROBINHOOD_WETH).toLowerCase() as Address;
+    const isRobinhoodMainnet = Number(configService.get<string>('EVM_CHAIN_ID')) === MAINNET_CHAIN_ID;
+    const quoter =
+      configService.get<string>('EVM_UNISWAP_V4_QUOTER') ?? (isRobinhoodMainnet ? MAINNET_V4_QUOTER : null);
+    const stateView =
+      configService.get<string>('EVM_UNISWAP_V4_STATE_VIEW') ?? (isRobinhoodMainnet ? MAINNET_V4_STATE_VIEW : null);
+    this.v4Quoter = quoter ? (quoter.toLowerCase() as Address) : null;
+    this.v4StateView = stateView ? (stateView.toLowerCase() as Address) : null;
 
     if (!isTestnet && this.kind === SwapAdapterKind.testnetFixedRate) {
       throw new Error('EVM_SWAP_ADAPTER_KIND=testnet_fixed_rate must never be used on mainnet');
@@ -144,15 +157,18 @@ export class IndexSwapRouteService {
   async quote(assetIn: Address, assetOut: Address, amountIn: bigint): Promise<SwapQuote> {
     if (amountIn === 0n) return { amountOut: 0n, route: '0x' };
     if (this.kind === SwapAdapterKind.testnetFixedRate) return this.quoteFixedRate(assetIn, assetOut, amountIn);
-    try {
-      return await this.quoteUniswapV3(assetIn, assetOut, amountIn);
-    } catch (v3Err) {
-      // Some tokens only trade on v4 (L4VA on Robinhood); the adapter routes
-      // V4_EXACT_IN_SINGLE natively, so fall back before giving up.
-      const v4 = await this.quoteUniswapV4(assetIn, assetOut, amountIn).catch(() => null);
-      if (v4) return v4;
-      throw v3Err;
-    }
+    // Quote both venues and take the better output: a thin v3 pool must not win
+    // over a deep v4 one. Some tokens only trade on v4 (L4VA on Robinhood); the
+    // adapter routes V4_EXACT_IN_SINGLE natively.
+    const [v3, v4] = await Promise.allSettled([
+      this.quoteUniswapV3(assetIn, assetOut, amountIn),
+      this.quoteUniswapV4(assetIn, assetOut, amountIn),
+    ]);
+    const v3Quote = v3.status === 'fulfilled' ? v3.value : null;
+    const v4Quote = v4.status === 'fulfilled' ? v4.value : null;
+    if (v3Quote && v4Quote) return v4Quote.amountOut > v3Quote.amountOut ? v4Quote : v3Quote;
+    if (v3Quote || v4Quote) return v3Quote ?? v4Quote;
+    throw v3.status === 'rejected' ? v3.reason : new Error('No Uniswap route');
   }
 
   /** Native value of `amount` of `asset`, via an exact-input quote into native. */
@@ -175,12 +191,14 @@ export class IndexSwapRouteService {
   }
 
   /** Pool keys per pair, picked once (deepest hookless candidate). */
-  private readonly v4PoolCache = new Map<string, V4PoolKey | null>();
+  private readonly v4PoolCache = new Map<string, { key: V4PoolKey | null; checkedAt: number }>();
 
   private async findV4Pool(a: Address, b: Address): Promise<V4PoolKey | null> {
+    if (!this.v4StateView) return null;
     const [currency0, currency1] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
     const cacheKey = `${currency0}:${currency1}`.toLowerCase();
-    if (this.v4PoolCache.has(cacheKey)) return this.v4PoolCache.get(cacheKey)!;
+    const cached = this.v4PoolCache.get(cacheKey);
+    if (cached && (cached.key || Date.now() - cached.checkedAt < V4_MISSING_POOL_TTL_MS)) return cached.key;
 
     let best: { key: V4PoolKey; liquidity: bigint } | null = null;
     for (const { fee, tickSpacing } of V4_POOL_CANDIDATES) {
@@ -192,21 +210,21 @@ export class IndexSwapRouteService {
         )
       );
       const liquidity = (await this.contractReader.publicClient
-        .readContract({ address: V4_STATE_VIEW, abi: STATE_VIEW_ABI, functionName: 'getLiquidity', args: [poolId] })
+        .readContract({ address: this.v4StateView, abi: STATE_VIEW_ABI, functionName: 'getLiquidity', args: [poolId] })
         .catch(() => 0n)) as bigint;
       if (liquidity > 0n && (!best || liquidity > best.liquidity)) best = { key, liquidity };
     }
-    this.v4PoolCache.set(cacheKey, best?.key ?? null);
+    this.v4PoolCache.set(cacheKey, { key: best?.key ?? null, checkedAt: Date.now() });
     return best?.key ?? null;
   }
 
   /** Single-hop v4 quote; native stays `address(0)` (no wrapping on v4). */
   private async quoteUniswapV4(assetIn: Address, assetOut: Address, amountIn: bigint): Promise<SwapQuote | null> {
     const key = await this.findV4Pool(assetIn, assetOut);
-    if (!key) return null;
+    if (!key || !this.v4Quoter) return null;
     const zeroForOne = assetIn.toLowerCase() === key.currency0.toLowerCase();
     const { result } = await this.contractReader.publicClient.simulateContract({
-      address: V4_QUOTER,
+      address: this.v4Quoter,
       abi: V4_QUOTER_ABI,
       functionName: 'quoteExactInputSingle',
       args: [{ poolKey: key, zeroForOne, exactAmount: amountIn, hookData: '0x' }],

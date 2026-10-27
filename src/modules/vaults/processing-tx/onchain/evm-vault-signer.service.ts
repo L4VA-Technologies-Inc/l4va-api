@@ -2,11 +2,13 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, parseEther, type Address, type Hex } from 'viem';
+import { decodeEventLog, encodeAbiParameters, keccak256, parseAbiItem, parseEther, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
 import { TransactionsService } from '../offchain-tx/transactions.service';
+
+import { EvmContractReader } from './evm-contract-reader.service';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -105,6 +107,10 @@ export interface EvmCreationPayload {
 // Service
 // ---------------------------------------------------------------------------
 
+const VAULT_INITIALIZED_EVENT = parseAbiItem(
+  'event VaultInitialized(bytes32 indexed vaultId, address indexed admin, address mintingKey, address indexed vaultToken)'
+);
+
 /** A form date arrives as epoch ms (number or numeric string) or an ISO string. */
 function toEpochMs(value: string | number): number {
   const numeric = Number(value);
@@ -128,7 +134,8 @@ export class EvmVaultSignerService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly configService: ConfigService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly contractReader: EvmContractReader
   ) {
     this.factoryAddress = this.configService.get<string>('EVM_FACTORY_ADDRESS') as Address;
     this.adminAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS') as Address;
@@ -239,6 +246,16 @@ export class EvmVaultSignerService {
       return;
     }
 
+    // The factory does not check who approved the config, so anyone could create a vault under
+    // our vaultId first. Bind it only if its creator, authority and minting key are the ones we signed for.
+    const mismatch = await this.findCreatedVaultMismatch(txHash, vaultAddress as Address, topics, vault);
+    if (mismatch) {
+      this.logger.error(
+        `Refusing to bind VaultCreated for evmVaultId=${evmVaultId} vault=${vaultAddress} tx=${txHash}: ${mismatch}`
+      );
+      return;
+    }
+
     // Update the vault contract address
     vault.contract_address = vaultAddress.toLowerCase();
     await this.vaultsRepository.save(vault);
@@ -247,6 +264,55 @@ export class EvmVaultSignerService {
       `Vault contract address updated from VaultCreated event — ` +
         `dbId=${vault.id} evmVaultId=${evmVaultId} vaultAddr=${vaultAddress} txHash=${txHash}`
     );
+  }
+
+  /** Why a created vault does not match the config we authorized, or null when it does. */
+  private async findCreatedVaultMismatch(
+    txHash: string,
+    vaultAddress: Address,
+    topics: string[],
+    vault: Vault
+  ): Promise<string | null> {
+    const creator = ('0x' + topics[3].slice(-40)).toLowerCase();
+    const owner = (
+      await this.vaultsRepository.findOne({
+        where: { id: vault.id },
+        relations: ['owner'],
+        select: { id: true, owner: { id: true, address: true } },
+      })
+    )?.owner;
+    if (owner?.address && owner.address.toLowerCase() !== creator) {
+      return `creator ${creator} is not the vault owner ${owner.address}`;
+    }
+
+    const receipt = await this.contractReader.publicClient.getTransactionReceipt({
+      hash: txHash as Hex,
+    });
+    const initialized = receipt.logs
+      .filter(log => log.address.toLowerCase() === vaultAddress.toLowerCase())
+      .map(log => {
+        try {
+          return decodeEventLog({
+            abi: [VAULT_INITIALIZED_EVENT],
+            data: log.data,
+            topics: log.topics,
+          });
+        } catch {
+          return null;
+        }
+      })
+      .find(Boolean);
+    if (!initialized) return 'no VaultInitialized event from the vault in this transaction';
+
+    const { admin, mintingKey } = initialized.args as {
+      admin: Address;
+      mintingKey: Address;
+    };
+    if (admin.toLowerCase() !== this.adminAddress.toLowerCase()) return `authority ${admin} is not ours`;
+    if (mintingKey.toLowerCase() !== this.mintingSignerAddress.toLowerCase()) {
+      return `minting key ${mintingKey} is not ours`;
+    }
+    return null;
   }
 
   // --------------------------------------------------------------------------
@@ -337,8 +403,8 @@ export class EvmVaultSignerService {
       initialCycle: {
         assetWindow: { start: assetWindowStart, end: assetWindowEnd },
         acquireWindow: { start: acquireWindowStart, end: acquireWindowEnd },
-        // ETH from the form (validated and stored as wei by the create flow);
-        // the cycle cancels and refunds if less than this is raised.
+        // The request carries ETH (not wei), so it is converted here; the DB keeps its own
+        // wei copy. The cycle cancels and refunds if less than this is raised.
         minAcquireThreshold:
           data.minAcquireThreshold != null && Number(data.minAcquireThreshold) > 0
             ? parseEther(String(data.minAcquireThreshold))

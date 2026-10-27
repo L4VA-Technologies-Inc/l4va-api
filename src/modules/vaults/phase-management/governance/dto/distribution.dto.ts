@@ -95,6 +95,8 @@ export interface EvmDistributionMetadata {
   openedAt: string;
   /** Set once every snapshot holder with a share has been paid by the auto-claim cron. */
   autoClaimCompletedAt?: string;
+  /** Failed auto-claim attempts per holder; a holder that keeps failing is skipped (it can still claim itself). */
+  autoClaimFailures?: Record<string, number>;
 }
 
 /**

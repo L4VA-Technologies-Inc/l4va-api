@@ -337,7 +337,17 @@ export class VaultAssistantService {
    */
   private resolveBasket(raw: unknown, assets: IndexSupportedAsset[]): VaultAssistantMessageRes['indexBasket'] {
     if (!Array.isArray(raw) || !assets.length) return null;
-    const bySymbol = new Map(assets.map(asset => [asset.symbol.toLowerCase(), asset]));
+    const bySymbol = new Map<string, IndexSupportedAsset>();
+    for (const asset of assets) {
+      const key = asset.symbol.toLowerCase();
+      if (bySymbol.has(key)) {
+        this.logger.warn(
+          `Two supported basket assets share the symbol ${asset.symbol}; keeping ${bySymbol.get(key).assetAddress}`
+        );
+        continue;
+      }
+      bySymbol.set(key, asset);
+    }
     const picked = [
       ...new Map(
         raw
