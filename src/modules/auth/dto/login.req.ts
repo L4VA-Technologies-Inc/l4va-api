@@ -1,6 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import { IsEnum, IsNotEmpty, IsObject, IsOptional, IsString, ValidateNested, ValidateIf } from 'class-validator';
+import {
+  IsEnum,
+  IsEthereumAddress,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateNested,
+  ValidateIf,
+} from 'class-validator';
 
 import { ChainType } from '@/types/vault.types';
 
@@ -65,5 +75,22 @@ export class LoginReq {
     description: 'Wallet address for the wallet',
     example: 'addr1q934ccfkwy292....',
   })
+  walletAddress: string;
+
+  @Expose()
+  @ValidateIf((o: LoginReq) => o.chainType === ChainType.robinhood)
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]+$/, { message: 'evmSignature must be a 0x-prefixed hex string' })
+  @ApiProperty({
+    description: 'personal_sign signature over the message from POST /auth/evm/challenge (robinhood only)',
+    required: false,
+  })
+  evmSignature?: string;
+}
+
+export class EvmChallengeReq {
+  @Expose()
+  @IsEthereumAddress()
+  @ApiProperty({ description: 'EVM wallet address that will sign the login message' })
   walletAddress: string;
 }
