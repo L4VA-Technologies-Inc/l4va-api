@@ -64,7 +64,7 @@ export class ChatService {
     const user = {
       id: userId,
       name,
-      image: userData.image || `https://getstream.io/random_png/?id=${userId}&name=${name}`,
+      image: userData.image || `https://getstream.io/random_png/?id=${userId}&name=${encodeURIComponent(name)}`,
       role: 'user',
     };
 

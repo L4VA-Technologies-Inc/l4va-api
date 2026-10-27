@@ -109,10 +109,10 @@ export class ChatController {
   @ApiResponse({ status: 200, description: 'Members added successfully', type: AddMembersRes })
   async addMembersToVault(
     @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Body() body: AddMembersReq,
-    @Request() req: AuthRequest
+    @Request() req: AuthRequest,
+    @Body() body?: AddMembersReq
   ): Promise<AddMembersRes> {
-    if (body.userIds.some(id => id !== req.user.sub)) {
+    if (body?.userIds?.some(id => id !== req.user.sub)) {
       throw new ForbiddenException('You can only add yourself to a vault channel');
     }
 

@@ -14,6 +14,8 @@ export interface BuildGovernanceFeeTransactionParams {
   userAddress: string;
   proposalType: string;
   vaultId: string;
+  /** Number of billable units for this proposal (e.g. NFTs in a marketplace_action proposal). Defaults to 1. */
+  quantity?: number;
 }
 
 export interface GovernanceFeeTransactionResponse {
@@ -46,10 +48,11 @@ export class GovernanceFeeService {
   }
 
   /**
-   * Get the fee amount for a specific proposal type
+   * Get the fee amount for a specific proposal type.
+   * `quantity` scales the per-unit fee (e.g. marketplace_action proposals are charged per NFT).
    */
-  getProposalFee(proposalType: string): number {
-    return this.systemSettingsService.getGovernanceFeeForProposalType(proposalType);
+  getProposalFee(proposalType: string, quantity = 1): number {
+    return this.systemSettingsService.getGovernanceFeeForProposalType(proposalType) * quantity;
   }
 
   /**
@@ -67,7 +70,7 @@ export class GovernanceFeeService {
     params: BuildGovernanceFeeTransactionParams
   ): Promise<GovernanceFeeTransactionResponse> {
     try {
-      const feeAmount = this.getProposalFee(params.proposalType);
+      const feeAmount = this.getProposalFee(params.proposalType, params.quantity ?? 1);
 
       // If fee is 0, return empty response - no transaction needed
       if (feeAmount <= 0) {
@@ -94,9 +97,10 @@ export class GovernanceFeeService {
       }
 
       const proposalTypeLabel = this.getProposalTypeLabel(params.proposalType);
+      const quantitySuffix = (params.quantity ?? 1) > 1 ? ` (${params.quantity} items)` : '';
       const input = {
         changeAddress: params.userAddress,
-        message: `Governance fee for creating ${proposalTypeLabel} proposal`,
+        message: `Governance fee for creating ${proposalTypeLabel} proposal${quantitySuffix}`,
         utxos: utxos,
         outputs: [
           {

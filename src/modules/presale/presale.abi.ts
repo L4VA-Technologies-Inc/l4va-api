@@ -50,6 +50,11 @@ export const PRESALE_ABI = [
   // ── Sale window ───────────────────────────────────────────────────────────
   { name: 'saleEndsAt', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { name: 'saleDuration', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  // Scheduled start: once `autoOpenAt` passes, the first buy (or anyone calling
+  // `openIfScheduled`) opens the sale. `phase` reads 0 until that first tx.
+  { name: 'autoOpenAt', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { name: 'saleOpenedAt', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { name: 'paused', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'bool' }] },
 
   // ── Per-wallet ────────────────────────────────────────────────────────────
   {
