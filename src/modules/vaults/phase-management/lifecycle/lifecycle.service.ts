@@ -2833,6 +2833,24 @@ export class LifecycleService {
           `EVM snapshot build: vault=${vault.id} cycle=${cycleId} nativeCollected=${nativeCollected} threshold=${minThreshold}`
         );
 
+        // An expansion cycle nobody contributed to has nothing to price. Close it
+        // with an empty allocation so the vault returns to locked; cancelling it
+        // would cancel the whole vault on-chain.
+        if (
+          (vault.vault_status === VaultStatus.expansion || vault.vault_status === VaultStatus.acquire_expansion) &&
+          (await this.evmAllocationService.isCycleEmpty(
+            vault.id,
+            vault.contract_address as `0x${string}`,
+            cycleId,
+            nativeCollected
+          ))
+        ) {
+          const { snapshotId } = await this.evmAllocationService.computeEmptySnapshot(vault.id, cycleId);
+          await this.evmAllocationService.markReady(snapshotId);
+          this.logger.log(`EVM empty expansion cycle: vault=${vault.id} cycle=${cycleId} snapshot=${snapshotId} ready`);
+          continue;
+        }
+
         // 1. Price every active contribution at lock-time.
         const pricing = await this.evmLockTimePricingService.resolvePricesForCycle(vault.id, cycleId);
 
@@ -2884,7 +2902,10 @@ export class LifecycleService {
               // valueNative is already in wei and limitPrice is VT per 1 whole native
               // unit, so scale by the native decimals (18), not by the unit price.
               const valueNative = BigInt(v.valueNative);
-              expansionVtOverride.set(contribId, (valueNative * limitPriceScaled * vtDecimalMul) / (NATIVE_UNIT * SCALE));
+              expansionVtOverride.set(
+                contribId,
+                (valueNative * limitPriceScaled * vtDecimalMul) / (NATIVE_UNIT * SCALE)
+              );
             }
             this.logger.log(
               `EVM acquire-expansion limit-price override: vault=${vault.id} limitPrice=${expCfg.limitPrice} contributions=${expansionVtOverride.size} ` +

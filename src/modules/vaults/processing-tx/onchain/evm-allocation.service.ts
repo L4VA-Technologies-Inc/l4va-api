@@ -22,6 +22,14 @@ import { ChainType } from '@/types/vault.types';
 export type { ContributionValueMap } from './evm-lock-time-pricing.service';
 
 /** Nothing is distributable for this cycle — caller should cancel + refund. */
+/**
+ * Allocation root committed for a cycle that closes with no contributions.
+ * `closeCycle` rejects a zero root, and the contract offers no other way to end
+ * an expansion cycle without cancelling the whole vault. With zero totals there
+ * is nothing to claim, and no leaf can prove against a root with no tree behind it.
+ */
+export const EMPTY_CYCLE_ROOT: Hex = keccak256(toBytes('l4va:empty-cycle'));
+
 export class EmptyAllocationError extends Error {
   constructor(message: string) {
     super(message);
@@ -89,6 +97,56 @@ export class EvmAllocationService {
   // --------------------------------------------------------------------------
   // Public API
   // --------------------------------------------------------------------------
+
+  /**
+   * Whether a cycle can be closed with an empty allocation: nothing native was
+   * raised, no active contribution is recorded for it, and the indexer has seen
+   * every on-chain contribution of the vault (so an unindexed asset contribution
+   * cannot be closed over and stranded).
+   */
+  async isCycleEmpty(
+    vaultId: string,
+    vaultAddress: Address,
+    cycleId: bigint,
+    nativeCollected: bigint
+  ): Promise<boolean> {
+    if (nativeCollected !== 0n) return false;
+
+    const activeInCycle = await this.contribsRepository.count({
+      where: { vault_id: vaultId, cycle_id: cycleId.toString(), status: EvmContributionRowStatus.active },
+    });
+    if (activeInCycle > 0) return false;
+
+    const [onChainTotal, indexedTotal] = await Promise.all([
+      this.contractReader.totalContributions(vaultAddress),
+      this.contribsRepository.count({ where: { vault_id: vaultId } }),
+    ]);
+    return onChainTotal === BigInt(indexedTotal);
+  }
+
+  /** Persist a 'calculated' snapshot for a cycle that closes with no contributions. */
+  async computeEmptySnapshot(vaultId: string, cycleId: bigint): Promise<{ snapshotId: string }> {
+    const snapshot = await this.snapshotsRepository.save(
+      this.snapshotsRepository.create({
+        vault_id: vaultId,
+        cycle_id: cycleId.toString(),
+        price_source: { source: 'empty-cycle' },
+        price_timestamp: new Date(),
+        raw_prices: {},
+        normalized_prices: {},
+        total_native_raised: '0',
+        total_asset_value_native: '0',
+        fdv_native: '0',
+        vt_price: '0',
+        merkle_root: EMPTY_CYCLE_ROOT,
+        valuation_hash: EMPTY_CYCLE_ROOT,
+        total_vt_allocation: '0',
+        total_native_allocation: '0',
+        status: EvmSnapshotStatus.calculated,
+      })
+    );
+    return { snapshotId: snapshot.id };
+  }
 
   async computeSnapshot(params: ComputeSnapshotParams): Promise<{ snapshotId: string; leafCount: number }> {
     const {
