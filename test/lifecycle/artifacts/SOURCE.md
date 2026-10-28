@@ -1,0 +1,2 @@
+Built from vault-contract-solidity 253529ada3d4585f2fbf672140f8281eaf137e60
+Contracts: VaultFactory, BatchVaultDeployer, ProtocolFeeConfig, MockERC20
