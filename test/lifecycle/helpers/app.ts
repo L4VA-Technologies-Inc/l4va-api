@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Logger, type LogLevel } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
@@ -38,8 +38,13 @@ export async function createTestApp(): Promise<TestApp> {
   process.env.EVM_BATCH_DEPLOYER_ADDRESS = stack.batchDeployer;
   process.env.EVM_ADAPTER_REGISTRY_ADDRESS = stack.adapterRegistry;
 
+  // LIFECYCLE_TEST_LOG=debug shows every lifecycle decision (skip reasons are logged at debug).
+  const logLevels: LogLevel[] =
+    process.env.LIFECYCLE_TEST_LOG === 'debug' ? ['error', 'warn', 'log', 'debug'] : ['error', 'warn'];
+  Logger.overrideLogger(logLevels);
+
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication({ logger: ['error', 'warn'] });
+  const app = moduleRef.createNestApplication({ logger: logLevels });
   await app.init();
 
   const scheduler = app.get(SchedulerRegistry);
