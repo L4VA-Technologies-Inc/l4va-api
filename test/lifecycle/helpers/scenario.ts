@@ -4,10 +4,12 @@ import type { TestApp } from './app';
 import {
   ACCOUNTS,
   chainNow,
+  deploy,
   increaseChainTime,
   loadArtifact,
   publicClient,
   read,
+  send,
   walletFor,
   type AccountName,
 } from './chain';
@@ -18,6 +20,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { AcquireService } from '@/modules/vaults/phase-management/acquire/acquire.service';
+import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { EvmGovernanceExecutionService } from '@/modules/vaults/phase-management/governance/evm-governance-execution.service';
 import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmVaultContributionService } from '@/modules/vaults/processing-tx/onchain/evm-vault-contribution.service';
@@ -50,6 +53,15 @@ export async function syncClock(): Promise<void> {
 export async function warp(seconds: number): Promise<void> {
   await increaseChainTime(seconds);
   await syncClock();
+}
+
+/**
+ * Let a few seconds pass on both clocks. viem caches the latest block number
+ * for 4s measured with Date.now(); under a frozen fake clock that cache never
+ * expires and the indexer keeps reading a stale head.
+ */
+export async function settle(): Promise<void> {
+  await warp(5);
 }
 
 export function useChainClock(): void {
@@ -246,33 +258,60 @@ export async function acquireNative(
   if (receipt.status !== 'success') throw new Error(`contributeNative reverted (${hash})`);
 
   await contributions.confirmContribution(created.txId, hash, user.id, [hash]);
+  await settle();
   await t.app.get(EvmContributionBackfillService).backfillVault(vault.id);
   return hash;
 }
 
-/**
- * Open an expansion cycle the way an executed EXPANSION proposal does
- * (EvmGovernanceExecutionService.executeEvmExpansion), without the vote.
- */
-export async function openExpansion(t: TestApp, vault: Vault, minutes: number): Promise<void> {
+/** Store an executed proposal: the lifecycle and contribution flows read their config back from it. */
+async function storeExecutedProposal(
+  t: TestApp,
+  vault: Vault,
+  creator: User,
+  proposalType: ProposalType,
+  metadata: Proposal['metadata']
+): Promise<Proposal> {
+  const [snapshot] = await t.dataSource.query(
+    `INSERT INTO snapshot (address_balances, vault_id, asset_id) VALUES ('{}', $1, 'lifecycle') RETURNING id`,
+    [vault.id]
+  );
+  return t.dataSource.getRepository(Proposal).save({
+    title: `Lifecycle ${proposalType}`,
+    description: 'lifecycle test',
+    status: ProposalStatus.EXECUTED,
+    proposalType,
+    executionDate: new Date(),
+    snapshotId: snapshot.id,
+    creatorId: creator.id,
+    vaultId: vault.id,
+    metadata,
+  } as Partial<Proposal>);
+}
+
+/** Open an expansion cycle the way an executed EXPANSION proposal does, without the vote. */
+export async function openExpansion(
+  t: TestApp,
+  vault: Vault,
+  creator: User,
+  minutes: number,
+  evmAssets: Address[] = []
+): Promise<void> {
+  const proposal = await storeExecutedProposal(t, vault, creator, ProposalType.EXPANSION, {
+    expansion: {
+      duration: minutes * MINUTE * 1000,
+      priceType: 'market',
+      evmAssets: evmAssets.map(contractAddress => ({ contractAddress })),
+    },
+  });
   const execution = t.app.get(EvmGovernanceExecutionService) as unknown as {
     executeEvmExpansion(proposal: unknown, vault: { id: string }): Promise<boolean>;
   };
-  const opened = await execution.executeEvmExpansion(
-    {
-      id: `lifecycle-expansion-${vault.id}`,
-      metadata: { expansion: { duration: minutes * MINUTE * 1000, evmAssets: [] } },
-    },
-    { id: vault.id }
-  );
-  if (!opened) throw new Error('executeEvmExpansion did not open a cycle');
+  if (!(await execution.executeEvmExpansion(proposal, { id: vault.id }))) {
+    throw new Error('executeEvmExpansion did not open a cycle');
+  }
 }
 
-/**
- * Open an acquire-expansion cycle the way an executed ACQUIRE_EXPANSION proposal
- * does. The proposal row is stored as executed first, because the lifecycle reads
- * its limit price back when it prices the cycle.
- */
+/** Open an acquire-expansion cycle the way an executed ACQUIRE_EXPANSION proposal does. */
 export async function openAcquireExpansion(
   t: TestApp,
   vault: Vault,
@@ -280,25 +319,12 @@ export async function openAcquireExpansion(
   minutes: number,
   limitPrice?: number
 ): Promise<void> {
-  const acquireExpansion = {
-    duration: minutes * MINUTE * 1000,
-    ...(limitPrice ? { priceType: 'limit' as const, limitPrice } : { priceType: 'market' as const }),
-  };
-  const [snapshot] = await t.dataSource.query(
-    `INSERT INTO snapshot (address_balances, vault_id, asset_id) VALUES ('{}', $1, 'lifecycle') RETURNING id`,
-    [vault.id]
-  );
-  const proposal = await t.dataSource.getRepository(Proposal).save({
-    title: 'Lifecycle acquire expansion',
-    description: 'lifecycle test',
-    status: ProposalStatus.EXECUTED,
-    proposalType: ProposalType.ACQUIRE_EXPANSION,
-    snapshotId: snapshot.id,
-    creatorId: creator.id,
-    vaultId: vault.id,
-    metadata: { acquireExpansion },
-  } as Partial<Proposal>);
-
+  const proposal = await storeExecutedProposal(t, vault, creator, ProposalType.ACQUIRE_EXPANSION, {
+    acquireExpansion: {
+      duration: minutes * MINUTE * 1000,
+      ...(limitPrice ? { priceType: 'limit' as const, limitPrice } : { priceType: 'market' as const }),
+    },
+  });
   const execution = t.app.get(EvmGovernanceExecutionService) as unknown as {
     executeEvmAcquireExpansion(proposal: unknown, vault: { id: string }): Promise<boolean>;
   };
@@ -307,9 +333,86 @@ export async function openAcquireExpansion(
   }
 }
 
+/** Deploy a mock ERC20 and mint `amount` whole tokens (18 decimals) to each holder. */
+export async function deployToken(holders: AccountName[], amount = '1000'): Promise<Address> {
+  const token = await deploy('MockERC20', ['Lifecycle Token', 'LCT', 18]);
+  const { abi } = loadArtifact('MockERC20');
+  for (const holder of holders) await send('admin', token, abi, 'mint', [ACCOUNTS[holder].address, parseEther(amount)]);
+  return token;
+}
+
+/**
+ * Contribute an ERC20 exactly as useEvmContributeTransaction does: create the
+ * transaction, fetch signed authorizations, approve + contribute, confirm.
+ */
+export async function contributeErc20(
+  t: TestApp,
+  vault: Vault,
+  user: User,
+  account: AccountName,
+  token: Address,
+  amount: string
+): Promise<void> {
+  const created = await t.app.get(ContributionService).contribute(
+    vault.id,
+    {
+      assets: [
+        {
+          policyId: token,
+          type: 'ft',
+          standard: 'ERC20',
+          assetName: 'LCT',
+          quantity: amount,
+          decimals: 18,
+          metadata: { policyId: token, assetName: 'LCT', decimals: 18 },
+        },
+      ],
+    } as never,
+    user.id
+  );
+
+  const contributions = t.app.get(EvmVaultContributionService);
+  const prepared = await contributions.prepareContribution(created.txId, user.id);
+  if (prepared.feePayment) throw new Error('Unexpected protocol fee — resetState pins fees to zero');
+
+  const hashes: Hex[] = [];
+  const { abi: erc20 } = loadArtifact('MockERC20');
+  for (const call of prepared.calls) {
+    if (call.approval.required) {
+      hashes.push(
+        await send(account, call.approval.token, erc20, 'approve', [
+          prepared.vaultAddress,
+          BigInt(call.approval.amountOrTokenId),
+        ])
+      );
+    }
+    hashes.push(
+      await send(account, prepared.vaultAddress, VAULT_ABI as never, call.functionName, [
+        toBigInts(call.authorization),
+        call.signature,
+      ])
+    );
+  }
+  await contributions.confirmContribution(created.txId, hashes[hashes.length - 1], user.id, hashes);
+  await settle();
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
+
+/** Wait for background handlers to index a cycle's contributions into the database. */
+export async function waitForContributions(t: TestApp, vaultId: string, cycleId: number, count: number): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    const [{ n }] = await t.dataSource.query(
+      'SELECT count(*)::int AS n FROM evm_contributions WHERE vault_id = $1 AND cycle_id = $2',
+      [vaultId, cycleId]
+    );
+    if (n >= count) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Cycle ${cycleId} of vault ${vaultId} never reached ${count} indexed contribution(s)`);
+}
 
 export async function getVault(t: TestApp, id: string): Promise<Vault> {
   return t.dataSource.getRepository(Vault).findOneOrFail({ where: { id } });

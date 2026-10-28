@@ -1,4 +1,4 @@
-import { parseEther } from 'viem';
+import { parseEther, type Address } from 'viem';
 
 import { createTestApp, type TestApp } from './helpers/app';
 import { ACCOUNTS } from './helpers/chain';
@@ -8,7 +8,9 @@ import {
   acquireNative,
   adminNonce,
   createAcquireOnlyVault,
+  contributeErc20,
   createUser,
+  deployToken,
   onChainCycle,
   openAcquireExpansion,
   openExpansion,
@@ -19,10 +21,12 @@ import {
   snapshotRow,
   syncClock,
   useChainClock,
+  waitForContributions,
   warp,
 } from './helpers/scenario';
 
 import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
 import { TransactionHealthService } from '@/modules/vaults/processing-tx/offchain-tx/transaction-health.service';
 import { EvmAdminSigner } from '@/modules/vaults/processing-tx/onchain/evm-admin-signer.service';
 import { EMPTY_CYCLE_ROOT } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
@@ -131,7 +135,7 @@ describe('EVM cycle close', () => {
     await t.tick();
     expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
 
-    await openExpansion(t, vault, 10);
+    await openExpansion(t, vault, creator, 10);
     expect(await onChainCycle(vault)).toBe(2n);
     expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.expansion);
 
@@ -214,4 +218,61 @@ describe('EVM cycle close', () => {
     expect((await snapshotRow(t, vault.id, 1))?.status).toBe('confirmed');
     expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
   });
+
+  it('does not close an expansion empty while an asset contribution is not indexed yet', async () => {
+    const vault = await lockedVaultWithTokenExpansion();
+    await contributeErc20(t, vault, bob, 'bob', token, '10');
+
+    // Indexer lag: the contribution is on-chain but its row is not in the database yet.
+    await waitForContributions(t, vault.id, 2, 1);
+    await t.dataSource.query('DELETE FROM evm_contributions WHERE vault_id = $1 AND cycle_id = 2', [vault.id]);
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    expect(await closeOrCancelCount(vault.id)).toBe(1); // only cycle 1's close
+    expect(await snapshotRow(t, vault.id, 2)).toBeNull();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.expansion);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Active);
+  });
+
+  // KNOWN BUG — remove `.failing` once fixed. An asset expansion on a vault that gives
+  // contributors 0% (here acquire-only, 100% to acquirers) allocates nothing, and the
+  // EmptyAllocationError path calls cancelAndFailEvmVault: the whole vault is cancelled
+  // on-chain and marked failed, although cycle 1 already locked with VT holders.
+  it.failing('keeps an already locked vault when an asset expansion allocates nothing', async () => {
+    const vault = await lockedVaultWithTokenExpansion();
+    await contributeErc20(t, vault, bob, 'bob', token, '10');
+    await waitForContributions(t, vault.id, 2, 1);
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    expect(await onChainStatus(vault)).not.toBe(OnChainVaultStatus.Cancelled);
+    expect((await getVault(t, vault.id)).vault_status).not.toBe(VaultStatus.failed);
+  });
+
+  let token: Address;
+
+  /** A vault whose first raise is closed, with an expansion cycle open for a fresh ERC20. */
+  async function lockedVaultWithTokenExpansion(): Promise<Vault> {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+    await t.tick();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+
+    token = await deployToken(['bob']);
+    await openExpansion(t, vault, creator, 10, [token]);
+    return vault;
+  }
+
+  async function closeOrCancelCount(vaultId: string): Promise<number> {
+    const [{ n }] = await t.dataSource.query(
+      `SELECT count(*)::int AS n FROM transactions WHERE vault_id = $1 AND type IN ('evm-close-cycle', 'evm-cancel-cycle')`,
+      [vaultId]
+    );
+    return n;
+  }
 });
