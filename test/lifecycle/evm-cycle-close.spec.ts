@@ -23,6 +23,8 @@ import {
 } from './helpers/scenario';
 
 import { User } from '@/database/user.entity';
+import { TransactionHealthService } from '@/modules/vaults/processing-tx/offchain-tx/transaction-health.service';
+import { EvmAdminSigner } from '@/modules/vaults/processing-tx/onchain/evm-admin-signer.service';
 import { EMPTY_CYCLE_ROOT } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -182,5 +184,34 @@ describe('EVM cycle close', () => {
 
     expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
     expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+  });
+
+  it('recovers a closeCycle whose receipt was lost after broadcast', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+
+    // The transaction reaches the chain, but the backend never sees its receipt
+    // (RPC drop or process restart between broadcast and confirmation).
+    const signerClient = (
+      t.app.get(EvmAdminSigner) as unknown as { publicClient: { waitForTransactionReceipt: unknown } }
+    ).publicClient;
+    const lostReceipt = jest
+      .spyOn(signerClient as { waitForTransactionReceipt: () => Promise<unknown> }, 'waitForTransactionReceipt')
+      .mockRejectedValueOnce(new Error('simulated: receipt wait timed out'));
+    await t.tick();
+    lostReceipt.mockRestore();
+
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+    expect((await snapshotRow(t, vault.id, 1))?.status).toBe('reconciliation_required');
+
+    // The stuck-transaction cron is the durable recovery path.
+    await warp(15 * MINUTE);
+    await t.app.get(TransactionHealthService).checkStuckTransactions();
+    await t.tick();
+
+    expect((await snapshotRow(t, vault.id, 1))?.status).toBe('confirmed');
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
   });
 });
