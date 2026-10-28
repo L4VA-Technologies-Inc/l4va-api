@@ -8,6 +8,7 @@ export enum ActivityType {
   PROPOSAL = 'proposal',
   PHASE_TRANSITION = 'phase_transition',
   INDEX_REBALANCE = 'index_rebalance',
+  TERMINATION = 'termination',
 }
 
 export enum ProposalLifecycleStage {
@@ -138,8 +139,56 @@ export interface IndexRebalanceActivityEvent {
   created_at: Date;
 }
 
+export enum TerminationActivityStatus {
+  VOTING = 'voting',
+  REJECTED = 'rejected',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+}
+
+export type TerminationStepStatus = 'done' | 'current' | 'failed' | 'upcoming';
+
+export interface TerminationStep {
+  /** Step id, e.g. `voting_ended`, `rates_committed`, `nfts_burned`. */
+  key: string;
+  status: TerminationStepStatus;
+  at?: Date | null;
+  txHash?: string | null;
+  note?: string | null;
+}
+
+/**
+ * One termination proposal with everything it set in motion. Replaces the
+ * proposal's own card in the feed; `created_at` is the latest step reached.
+ */
+export interface TerminationActivityEvent {
+  id: string;
+  activityType: ActivityType.TERMINATION;
+  vaultId: string;
+  chain: 'cardano' | 'evm';
+  status: TerminationActivityStatus;
+  proposal: {
+    id: string;
+    title: string;
+    status: ProposalStatus;
+    startDate?: Date | null;
+    endDate?: Date | null;
+  };
+  /** Holder payout progress: Cardano termination claims, EVM operator `redeemFor` pushes. */
+  redemption?: {
+    deadline?: Date | null;
+    claimed: number;
+    total?: number | null;
+  } | null;
+  steps: TerminationStep[];
+  error?: string | null;
+  created_at: Date;
+}
+
 export type VaultActivityItem =
   | TransactionActivityEvent
   | ProposalActivityEvent
   | PhaseTransitionEvent
-  | IndexRebalanceActivityEvent;
+  | IndexRebalanceActivityEvent
+  | TerminationActivityEvent;

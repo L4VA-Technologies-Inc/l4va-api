@@ -37,12 +37,16 @@ import {
   ProposalActivityEvent,
   ProposalLifecycleStage,
   VaultLockSummary,
+  TerminationActivityEvent,
+  TerminationActivityStatus,
+  TerminationStep,
   TransactionActivityEvent,
   VaultActivityItem,
 } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
+import { TerminationStatus } from './phase-management/governance/termination.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainWebhookService } from './processing-tx/onchain/blockchain-webhook.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
@@ -80,7 +84,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
-import { ClaimType } from '@/types/claim.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -186,6 +190,17 @@ function normalizeMinAcquireThresholdForDb(
 const ERC165_ABI = parseAbi(['function supportsInterface(bytes4 interfaceId) view returns (bool)']);
 const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
 const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
+
+/** Admin txs of the EVM termination flow, nested under the termination card. */
+const EVM_TERMINATION_TX_TYPES = [
+  TransactionType.evmBeginTerminationPreparing,
+  TransactionType.evmBeginTermination,
+  TransactionType.evmRedeemFor,
+  TransactionType.evmDeferTerminationAsset,
+  TransactionType.evmResumeTerminationAsset,
+  TransactionType.evmFinalizeTermination,
+  TransactionType.evmSweepTerminationRemainder,
+];
 
 @Injectable()
 export class VaultsService {
@@ -2561,6 +2576,7 @@ export class VaultsService {
         'failure_details',
         'deactivated_at',
         'updated_at',
+        'termination_metadata',
       ],
     });
 
@@ -2591,7 +2607,8 @@ export class VaultsService {
           // Failed-vault path: cycle cancel + refunds of contributions / acquires.
           TransactionType.cancel,
           TransactionType.evmCancelCycle,
-          TransactionType.evmRefund
+          TransactionType.evmRefund,
+          ...EVM_TERMINATION_TX_TYPES
         );
       } else if (filter === VaultActivityFilter.CONTRIBUTE) {
         transactionTypes.push(TransactionType.contribute);
@@ -2599,7 +2616,7 @@ export class VaultsService {
         transactionTypes.push(TransactionType.acquire);
       } else if (filter === VaultActivityFilter.GOVERNANCE) {
         // Only to nest under the proposals that executed them.
-        transactionTypes.push(TransactionType.evmSwap);
+        transactionTypes.push(TransactionType.evmSwap, ...EVM_TERMINATION_TX_TYPES);
       }
 
       if (transactionTypes.length > 0) {
@@ -2695,7 +2712,15 @@ export class VaultsService {
     }
 
     if (shouldFetchProposals) {
-      const proposalEvents = await this.getProposalsActivity(vault_id, transactionEvents, rebalanceEvents);
+      const allProposalEvents = await this.getProposalsActivity(vault_id, transactionEvents, rebalanceEvents);
+      // Termination proposals are shown as one termination card with the whole wind-down.
+      const terminationProposals = allProposalEvents.filter(p => p.proposalType === ProposalType.TERMINATION);
+      const proposalEvents = allProposalEvents.filter(p => p.proposalType !== ProposalType.TERMINATION);
+      if (terminationProposals.length > 0) {
+        allActivities.push(...(await this.getTerminationActivity(vault, terminationProposals, transactionEvents)));
+      }
+      const terminationTxTypes: string[] = EVM_TERMINATION_TX_TYPES;
+      transactionEvents = transactionEvents.filter(tx => !terminationTxTypes.includes(tx.type));
       // Actions a proposal executed are shown inside it, not as separate items.
       const nested = new Set(proposalEvents.flatMap(p => p.actions.map(a => a.id)));
       transactionEvents = transactionEvents.filter(tx => !nested.has(tx.id));
@@ -2726,6 +2751,199 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * One card per termination proposal. Only the proposal named in
+   * `termination_metadata` carries on-chain steps; older ones (rejected) show
+   * just their vote. Steps come from admin tx rows (EVM) or the Cardano
+   * termination status machine plus the hashes it stored.
+   */
+  private async getTerminationActivity(
+    vault: Vault,
+    proposals: ProposalActivityEvent[],
+    transactions: TransactionActivityEvent[]
+  ): Promise<TerminationActivityEvent[]> {
+    const meta = vault.termination_metadata;
+    const isEvm = vault.chain_type !== ChainType.cardano;
+
+    // One query for all termination proposals' dates (the activity events don't carry them).
+    const rows = await this.proposalRepository.find({
+      where: { id: In(proposals.map(p => p.proposalId)) },
+      select: ['id', 'title', 'status', 'startDate', 'endDate', 'createdAt'],
+    });
+    const byId = new Map(rows.map(row => [row.id, row]));
+
+    return Promise.all(
+      proposals.map(async proposal => {
+        const p = byId.get(proposal.proposalId);
+        const isActive = meta?.proposalId === proposal.proposalId;
+        const voting = [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE].includes(p.status);
+        const rejected = p.status === ProposalStatus.REJECTED;
+
+        const steps: TerminationStep[] = [{ key: 'proposal_created', status: 'done', at: p.createdAt }];
+        if (voting) {
+          steps.push({ key: 'voting_ends', status: 'current', at: p.endDate });
+        } else if (rejected) {
+          steps.push({ key: 'voting_rejected', status: 'failed', at: p.endDate });
+        } else {
+          steps.push({ key: 'voting_ended', status: 'done', at: p.endDate, note: 'Passed' });
+        }
+
+        let status: TerminationActivityStatus = voting
+          ? TerminationActivityStatus.VOTING
+          : rejected
+            ? TerminationActivityStatus.REJECTED
+            : TerminationActivityStatus.IN_PROGRESS;
+        let redemption: TerminationActivityEvent['redemption'] = null;
+
+        if (!voting && !rejected) {
+          const chainSteps = isEvm
+            ? this.getEvmTerminationSteps(vault, transactions)
+            : await this.getCardanoTerminationSteps(vault, isActive);
+          steps.push(...chainSteps.steps);
+          redemption = isActive ? chainSteps.redemption : null;
+
+          if (vault.vault_status === VaultStatus.burned) {
+            status = TerminationActivityStatus.COMPLETED;
+          } else if (isActive && meta?.error) {
+            status = TerminationActivityStatus.FAILED;
+          }
+        }
+
+        const latest = steps
+          .filter(step => step.at && step.status !== 'upcoming')
+          .reduce((max, step) => Math.max(max, new Date(step.at).getTime()), 0);
+
+        return {
+          id: `${vault.id}_termination_${p.id}`,
+          activityType: ActivityType.TERMINATION,
+          vaultId: vault.id,
+          chain: isEvm ? 'evm' : 'cardano',
+          status,
+          proposal: { id: p.id, title: p.title, status: p.status, startDate: p.startDate, endDate: p.endDate },
+          redemption,
+          steps,
+          error: isActive ? (meta?.error ?? null) : null,
+          created_at: latest ? new Date(latest) : p.createdAt,
+        } satisfies TerminationActivityEvent;
+      })
+    );
+  }
+
+  private getEvmTerminationSteps(
+    vault: Vault,
+    transactions: TransactionActivityEvent[]
+  ): { steps: TerminationStep[]; redemption: TerminationActivityEvent['redemption'] } {
+    const evm = vault.termination_metadata?.evm;
+    const txs = transactions
+      .filter(tx => (EVM_TERMINATION_TX_TYPES as string[]).includes(tx.type))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const has = (type: TransactionType): boolean => txs.some(tx => tx.type === type);
+    const keyByType: Record<string, string> = {
+      [TransactionType.evmBeginTerminationPreparing]: 'preparing',
+      [TransactionType.evmBeginTermination]: 'rates_committed',
+      [TransactionType.evmRedeemFor]: 'redemption_sent',
+      [TransactionType.evmDeferTerminationAsset]: 'asset_deferred',
+      [TransactionType.evmResumeTerminationAsset]: 'asset_resumed',
+      [TransactionType.evmFinalizeTermination]: 'finalized',
+      [TransactionType.evmSweepTerminationRemainder]: 'remainder_swept',
+    };
+
+    const deadline = evm?.terminationDeadline ? new Date(Number(evm.terminationDeadline) * 1000) : null;
+    const steps: TerminationStep[] = txs.map(tx => ({
+      key: keyByType[tx.type],
+      status: 'done',
+      at: tx.created_at,
+      txHash: tx.tx_hash ?? null,
+      note:
+        tx.type === TransactionType.evmBeginTermination && evm?.assets?.length
+          ? `${evm.assets.length} ${evm.assets.length === 1 ? 'asset' : 'assets'} redeemable per VT`
+          : null,
+    }));
+
+    // Steps not reached yet, in protocol order.
+    if (!has(TransactionType.evmBeginTerminationPreparing) && !has(TransactionType.evmBeginTermination)) {
+      steps.push({ key: 'preparing', status: 'current' });
+    }
+    if (!has(TransactionType.evmBeginTermination)) steps.push({ key: 'rates_committed', status: 'upcoming' });
+    if (deadline) {
+      steps.push({ key: 'deadline', status: deadline.getTime() <= Date.now() ? 'done' : 'upcoming', at: deadline });
+    }
+    if (!has(TransactionType.evmFinalizeTermination)) steps.push({ key: 'finalized', status: 'upcoming' });
+    if (!has(TransactionType.evmSweepTerminationRemainder)) {
+      steps.push({ key: 'remainder_swept', status: 'upcoming' });
+    }
+    steps.sort((a, b) => {
+      // Keep undated (upcoming) steps last, in insertion order.
+      if (!a.at || !b.at) return a.at ? -1 : b.at ? 1 : 0;
+      return new Date(a.at).getTime() - new Date(b.at).getTime();
+    });
+
+    const pushes = txs.filter(tx => tx.type === TransactionType.evmRedeemFor).length;
+    return {
+      steps,
+      redemption: has(TransactionType.evmBeginTermination) ? { deadline, claimed: pushes, total: null } : null,
+    };
+  }
+
+  private async getCardanoTerminationSteps(
+    vault: Vault,
+    isActive: boolean
+  ): Promise<{ steps: TerminationStep[]; redemption: TerminationActivityEvent['redemption'] }> {
+    const meta = vault.termination_metadata;
+    if (!isActive || !meta) return { steps: [], redemption: null };
+
+    const flow: { key: string; status: TerminationStatus; hash?: string }[] = [
+      { key: 'nfts_burned', status: TerminationStatus.NFT_BURNED, hash: meta.nftBurnTxHash },
+      { key: 'lp_removal_sent', status: TerminationStatus.LP_REMOVAL_PENDING, hash: meta.lpRemovalTxHash },
+      { key: 'lp_returned', status: TerminationStatus.LP_RETURN_RECEIVED, hash: meta.lpReturnTxHash },
+      { key: 'vt_burned', status: TerminationStatus.VT_BURNED, hash: meta.vtBurnTxHash },
+      { key: 'ada_to_treasury', status: TerminationStatus.ADA_IN_TREASURY, hash: meta.adaTransferTxHash },
+      { key: 'claims_created', status: TerminationStatus.CLAIMS_CREATED },
+      { key: 'claims_processing', status: TerminationStatus.CLAIMS_COMPLETE },
+      { key: 'vault_burned', status: TerminationStatus.VAULT_BURNED, hash: meta.vaultBurnTxHash },
+    ];
+    const order = Object.values(TerminationStatus);
+    const reached = order.indexOf(meta.status as TerminationStatus);
+
+    const hashes = flow.map(f => f.hash).filter(Boolean);
+    const txs = hashes.length
+      ? await this.transactionRepository.find({
+          where: { tx_hash: In(hashes) },
+          select: ['tx_hash', 'updated_at', 'created_at'],
+        })
+      : [];
+    const timeByHash = new Map(txs.map(tx => [tx.tx_hash, tx.updated_at ?? tx.created_at]));
+
+    let currentMarked = false;
+    const steps: TerminationStep[] = flow.map(f => {
+      // A step is done once the machine reached its status or stored its hash.
+      const done = order.indexOf(f.status) <= reached || !!f.hash;
+      let status: TerminationStep['status'] = done ? 'done' : 'upcoming';
+      if (!done && !currentMarked) {
+        status = meta.error ? 'failed' : 'current';
+        currentMarked = true;
+      }
+      return {
+        key: f.key,
+        status,
+        txHash: f.hash ?? null,
+        at:
+          (f.hash && timeByHash.get(f.hash)) ||
+          (f.key === 'claims_created' && meta.claimsCreatedAt ? new Date(meta.claimsCreatedAt) : null),
+      };
+    });
+
+    const claims = await this.claimRepository.find({
+      where: { vault_id: vault.id, type: ClaimType.TERMINATION },
+      select: ['id', 'status'],
+    });
+    const claimed = claims.filter(c => c.status === ClaimStatus.CLAIMED).length;
+    const processing = steps.find(step => step.key === 'claims_processing');
+    if (processing && claims.length) processing.note = `${claimed} / ${claims.length} claimed`;
+
+    return { steps, redemption: claims.length ? { claimed, total: claims.length } : null };
   }
 
   /**
