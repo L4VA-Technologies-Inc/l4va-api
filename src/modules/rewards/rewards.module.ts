@@ -6,11 +6,13 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { RewardAdminController } from './reward-admin.controller';
 import { RewardEstimateAdminController } from './reward-estimate-admin.controller';
 import { RewardsController } from './rewards.controller';
+import { EvmSwapVerifier } from './services/evm-swap-verifier.service';
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEpochConfigProxy } from './services/reward-epoch-config-proxy.service';
 import { RewardEstimateProxy } from './services/reward-estimate-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
+import { Market } from '@/database/market.entity';
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
 import { Vault } from '@/database/vault.entity';
 import { UsersModule } from '@/modules/users/users.module';
@@ -27,9 +29,9 @@ import { UsersModule } from '@/modules/users/users.module';
  * Cardano tx building now lives entirely in l4va-rewards (ClaimTxBuilderService).
  */
 @Module({
-  imports: [HttpModule, ConfigModule, UsersModule, TypeOrmModule.forFeature([RewardEventOutbox, Vault])],
+  imports: [HttpModule, ConfigModule, UsersModule, TypeOrmModule.forFeature([RewardEventOutbox, Vault, Market])],
   controllers: [RewardsController, RewardAdminController, RewardEstimateAdminController],
-  providers: [RewardEventProducer, RewardClaimProxy, RewardEpochConfigProxy, RewardEstimateProxy],
+  providers: [RewardEventProducer, RewardClaimProxy, RewardEpochConfigProxy, RewardEstimateProxy, EvmSwapVerifier],
   exports: [RewardEventProducer],
 })
 export class RewardsModule {}

@@ -24,6 +24,7 @@ import {
   WalletVaultDetailsDto,
   WalletVaultTimelineDto,
 } from './dto/rewards.dto';
+import { EvmSwapVerifier } from './services/evm-swap-verifier.service';
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
@@ -32,6 +33,7 @@ import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { WalletLinkService } from '@/modules/users/wallet-link.service';
 import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
+import { ChainType } from '@/types/vault.types';
 
 /**
  * Public rewards controller for l4va-api.
@@ -48,6 +50,7 @@ export class RewardsController {
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly rewardClaimProxy: RewardClaimProxy,
     private readonly walletLinkService: WalletLinkService,
+    private readonly evmSwapVerifier: EvmSwapVerifier,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
   ) {}
@@ -76,6 +79,10 @@ export class RewardsController {
     vaultId?: string;
     vaultName?: string;
   }> {
+    if (body?.chainType === ChainType.robinhood) {
+      return this.trackEvmWidgetSwap(req, body);
+    }
+
     const swaps: WidgetSwapItemData[] = Array.isArray(body?.data)
       ? body.data
       : body?.tx_hash
@@ -150,6 +157,41 @@ export class RewardsController {
       vaultId: vault.id,
       vaultName: vault.name,
     };
+  }
+
+  /**
+   * Robinhood (Uniswap widget): nothing in the body is trusted beyond the tx
+   * hash. The swap is verified on-chain and always credited to the caller.
+   */
+  private async trackEvmWidgetSwap(
+    req: AuthRequest,
+    body: WidgetSwapEventData
+  ): Promise<{ indexed: boolean; reason?: string; eventId?: string; vaultId?: string; vaultName?: string }> {
+    const txHash = body.tx_hash ?? body.data?.find(swap => swap?.tx_hash)?.tx_hash;
+    if (!txHash) return { indexed: false, reason: 'no transaction hash found' };
+
+    const swap = await this.evmSwapVerifier.verify(txHash, req.user.address);
+    if (swap.ok === false) return { indexed: false, reason: swap.reason };
+
+    const event = await this.rewardEventProducer.indexEvent({
+      walletAddress: req.user.address.toLowerCase(),
+      vaultId: swap.vault.id,
+      eventType: RewardActivityType.WIDGET_SWAP,
+      txHash: txHash.toLowerCase(),
+      units: 1,
+      metadata: {
+        dex: 'uniswap',
+        chain: ChainType.robinhood,
+        side: swap.side,
+        vaultToken: swap.vaultToken,
+        vtAmount: swap.vtAmount,
+        router: swap.router,
+        blockNumber: swap.blockNumber,
+        vaultName: swap.vault.name,
+      },
+    });
+
+    return { indexed: !!event, eventId: event?.id, vaultId: swap.vault.id, vaultName: swap.vault.name };
   }
 
   // ============================================================================

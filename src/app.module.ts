@@ -40,6 +40,7 @@ import { WayUpModule } from './modules/wayup/wayup.module';
 import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { BurnLockModule } from '@/modules/burn-lock/burn-lock.module';
+import { CardanoBuybackModule } from '@/modules/cardano-buyback/cardano-buyback.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
 import { PresaleModule } from '@/modules/presale/presale.module';
@@ -64,7 +65,8 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
       useFactory: (configService: ConfigService) => ({
         connection: {
           host: configService.get<string>('REDIS_HOST'),
-          port: 6379,
+          // Fixed at 6379 unless overridden; REDIS_PORT can be a host-mapped port that Bull must not use.
+          port: Number(configService.get<string>('BULL_REDIS_PORT') ?? 6379),
           role: 'master',
           password: configService.get<string>('REDIS_PASSWORD'),
           db: Number(configService.get<string>('REDIS_DB') ?? 0),
@@ -125,6 +127,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     PresetsModule,
     PresaleModule,
     BurnLockModule,
+    CardanoBuybackModule,
     OgModule,
     RewardsModule,
     StakeModule,

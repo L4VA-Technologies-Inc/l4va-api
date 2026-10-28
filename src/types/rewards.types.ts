@@ -1,3 +1,5 @@
+import { ChainType } from '@/types/vault.types';
+
 export enum RewardActivityType {
   ASSET_CONTRIBUTION = 'asset_contribution',
   TOKEN_ACQUIRE = 'token_acquire',
@@ -121,6 +123,9 @@ export interface WidgetSwapItemData {
 
 export interface WidgetSwapEventData {
   data?: WidgetSwapItemData[];
+
+  /** 'robinhood' for the Uniswap widget; omitted by the Cardano DexHunter widget. */
+  chainType?: ChainType;
 
   // Backward compatibility for flat payloads
   amount_in?: string;

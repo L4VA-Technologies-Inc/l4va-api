@@ -46,6 +46,12 @@ export interface SystemSettingsData {
   contribution_enabled: boolean;
   acquire_enabled: boolean;
   governance_enabled: boolean;
+  // Stops every user-initiated EVM (Robinhood-chain) flow handled by the API:
+  // vault creation, contribution/acquire preparation and proposals. Cardano is
+  // unaffected. Does not stop direct contract calls; pause the contracts for that.
+  evm_enabled: boolean;
+  // Cardano L4VA buyback cron and manual runs
+  cardano_buyback_enabled: boolean;
   // Allows disabling NFT (ERC721/ERC1155) assets on EVM (Robinhood-chain) vaults
   // without a contract change; Cardano NFT support is unaffected.
   evm_nft_assets_enabled: boolean;
@@ -126,6 +132,8 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   contribution_enabled: true,
   acquire_enabled: true,
   governance_enabled: true,
+  evm_enabled: true,
+  cardano_buyback_enabled: true,
   evm_nft_assets_enabled: false,
   vault_archetypes_enabled: {
     [ChainType.cardano]: [VaultArchetype.standard],
@@ -479,6 +487,14 @@ export class SystemSettingsService implements OnModuleInit {
 
   get governanceEnabled(): boolean {
     return this.settings.governance_enabled !== false; // Default true if not set
+  }
+
+  get evmEnabled(): boolean {
+    return this.settings.evm_enabled !== false; // Default true if not set
+  }
+
+  get cardanoBuybackEnabled(): boolean {
+    return this.settings.cardano_buyback_enabled !== false; // Default true if not set
   }
 
   get evmNftAssetsEnabled(): boolean {

@@ -2,11 +2,15 @@ import { Buffer } from 'buffer';
 
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
 import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
+import Redis from 'ioredis';
 import { Brackets, Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
+import { createPublicClient, defineChain, getAddress, http, isAddress, type Hex } from 'viem';
+import { createSiweMessage, generateSiweNonce } from 'viem/siwe';
 
 import { PriceService } from '../price/price.service';
 import { UsersService } from '../users/users.service';
@@ -16,19 +20,100 @@ import { LoginRes } from './dto/login.res';
 
 import { Vault } from '@/database/vault.entity';
 import { transformImageToUrl } from '@/helpers';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { ChainType, VaultStatus } from '@/types/vault.types';
+
+const EVM_CHALLENGE_TTL_SECONDS = 300;
+// Frontends allowed to request a sign-in message; the wallet shows this domain and
+// warns when it does not match the site asking for the signature.
+const DEFAULT_SIWE_ORIGINS = [
+  'https://app.l4va.org',
+  'https://testnet.l4va.org',
+  'https://testnet-29272671.l4va.org',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+const evmChallengeKey = (address: string): string => `auth:evm-challenge:${address.toLowerCase()}`;
 
 @Injectable()
 export class AuthService {
+  private evmPublicClient: ReturnType<typeof createPublicClient> | null = null;
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
     private readonly priceService: PriceService,
+    private readonly configService: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(Vault)
     private vaultRepository: Repository<Vault>
   ) {}
 
+  /**
+   * Issue a single-use login message for an EVM wallet. Only the latest message
+   * per address is valid, it expires after EVM_CHALLENGE_TTL_SECONDS and is
+   * consumed by the first login attempt, so a captured signature cannot be replayed.
+   */
+  async createEvmChallenge(walletAddress: string, origin: string | undefined): Promise<{ message: string }> {
+    const allowedOrigins =
+      this.configService
+        .get<string>('SIWE_ALLOWED_ORIGINS')
+        ?.split(',')
+        .map(o => o.trim())
+        .filter(Boolean) ?? DEFAULT_SIWE_ORIGINS;
+    if (!origin || !allowedOrigins.includes(origin)) {
+      throw new BadRequestException('Sign-in is not allowed from this origin');
+    }
+
+    const now = new Date();
+    const { host } = new URL(origin);
+    const message = createSiweMessage({
+      domain: host,
+      address: getAddress(walletAddress),
+      statement: 'Sign in to L4VA',
+      uri: origin,
+      version: '1',
+      chainId: Number(this.configService.get<number>('EVM_CHAIN_ID', 46630)),
+      nonce: generateSiweNonce(),
+      issuedAt: now,
+      expirationTime: new Date(now.getTime() + EVM_CHALLENGE_TTL_SECONDS * 1000),
+    });
+    await this.redis.set(evmChallengeKey(walletAddress), message, 'EX', EVM_CHALLENGE_TTL_SECONDS);
+    return { message };
+  }
+
+  private async verifyEvmLogin(walletAddress: string, signature: string): Promise<boolean> {
+    if (!isAddress(walletAddress) || !signature) return false;
+
+    // Consume the challenge before verifying so every message gets exactly one attempt
+    const key = evmChallengeKey(walletAddress);
+    const [[, message]] = (await this.redis.multi().get(key).del(key).exec()) as [[Error | null, string | null]];
+    if (!message) return false;
+
+    // publicClient.verifyMessage covers EOAs as well as smart-contract wallets (EIP-1271/6492)
+    return this.getEvmPublicClient().verifyMessage({
+      address: getAddress(walletAddress),
+      message,
+      signature: signature as Hex,
+    });
+  }
+
+  private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
+    if (!this.evmPublicClient) {
+      const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
+      const chain = defineChain({
+        id: Number(this.configService.get<number>('EVM_CHAIN_ID', 46630)),
+        name: 'Robinhood',
+        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: { default: { http: [rpcUrl] } },
+      });
+      this.evmPublicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+    }
+    return this.evmPublicClient;
+  }
+
   async login(payload: LoginReq): Promise<LoginRes> {
+    payload.chainType ??= ChainType.cardano;
     if (payload.chainType === ChainType.cardano) {
       return await this.handleCardano(payload);
     }
@@ -39,6 +124,19 @@ export class AuthService {
 
   async handleRobinhood(payload: LoginReq): Promise<LoginRes> {
     const { walletAddress, chainType } = payload;
+
+    let isVerified = false;
+    try {
+      isVerified = await this.verifyEvmLogin(walletAddress, payload.evmSignature);
+    } catch {
+      isVerified = false;
+    }
+    if (!isVerified) {
+      return {
+        success: false,
+        message: 'Signature verification failed',
+      };
+    }
 
     // Find user in database by wallet address
     let user = await this.usersService.findByAddress(walletAddress);
