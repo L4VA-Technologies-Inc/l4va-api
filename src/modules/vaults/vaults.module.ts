@@ -17,9 +17,11 @@ import { VaultsService } from './vaults.service';
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Claim } from '@/database/claim.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
+import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -71,6 +73,8 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
       TokenVerification,
       EvmContribution,
       EvmIndexRebalance,
+      Claim,
+      EvmValuationSnapshot,
     ]),
     HttpModule,
   ],

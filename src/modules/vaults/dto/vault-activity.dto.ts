@@ -54,6 +54,37 @@ export interface PhaseTransitionEvent {
   vaultId: string;
   phase: VaultStatus;
   created_at: Date;
+  /** Set on the `locked` transition once the lock outcome is known. */
+  summary?: VaultLockSummary | null;
+}
+
+/**
+ * What the lock settled. Amounts are integer strings in base units: VT in
+ * `vtDecimals`, native (lovelace / wei) in `nativeDecimals`.
+ */
+export interface VaultLockSummary {
+  nativeSymbol: 'ADA' | 'ETH';
+  nativeDecimals: number;
+  vtTicker: string | null;
+  vtDecimals: number;
+  vtSupply: string;
+  /** Configured split, in percent. */
+  acquirersPercent: number;
+  lpPercent: number;
+  /** Value of the contributed assets at lock. */
+  assetsValue: string;
+  /** Native paid in by acquirers. */
+  totalRaised: string;
+  fdv: string | null;
+  contributorsVt: string;
+  acquirersVt: string;
+  lpVt: string;
+  /** Native paid out to contributors / paired into the LP. */
+  contributorsNative: string;
+  lpNative: string;
+  contributorsCount: number;
+  acquirersCount: number;
+  txHash: string | null;
 }
 
 export interface IndexRebalanceActivityAsset {

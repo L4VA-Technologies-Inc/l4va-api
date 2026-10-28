@@ -36,6 +36,7 @@ import {
   PhaseTransitionEvent,
   ProposalActivityEvent,
   ProposalLifecycleStage,
+  VaultLockSummary,
   TransactionActivityEvent,
   VaultActivityItem,
 } from './dto/vault-activity.dto';
@@ -48,6 +49,7 @@ import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { EvmContractReader } from './processing-tx/onchain/evm-contract-reader.service';
 import { EvmContributionBackfillService } from './processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
+import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
 import { buildOperationId } from './processing-tx/onchain/evm-position.service';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
@@ -58,9 +60,11 @@ import { EvmVaultOnchainStatus, VAULT_ABI } from './processing-tx/onchain/vault.
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Claim } from '@/database/claim.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
+import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -76,6 +80,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { ClaimType } from '@/types/claim.types';
 import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -223,6 +228,10 @@ export class VaultsService {
     private readonly evmContributionsRepository: Repository<EvmContribution>,
     @InjectRepository(EvmIndexRebalance)
     private readonly indexRebalanceRepository: Repository<EvmIndexRebalance>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
+    @InjectRepository(EvmValuationSnapshot)
+    private readonly evmSnapshotRepository: Repository<EvmValuationSnapshot>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -2538,6 +2547,16 @@ export class VaultsService {
         'vault_status',
         'created_at',
         'vault_archetype',
+        'chain_type',
+        'ft_token_supply',
+        'ft_token_decimals',
+        'vault_token_ticker',
+        'tokens_for_acquires',
+        'liquidity_pool_contribution',
+        'total_assets_cost_ada',
+        'total_acquired_value_ada',
+        'fdv',
+        'evm_close_cycle_tx_hash',
       ],
     });
 
@@ -2626,6 +2645,7 @@ export class VaultsService {
           vaultId: vault.id,
           phase: VaultStatus.locked,
           created_at: vault.locked_at,
+          summary: await this.getLockSummary(vault),
         };
         allActivities.push(lockedPhaseEvent);
       }
@@ -2727,6 +2747,96 @@ export class VaultsService {
           created_at: run.completed_at ?? run.created_at,
         };
       });
+  }
+
+  /** Lock outcome for the activity feed; null when it cannot be derived (yet). */
+  private async getLockSummary(vault: Vault): Promise<VaultLockSummary | null> {
+    try {
+      const isEvm = vault.chain_type === ChainType.robinhood;
+      const vtDecimals = Number(vault.ft_token_decimals ?? 0);
+      const vtSupply = BigInt(Math.round(Number(vault.ft_token_supply ?? 0))) * 10n ** BigInt(vtDecimals);
+
+      const participants = await this.transactionRepository
+        .createQueryBuilder('t')
+        .select('t.type', 'type')
+        .addSelect('COUNT(DISTINCT t.user_id)', 'count')
+        .where('t.vault_id = :id', { id: vault.id })
+        .andWhere('t.type IN (:...types)', { types: [TransactionType.contribute, TransactionType.acquire] })
+        .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+        .groupBy('t.type')
+        .getRawMany<{ type: TransactionType; count: string }>();
+      const countOf = (type: TransactionType): number => Number(participants.find(p => p.type === type)?.count ?? 0);
+
+      const base = {
+        vtTicker: vault.vault_token_ticker ?? null,
+        vtDecimals,
+        vtSupply: vtSupply.toString(),
+        acquirersPercent: Number(vault.tokens_for_acquires ?? 0),
+        lpPercent: Number(vault.liquidity_pool_contribution ?? 0),
+        contributorsCount: countOf(TransactionType.contribute),
+        acquirersCount: countOf(TransactionType.acquire),
+      };
+
+      if (isEvm) {
+        const snapshot = await this.evmSnapshotRepository.findOne({
+          where: { vault_id: vault.id, status: EvmSnapshotStatus.confirmed },
+          order: { created_at: 'ASC' },
+        });
+        if (!snapshot) return null;
+        const lp = snapshot.lp_carveout as Partial<EvmLpCarveoutRecord>;
+        const lpVt = BigInt(lp.lpVtAmount ?? 0);
+        // Mirrors computeEvmAllocationRows: the acquirer pool is a share of the supply left after the LP.
+        const acquirersVt = ((vtSupply - lpVt) * BigInt(Math.round(base.acquirersPercent * 100))) / 10_000n;
+        const contributorsVt = BigInt(snapshot.total_vt_allocation) - acquirersVt;
+        return {
+          ...base,
+          nativeSymbol: 'ETH',
+          nativeDecimals: 18,
+          assetsValue: snapshot.total_asset_value_native,
+          totalRaised: snapshot.total_native_raised,
+          fdv: snapshot.fdv_native ?? null,
+          // Per-wallet floors can leave the allocation total a few units under the pools.
+          contributorsVt: (contributorsVt > 0n ? contributorsVt : 0n).toString(),
+          acquirersVt: acquirersVt.toString(),
+          lpVt: lpVt.toString(),
+          contributorsNative: snapshot.total_native_allocation,
+          lpNative: String(lp.lpNativeAmount ?? '0'),
+          txHash: vault.evm_close_cycle_tx_hash ?? null,
+        };
+      }
+
+      const totals = await this.claimRepository
+        .createQueryBuilder('c')
+        .select('c.type', 'type')
+        .addSelect('COALESCE(SUM(c.amount), 0)::text', 'vt')
+        .addSelect('COALESCE(SUM(c.lovelace_amount), 0)::text', 'native')
+        .where('c.vault_id = :id', { id: vault.id })
+        .andWhere('c.type IN (:...types)', { types: [ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER, ClaimType.LP] })
+        .groupBy('c.type')
+        .getRawMany<{ type: ClaimType; vt: string; native: string }>();
+      if (totals.length === 0) return null;
+      const total = (type: ClaimType, field: 'vt' | 'native'): string =>
+        BigInt(totals.find(t => t.type === type)?.[field]?.split('.')[0] ?? '0').toString();
+      const toLovelace = (ada: unknown): string => BigInt(Math.round(Number(ada ?? 0) * 1_000_000)).toString();
+
+      return {
+        ...base,
+        nativeSymbol: 'ADA',
+        nativeDecimals: 6,
+        assetsValue: toLovelace(vault.total_assets_cost_ada),
+        totalRaised: toLovelace(vault.total_acquired_value_ada),
+        fdv: vault.fdv ? toLovelace(vault.fdv) : null,
+        contributorsVt: total(ClaimType.CONTRIBUTOR, 'vt'),
+        acquirersVt: total(ClaimType.ACQUIRER, 'vt'),
+        lpVt: total(ClaimType.LP, 'vt'),
+        contributorsNative: total(ClaimType.CONTRIBUTOR, 'native'),
+        lpNative: total(ClaimType.LP, 'native'),
+        txHash: null,
+      };
+    } catch (error) {
+      this.logger.warn(`Lock summary for vault ${vault.id} unavailable: ${(error as Error).message}`);
+      return null;
+    }
   }
 
   /**
