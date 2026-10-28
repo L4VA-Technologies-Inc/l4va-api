@@ -1,7 +1,7 @@
 import { Transaction } from '@/database/transaction.entity';
 import { IndexLegSide, IndexLegStatus, IndexRebalanceStatus, IndexRebalanceTrigger } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { VaultStatus } from '@/types/vault.types';
+import { VaultFailureReason, VaultStatus } from '@/types/vault.types';
 
 export enum ActivityType {
   TRANSACTION = 'transaction',
@@ -56,6 +56,19 @@ export interface PhaseTransitionEvent {
   created_at: Date;
   /** Set on the `locked` transition once the lock outcome is known. */
   summary?: VaultLockSummary | null;
+  /** Set on the `failed` transition. */
+  failure?: VaultFailureInfo | null;
+  /** Failed vault only: cycle cancel + refund txs it triggered, oldest first. */
+  actions?: TransactionActivityEvent[];
+}
+
+export interface VaultFailureInfo {
+  reason: VaultFailureReason | null;
+  message: string | null;
+  /** Raw failure details (thresholds, required vs actual amounts, ...). */
+  details: Record<string, any> | null;
+  /** Any confirmed contribute / acquire tx exists, i.e. there is something to refund. */
+  hasDeposits: boolean;
 }
 
 /**

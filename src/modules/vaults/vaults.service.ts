@@ -2557,6 +2557,10 @@ export class VaultsService {
         'total_acquired_value_ada',
         'fdv',
         'evm_close_cycle_tx_hash',
+        'failure_reason',
+        'failure_details',
+        'deactivated_at',
+        'updated_at',
       ],
     });
 
@@ -2583,7 +2587,11 @@ export class VaultsService {
           TransactionType.contribute,
           TransactionType.acquire,
           // Vault-side trades (governance swaps) belong in the vault's history too.
-          TransactionType.evmSwap
+          TransactionType.evmSwap,
+          // Failed-vault path: cycle cancel + refunds of contributions / acquires.
+          TransactionType.cancel,
+          TransactionType.evmCancelCycle,
+          TransactionType.evmRefund
         );
       } else if (filter === VaultActivityFilter.CONTRIBUTE) {
         transactionTypes.push(TransactionType.contribute);
@@ -2648,6 +2656,37 @@ export class VaultsService {
           summary: await this.getLockSummary(vault),
         };
         allActivities.push(lockedPhaseEvent);
+      }
+
+      if (vault.vault_status === VaultStatus.failed) {
+        // Cancel + refund txs are shown inside the failed event, not as separate items.
+        const refundTypes: string[] = [
+          TransactionType.cancel,
+          TransactionType.evmCancelCycle,
+          TransactionType.evmRefund,
+        ];
+        const failureActions = transactionEvents
+          .filter(tx => refundTypes.includes(tx.type))
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        transactionEvents = transactionEvents.filter(tx => !refundTypes.includes(tx.type));
+
+        const failedPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_failed_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.failed,
+          created_at: vault.deactivated_at ?? vault.updated_at,
+          failure: {
+            reason: vault.failure_reason ?? null,
+            message: vault.failure_details?.message ?? null,
+            details: vault.failure_details ?? null,
+            hasDeposits: transactionEvents.some(
+              tx => tx.type === TransactionType.contribute || tx.type === TransactionType.acquire
+            ),
+          },
+          actions: failureActions,
+        };
+        allActivities.push(failedPhaseEvent);
       }
     }
 
