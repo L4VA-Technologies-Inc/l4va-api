@@ -35,6 +35,7 @@ import {
   IndexRebalanceActivityEvent,
   PhaseTransitionEvent,
   ProposalActivityEvent,
+  ProposalLifecycleStage,
   TransactionActivityEvent,
   VaultActivityItem,
 } from './dto/vault-activity.dto';
@@ -47,6 +48,7 @@ import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { EvmContractReader } from './processing-tx/onchain/evm-contract-reader.service';
 import { EvmContributionBackfillService } from './processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
+import { buildOperationId } from './processing-tx/onchain/evm-position.service';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
@@ -2544,9 +2546,10 @@ export class VaultsService {
     }
 
     const allActivities: VaultActivityItem[] = [];
+    let transactionEvents: TransactionActivityEvent[] = [];
+    let rebalanceEvents: IndexRebalanceActivityEvent[] = [];
 
-    const shouldFetchTransactions =
-      filter !== VaultActivityFilter.GOVERNANCE && filter !== VaultActivityFilter.REBALANCE;
+    const shouldFetchTransactions = filter !== VaultActivityFilter.REBALANCE;
     const shouldFetchRebalances =
       vault.vault_archetype === VaultArchetype.index_weighted &&
       (filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.REBALANCE);
@@ -2567,6 +2570,9 @@ export class VaultsService {
         transactionTypes.push(TransactionType.contribute);
       } else if (filter === VaultActivityFilter.ACQUIRE) {
         transactionTypes.push(TransactionType.acquire);
+      } else if (filter === VaultActivityFilter.GOVERNANCE) {
+        // Only to nest under the proposals that executed them.
+        transactionTypes.push(TransactionType.evmSwap);
       }
 
       if (transactionTypes.length > 0) {
@@ -2579,7 +2585,7 @@ export class VaultsService {
           .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
           .getMany();
 
-        const transactionEvents: TransactionActivityEvent[] = transactions.map(tx => ({
+        transactionEvents = transactions.map(tx => ({
           ...tx,
           assets: tx.assets?.map(asset => ({
             ...asset,
@@ -2587,8 +2593,6 @@ export class VaultsService {
           })) as Asset[],
           activityType: ActivityType.TRANSACTION,
         }));
-
-        allActivities.push(...transactionEvents);
       }
     }
 
@@ -2627,14 +2631,23 @@ export class VaultsService {
       }
     }
 
+    if (shouldFetchRebalances) {
+      rebalanceEvents = await this.getIndexRebalancesActivity(vault_id);
+    }
+
     if (shouldFetchProposals) {
-      const proposalEvents = await this.getProposalsActivity(vault_id);
+      const proposalEvents = await this.getProposalsActivity(vault_id, transactionEvents, rebalanceEvents);
+      // Actions a proposal executed are shown inside it, not as separate items.
+      const nested = new Set(proposalEvents.flatMap(p => p.actions.map(a => a.id)));
+      transactionEvents = transactionEvents.filter(tx => !nested.has(tx.id));
+      rebalanceEvents = rebalanceEvents.filter(run => !nested.has(run.id));
       allActivities.push(...proposalEvents);
     }
 
-    if (shouldFetchRebalances) {
-      allActivities.push(...(await this.getIndexRebalancesActivity(vault_id)));
+    if (filter !== VaultActivityFilter.GOVERNANCE) {
+      allActivities.push(...transactionEvents);
     }
+    allActivities.push(...rebalanceEvents);
 
     allActivities.sort((a, b) => {
       const dateA = new Date(a.created_at).getTime();
@@ -2716,7 +2729,15 @@ export class VaultsService {
       });
   }
 
-  private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+  /**
+   * One item per proposal: the lifecycle stages it reached plus the swaps and
+   * rebalance runs it executed, picked out of `transactions` / `rebalances`.
+   */
+  private async getProposalsActivity(
+    vault_id: string,
+    transactions: TransactionActivityEvent[],
+    rebalances: IndexRebalanceActivityEvent[]
+  ): Promise<ProposalActivityEvent[]> {
     // Exclude UNPAID proposals from activity feed (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
       where: {
@@ -2726,53 +2747,66 @@ export class VaultsService {
       order: { createdAt: 'DESC' },
     });
 
+    const actionsByProposal = new Map<string, ProposalActivityEvent['actions']>();
+    const addAction = (proposalId: string, action: ProposalActivityEvent['actions'][number]): void => {
+      actionsByProposal.set(proposalId, [...(actionsByProposal.get(proposalId) ?? []), action]);
+    };
+
+    const swaps = transactions.filter(tx => tx.type === TransactionType.evmSwap);
+    if (swaps.length > 0) {
+      // Swaps recorded before `metadata.proposalId` existed are matched by their
+      // operationId, which is derived from (vault, proposal, action index).
+      const proposalByOperationId = new Map<string, string>();
+      for (const proposal of proposals) {
+        (proposal.metadata?.marketplaceActions ?? []).forEach((_, i) =>
+          proposalByOperationId.set(buildOperationId(vault_id, proposal.id, i).toLowerCase(), proposal.id)
+        );
+      }
+      for (const tx of swaps) {
+        const proposalId =
+          tx.metadata?.proposalId ?? proposalByOperationId.get(String(tx.metadata?.operationId ?? '').toLowerCase());
+        if (proposalId) addAction(proposalId, tx);
+      }
+    }
+    for (const run of rebalances) {
+      if (run.proposalId) addAction(run.proposalId, run);
+    }
+
     const events: ProposalActivityEvent[] = [];
     const now = new Date();
 
     for (const proposal of proposals) {
-      const createdAt = new Date(proposal.createdAt);
+      const lifecycle: ProposalActivityEvent['lifecycle'] = [
+        { stage: ProposalLifecycleStage.CREATED, at: new Date(proposal.createdAt) },
+      ];
       const startDate = new Date(proposal.startDate);
       const endDate = new Date(proposal.endDate);
+      if (startDate < now) lifecycle.push({ stage: ProposalLifecycleStage.STARTED, at: startDate });
+      if (endDate < now) lifecycle.push({ stage: ProposalLifecycleStage.ENDED, at: endDate });
+
+      const actions = (actionsByProposal.get(proposal.id) ?? []).sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      const latest = Math.max(
+        ...lifecycle.map(e => e.at.getTime()),
+        ...actions.map(a => new Date(a.created_at).getTime())
+      );
 
       events.push({
-        id: `${proposal.id}_created`,
-        activityType: ActivityType.PROPOSAL_CREATED,
+        id: proposal.id,
+        activityType: ActivityType.PROPOSAL,
         proposalId: proposal.id,
+        proposalType: proposal.proposalType,
         title: proposal.title,
         description: proposal.description,
         status: proposal.status,
+        stage: lifecycle[lifecycle.length - 1].stage,
+        lifecycle,
+        actions,
         creatorId: proposal.creatorId,
-        created_at: createdAt,
+        created_at: new Date(latest),
         executionError: proposal.metadata?.executionError?.message,
       });
-
-      if (startDate < now) {
-        events.push({
-          id: `${proposal.id}_started`,
-          activityType: ActivityType.PROPOSAL_STARTED,
-          proposalId: proposal.id,
-          title: proposal.title,
-          description: proposal.description,
-          status: proposal.status,
-          creatorId: proposal.creatorId,
-          created_at: startDate,
-          executionError: proposal.metadata?.executionError?.message,
-        });
-      }
-
-      if (endDate < now) {
-        events.push({
-          id: `${proposal.id}_ended`,
-          activityType: ActivityType.PROPOSAL_ENDED,
-          proposalId: proposal.id,
-          title: proposal.title,
-          description: proposal.description,
-          status: proposal.status,
-          creatorId: proposal.creatorId,
-          created_at: endDate,
-          executionError: proposal.metadata?.executionError?.message,
-        });
-      }
     }
 
     return events;

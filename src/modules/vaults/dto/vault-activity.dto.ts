@@ -1,24 +1,44 @@
 import { Transaction } from '@/database/transaction.entity';
 import { IndexLegSide, IndexLegStatus, IndexRebalanceStatus, IndexRebalanceTrigger } from '@/types/index-vault.types';
-import { ProposalStatus } from '@/types/proposal.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 
 export enum ActivityType {
   TRANSACTION = 'transaction',
-  PROPOSAL_CREATED = 'proposal_created',
-  PROPOSAL_STARTED = 'proposal_started',
-  PROPOSAL_ENDED = 'proposal_ended',
+  PROPOSAL = 'proposal',
   PHASE_TRANSITION = 'phase_transition',
   INDEX_REBALANCE = 'index_rebalance',
 }
 
+export enum ProposalLifecycleStage {
+  CREATED = 'created',
+  STARTED = 'started',
+  ENDED = 'ended',
+}
+
+export interface ProposalLifecycleEvent {
+  stage: ProposalLifecycleStage;
+  at: Date;
+}
+
+/**
+ * One proposal with its whole history: lifecycle stages reached so far plus the
+ * on-chain actions it executed. `created_at` is the latest of those, so the
+ * proposal sorts by its most recent activity.
+ */
 export interface ProposalActivityEvent {
   id: string;
-  activityType: ActivityType.PROPOSAL_CREATED | ActivityType.PROPOSAL_STARTED | ActivityType.PROPOSAL_ENDED;
+  activityType: ActivityType.PROPOSAL;
   proposalId: string;
+  proposalType: ProposalType;
   title: string;
   description: string;
   status: ProposalStatus;
+  /** Latest lifecycle stage reached. */
+  stage: ProposalLifecycleStage;
+  lifecycle: ProposalLifecycleEvent[];
+  /** Swaps / rebalance runs the proposal executed, oldest first. */
+  actions: (TransactionActivityEvent | IndexRebalanceActivityEvent)[];
   creatorId: string;
   created_at: Date;
   executionError?: string;

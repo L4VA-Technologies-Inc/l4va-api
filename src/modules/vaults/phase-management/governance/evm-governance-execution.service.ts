@@ -445,16 +445,20 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           return false;
         }
 
-        const res = await this.swapService.swap(vault.id, {
-          operationId,
-          adapter,
-          assetIn,
-          amountIn,
-          assetOut,
-          minAmountOut,
-          deadline: txDeadline(),
-          route: quote.route,
-        });
+        const res = await this.swapService.swap(
+          vault.id,
+          {
+            operationId,
+            adapter,
+            assetIn,
+            amountIn,
+            assetOut,
+            minAmountOut,
+            deadline: txDeadline(),
+            route: quote.route,
+          },
+          { proposalId: proposal.id }
+        );
 
         this.logger.log(
           `Proposal ${proposal.id} action[${i}]: swap ${assetIn}→${assetOut} ` +

@@ -75,7 +75,8 @@ export class EvmSwapService {
     private readonly adminSigner: EvmAdminSigner
   ) {}
 
-  async swap(vaultId: string, params: SwapParams): Promise<SwapResult> {
+  /** `proposalId` ties a governance swap to its proposal in the vault activity feed. */
+  async swap(vaultId: string, params: SwapParams, context: { proposalId?: string } = {}): Promise<SwapResult> {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
@@ -97,6 +98,7 @@ export class EvmSwapService {
           amountIn: params.amountIn.toString(),
           assetOut: params.assetOut,
           minAmountOut: params.minAmountOut.toString(),
+          ...(context.proposalId && { proposalId: context.proposalId }),
         },
       })
     );
