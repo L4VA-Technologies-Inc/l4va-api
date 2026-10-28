@@ -22,6 +22,10 @@ const VAULT_TOKEN_CHECKPOINT_ABI = [
   parseAbiItem('function isExcludedHolderAt(address account, uint256 timepoint) view returns (bool)'),
 ] as const;
 
+const VAULT_TOKEN_EXCLUSION_ABI = [
+  parseAbiItem('function isExcludedHolder(address account) view returns (bool)'),
+] as const;
+
 export { VAULT_TOKEN_CHECKPOINT_ABI };
 
 /** Block range per getLogs request — stays safely within most RPC limits. */
@@ -139,6 +143,8 @@ export class EvmSnapshotService {
       }
     }
 
+    await this.dropNonVoters(balances, vault.contract_address as Address, vtAddress, vaultId);
+
     // Serialize bigint → string to match the Snapshot.addressBalances schema.
     const addressBalancesForSnapshot: Record<string, string> = {};
     for (const [address, balance] of balances.entries()) {
@@ -228,6 +234,44 @@ export class EvmSnapshotService {
   }
 
   // ---------------------------------------------------------------------------
+
+  /**
+   * Remove holders that must not vote: the vault itself (unclaimed / LP-reserved VT)
+   * and every address the VaultToken marks as excluded (the Uniswap v4 PoolManager
+   * holding LP VT). Left in, the PoolManager alone outweighs all holders of a small vault.
+   */
+  private async dropNonVoters(
+    balances: Map<string, bigint>,
+    vaultAddress: Address,
+    vtAddress: Address,
+    vaultId: string
+  ): Promise<void> {
+    balances.delete(vaultAddress.toLowerCase());
+    balances.delete('0x0000000000000000000000000000000000000000');
+
+    const holders = [...balances.keys()];
+    const excluded: string[] = [];
+    for (let i = 0; i < holders.length; i += ALCHEMY_BALANCE_BATCH_SIZE) {
+      const batch = holders.slice(i, i + ALCHEMY_BALANCE_BATCH_SIZE);
+      const flags = await Promise.all(
+        batch.map(
+          holder =>
+            this.contractReader.publicClient.readContract({
+              address: vtAddress,
+              abi: VAULT_TOKEN_EXCLUSION_ABI,
+              functionName: 'isExcludedHolder',
+              args: [holder as Address],
+            }) as Promise<boolean>
+        )
+      );
+      batch.forEach((holder, idx) => flags[idx] && excluded.push(holder));
+    }
+
+    for (const holder of excluded) balances.delete(holder);
+    if (excluded.length > 0) {
+      this.logger.debug(`[EVM Snapshot] Vault ${vaultId}: excluded non-voting holders ${excluded.join(', ')}`);
+    }
+  }
 
   private async getVaultTokenAddress(vaultAddress: Address): Promise<Address> {
     return this.contractReader.publicClient.readContract({

@@ -630,8 +630,9 @@ export class GovernanceService {
       order: { createdAt: 'DESC' },
     });
 
-    // EVM vault: create a fresh snapshot on-demand if none exists yet.
-    if (!latestSnapshot && vault.chain_type === ChainType.robinhood) {
+    // EVM vault: every proposal gets a fresh on-chain snapshot. The periodic one can
+    // predate VT claims or transfers, and the proposal's weights are fixed to it.
+    if (vault.chain_type === ChainType.robinhood) {
       try {
         latestSnapshot = await this.evmSnapshotService.createSnapshot(vaultId);
       } catch (err) {
@@ -2833,7 +2834,14 @@ export class GovernanceService {
       throw new BadRequestException('Address has already voted on this proposal');
     }
 
-    const voteWeight = await this.getVotingPower(proposal.vaultId, userId, 'vote');
+    // EVM: weigh the vote by the proposal's own snapshot, so VT moved after the
+    // proposal was created cannot vote a second time from another wallet.
+    const voteWeight = await this.getVotingPower(
+      proposal.vaultId,
+      userId,
+      'vote',
+      proposal.vault?.chain_type === ChainType.robinhood ? proposal.snapshotId : undefined
+    );
 
     // Collect the voting fee before the vote is recorded. Nothing linked a vote
     // to a payment before this: the fee builder existed but vote() never checked
@@ -3411,7 +3419,12 @@ export class GovernanceService {
     };
   }
 
-  async getVotingPower(vaultId: string, userId: string, action?: 'vote' | 'create_proposal'): Promise<string> {
+  async getVotingPower(
+    vaultId: string,
+    userId: string,
+    action?: 'vote' | 'create_proposal',
+    snapshotId?: string
+  ): Promise<string> {
     // Check if distribution is processed - don't use cache during distribution
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -3422,7 +3435,7 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    const cacheKey = `voting_power:${vaultId}:${userId}:${action || 'general'}`;
+    const cacheKey = `voting_power:${vaultId}:${userId}:${action || 'general'}:${snapshotId ?? 'latest'}`;
 
     // Only check cache if distribution is processed
     if (vault.distribution_processed) {
@@ -3446,7 +3459,7 @@ export class GovernanceService {
     }
 
     try {
-      const power = await this._getVotingPowerUncached(vaultId, userId, action);
+      const power = await this._getVotingPowerUncached(vaultId, userId, action, snapshotId);
 
       // Cache successful result only if distribution is processed
       if (vault.distribution_processed) {
@@ -4309,13 +4322,13 @@ export class GovernanceService {
   private async _getVotingPowerUncached(
     vaultId: string,
     userId: string,
-    action?: 'vote' | 'create_proposal'
+    action?: 'vote' | 'create_proposal',
+    snapshotId?: string
   ): Promise<string> {
     try {
-      let snapshot = await this.snapshotRepository.findOne({
-        where: { vaultId },
-        order: { createdAt: 'DESC' },
-      });
+      let snapshot = await this.snapshotRepository.findOne(
+        snapshotId ? { where: { id: snapshotId, vaultId } } : { where: { vaultId }, order: { createdAt: 'DESC' } }
+      );
 
       // EVM vault with no snapshot yet: create one on-demand so voting power
       // is available immediately after the airdrop without waiting for the cron.
