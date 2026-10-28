@@ -8,7 +8,9 @@ import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-read
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { Snapshot } from '@/database/snapshot.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
 const ERC20_TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
@@ -266,11 +268,13 @@ export class EvmSnapshotService {
         fromBlock = await this.findContractDeploymentBlock(vtAddress, latestBlock);
       } catch (error) {
         if (this.isMissingTrieNodeError(error)) {
-          // Non-archive RPCs may fail historical eth_getCode lookups. Every VT is
-          // created after the factory, so replay from its deploy block (0 if unset).
-          fromBlock = this.factoryDeployBlock();
+          // Non-archive RPCs may fail historical eth_getCode lookups. The VT is
+          // created in the vault's createVault tx, whose receipt any RPC serves;
+          // replaying from the factory deploy block instead blows the chunk limit.
+          const creationBlock = await this.vaultCreationBlock(vaultId);
+          fromBlock = creationBlock ?? this.factoryDeployBlock();
           this.logger.warn(
-            `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to replay from block ${fromBlock.toString()}`
+            `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to replay from ${creationBlock !== null ? 'createVault' : 'factory deploy'} block ${fromBlock.toString()}`
           );
         } else {
           throw error;
@@ -834,6 +838,26 @@ export class EvmSnapshotService {
       message.includes('state is not available') ||
       /historical state .* is not available/.test(message)
     );
+  }
+
+  /** Block of the vault's confirmed createVault tx (the VT is deployed in it), or null if unknown. */
+  private async vaultCreationBlock(vaultId: string): Promise<bigint | null> {
+    try {
+      const createTx = await this.vaultRepository.manager.findOne(Transaction, {
+        where: { vault_id: vaultId, type: TransactionType.createVault, status: TransactionStatus.confirmed },
+        order: { created_at: 'DESC' },
+      });
+      if (!createTx?.tx_hash) return null;
+      const receipt = await this.contractReader.publicClient.getTransactionReceipt({
+        hash: createTx.tx_hash as `0x${string}`,
+      });
+      return receipt.blockNumber;
+    } catch (error) {
+      this.logger.warn(
+        `[EVM Snapshot] Vault ${vaultId}: createVault block lookup failed — ${(error as Error).message}`
+      );
+      return null;
+    }
   }
 
   /** Lower bound for VT history: `EVM_FACTORY_DEPLOY_BLOCK` (every vault is created after it), else 0. */

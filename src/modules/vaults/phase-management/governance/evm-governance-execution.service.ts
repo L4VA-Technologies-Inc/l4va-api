@@ -74,7 +74,9 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly indexVaultService: IndexVaultService,
     configService: ConfigService
   ) {
-    this.isTestnet = configService.get<string>('CARDANO_NETWORK') !== 'mainnet';
+    // EVM vaults run on Robinhood: testnet is decided by the EVM chain (4663 = mainnet),
+    // not by CARDANO_NETWORK — a stack can run Robinhood mainnet next to Cardano preprod.
+    this.isTestnet = Number(configService.get<string>('EVM_CHAIN_ID')) !== 4663;
     const raw = configService.get<string>('EVM_MOCK_ADAPTER_ADDRESS');
     this.mockAdapterAddress = raw ? (raw as Address) : null;
     const nftSaleRaw = configService.get<string>('EVM_NFT_SALE_ADAPTER_ADDRESS');

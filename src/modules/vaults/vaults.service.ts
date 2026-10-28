@@ -2556,7 +2556,13 @@ export class VaultsService {
       const transactionTypes: TransactionType[] = [];
 
       if (filter === VaultActivityFilter.ALL) {
-        transactionTypes.push(TransactionType.createVault, TransactionType.contribute, TransactionType.acquire);
+        transactionTypes.push(
+          TransactionType.createVault,
+          TransactionType.contribute,
+          TransactionType.acquire,
+          // Vault-side trades (governance swaps) belong in the vault's history too.
+          TransactionType.evmSwap
+        );
       } else if (filter === VaultActivityFilter.CONTRIBUTE) {
         transactionTypes.push(TransactionType.contribute);
       } else if (filter === VaultActivityFilter.ACQUIRE) {
