@@ -2023,6 +2023,13 @@ export class GovernanceService {
 
         // ── EVM acquire expansion ─────────────────────────────────────────────
         if (vault.chain_type === ChainType.robinhood) {
+          // Market price is not applied when an EVM acquire-expansion cycle is allocated: the
+          // buyers would receive the vault's full VT supply again. Limit price only until it is.
+          if (acquireExpansionPriceType === 'market') {
+            throw new BadRequestException(
+              'Market price is not available for acquire expansion on Robinhood vaults yet. Use a limit price.'
+            );
+          }
           if (acquireExpansionPriceType === 'limit') {
             if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
               throw new BadRequestException('Limit price is required when using limit pricing');
@@ -2034,29 +2041,6 @@ export class GovernanceService {
               );
             }
           }
-          if (acquireExpansionPriceType === 'market') {
-            if (!vaultForAcquireExpansionCheck.contract_address) {
-              throw new BadRequestException('Market pricing requires vault contract address to be set');
-            }
-            try {
-              await this.uniswapQuoteService.quoteExactInput(
-                vaultForAcquireExpansionCheck.contract_address as `0x${string}`,
-                '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
-                BigInt(1e12),
-                50
-              );
-              this.logger.log(
-                `EVM acquire expansion market pricing validated for vault ${vaultForAcquireExpansionCheck.name}`
-              );
-            } catch (error) {
-              if (error instanceof BadRequestException) throw error;
-              throw new BadRequestException(
-                'Market pricing requires an active Uniswap pool for this vault token on the Robinhood Chain. ' +
-                  'Please use limit pricing or create a pool first.'
-              );
-            }
-          }
-
           proposal.metadata.acquireExpansion = {
             duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
             noLimit: acquireExpansionNoLimit || false,
