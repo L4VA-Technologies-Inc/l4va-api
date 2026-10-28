@@ -65,7 +65,8 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
       useFactory: (configService: ConfigService) => ({
         connection: {
           host: configService.get<string>('REDIS_HOST'),
-          port: 6379,
+          // Fixed at 6379 unless overridden; REDIS_PORT can be a host-mapped port that Bull must not use.
+          port: Number(configService.get<string>('BULL_REDIS_PORT') ?? 6379),
           role: 'master',
           password: configService.get<string>('REDIS_PASSWORD'),
           db: Number(configService.get<string>('REDIS_DB') ?? 0),

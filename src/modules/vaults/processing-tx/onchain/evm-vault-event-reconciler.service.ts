@@ -24,6 +24,7 @@ import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { IndexLegStatus, IndexRebalanceStatus } from '@/types/index-vault.types';
 import { ExpectedEventSpec, TransactionStatus } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 export interface VaultLogInput {
   address: string;
@@ -476,6 +477,10 @@ export class EvmVaultEventReconciler {
           .createQueryBuilder()
           .update(Vault)
           .set({
+            // Same transition as EvmCycleCloseService.commitConfirmed: a closed cycle locks the vault.
+            // Without it a close recovered from the event (lost receipt) left the vault in acquire.
+            vault_status: VaultStatus.locked,
+            locked_at: new Date(),
             evm_current_cycle_id: cycleId,
             evm_allocation_root: allocationRoot,
             evm_close_cycle_tx_hash: snapshot.submit_tx_hash ?? log.txHash,
