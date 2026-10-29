@@ -8,7 +8,9 @@ import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-read
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { Snapshot } from '@/database/snapshot.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
 const ERC20_TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
@@ -18,6 +20,10 @@ const VAULT_TOKEN_CHECKPOINT_ABI = [
   parseAbiItem('function balanceOfAt(address account, uint256 timepoint) view returns (uint256)'),
   parseAbiItem('function circulatingSupplyAt(uint256 timepoint) view returns (uint256)'),
   parseAbiItem('function isExcludedHolderAt(address account, uint256 timepoint) view returns (bool)'),
+] as const;
+
+const VAULT_TOKEN_EXCLUSION_ABI = [
+  parseAbiItem('function isExcludedHolder(address account) view returns (bool)'),
 ] as const;
 
 export { VAULT_TOKEN_CHECKPOINT_ABI };
@@ -137,6 +143,8 @@ export class EvmSnapshotService {
       }
     }
 
+    await this.dropNonVoters(balances, vault.contract_address as Address, vtAddress, vaultId);
+
     // Serialize bigint → string to match the Snapshot.addressBalances schema.
     const addressBalancesForSnapshot: Record<string, string> = {};
     for (const [address, balance] of balances.entries()) {
@@ -227,6 +235,44 @@ export class EvmSnapshotService {
 
   // ---------------------------------------------------------------------------
 
+  /**
+   * Remove holders that must not vote: the vault itself (unclaimed / LP-reserved VT)
+   * and every address the VaultToken marks as excluded (the Uniswap v4 PoolManager
+   * holding LP VT). Left in, the PoolManager alone outweighs all holders of a small vault.
+   */
+  private async dropNonVoters(
+    balances: Map<string, bigint>,
+    vaultAddress: Address,
+    vtAddress: Address,
+    vaultId: string
+  ): Promise<void> {
+    balances.delete(vaultAddress.toLowerCase());
+    balances.delete('0x0000000000000000000000000000000000000000');
+
+    const holders = [...balances.keys()];
+    const excluded: string[] = [];
+    for (let i = 0; i < holders.length; i += ALCHEMY_BALANCE_BATCH_SIZE) {
+      const batch = holders.slice(i, i + ALCHEMY_BALANCE_BATCH_SIZE);
+      const flags = await Promise.all(
+        batch.map(
+          holder =>
+            this.contractReader.publicClient.readContract({
+              address: vtAddress,
+              abi: VAULT_TOKEN_EXCLUSION_ABI,
+              functionName: 'isExcludedHolder',
+              args: [holder as Address],
+            }) as Promise<boolean>
+        )
+      );
+      batch.forEach((holder, idx) => flags[idx] && excluded.push(holder));
+    }
+
+    for (const holder of excluded) balances.delete(holder);
+    if (excluded.length > 0) {
+      this.logger.debug(`[EVM Snapshot] Vault ${vaultId}: excluded non-voting holders ${excluded.join(', ')}`);
+    }
+  }
+
   private async getVaultTokenAddress(vaultAddress: Address): Promise<Address> {
     return this.contractReader.publicClient.readContract({
       address: vaultAddress,
@@ -266,11 +312,13 @@ export class EvmSnapshotService {
         fromBlock = await this.findContractDeploymentBlock(vtAddress, latestBlock);
       } catch (error) {
         if (this.isMissingTrieNodeError(error)) {
-          // Non-archive RPCs may fail historical eth_getCode lookups. Every VT is
-          // created after the factory, so replay from its deploy block (0 if unset).
-          fromBlock = this.factoryDeployBlock();
+          // Non-archive RPCs may fail historical eth_getCode lookups. The VT is
+          // created in the vault's createVault tx, whose receipt any RPC serves;
+          // replaying from the factory deploy block instead blows the chunk limit.
+          const creationBlock = await this.vaultCreationBlock(vaultId);
+          fromBlock = creationBlock ?? this.factoryDeployBlock();
           this.logger.warn(
-            `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to replay from block ${fromBlock.toString()}`
+            `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to replay from ${creationBlock !== null ? 'createVault' : 'factory deploy'} block ${fromBlock.toString()}`
           );
         } else {
           throw error;
@@ -834,6 +882,26 @@ export class EvmSnapshotService {
       message.includes('state is not available') ||
       /historical state .* is not available/.test(message)
     );
+  }
+
+  /** Block of the vault's confirmed createVault tx (the VT is deployed in it), or null if unknown. */
+  private async vaultCreationBlock(vaultId: string): Promise<bigint | null> {
+    try {
+      const createTx = await this.vaultRepository.manager.findOne(Transaction, {
+        where: { vault_id: vaultId, type: TransactionType.createVault, status: TransactionStatus.confirmed },
+        order: { created_at: 'DESC' },
+      });
+      if (!createTx?.tx_hash) return null;
+      const receipt = await this.contractReader.publicClient.getTransactionReceipt({
+        hash: createTx.tx_hash as `0x${string}`,
+      });
+      return receipt.blockNumber;
+    } catch (error) {
+      this.logger.warn(
+        `[EVM Snapshot] Vault ${vaultId}: createVault block lookup failed — ${(error as Error).message}`
+      );
+      return null;
+    }
   }
 
   /** Lower bound for VT history: `EVM_FACTORY_DEPLOY_BLOCK` (every vault is created after it), else 0. */

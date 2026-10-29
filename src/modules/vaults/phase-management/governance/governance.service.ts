@@ -630,8 +630,9 @@ export class GovernanceService {
       order: { createdAt: 'DESC' },
     });
 
-    // EVM vault: create a fresh snapshot on-demand if none exists yet.
-    if (!latestSnapshot && vault.chain_type === ChainType.robinhood) {
+    // EVM vault: every proposal gets a fresh on-chain snapshot. The periodic one can
+    // predate VT claims or transfers, and the proposal's weights are fixed to it.
+    if (vault.chain_type === ChainType.robinhood) {
       try {
         latestSnapshot = await this.evmSnapshotService.createSnapshot(vaultId);
       } catch (err) {
@@ -2023,6 +2024,13 @@ export class GovernanceService {
 
         // ── EVM acquire expansion ─────────────────────────────────────────────
         if (vault.chain_type === ChainType.robinhood) {
+          // Market price is not applied when an EVM acquire-expansion cycle is allocated: the
+          // buyers would receive the vault's full VT supply again. Limit price only until it is.
+          if (acquireExpansionPriceType === 'market') {
+            throw new BadRequestException(
+              'Market price is not available for acquire expansion on Robinhood vaults yet. Use a limit price.'
+            );
+          }
           if (acquireExpansionPriceType === 'limit') {
             if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
               throw new BadRequestException('Limit price is required when using limit pricing');
@@ -2034,29 +2042,6 @@ export class GovernanceService {
               );
             }
           }
-          if (acquireExpansionPriceType === 'market') {
-            if (!vaultForAcquireExpansionCheck.contract_address) {
-              throw new BadRequestException('Market pricing requires vault contract address to be set');
-            }
-            try {
-              await this.uniswapQuoteService.quoteExactInput(
-                vaultForAcquireExpansionCheck.contract_address as `0x${string}`,
-                '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
-                BigInt(1e12),
-                50
-              );
-              this.logger.log(
-                `EVM acquire expansion market pricing validated for vault ${vaultForAcquireExpansionCheck.name}`
-              );
-            } catch (error) {
-              if (error instanceof BadRequestException) throw error;
-              throw new BadRequestException(
-                'Market pricing requires an active Uniswap pool for this vault token on the Robinhood Chain. ' +
-                  'Please use limit pricing or create a pool first.'
-              );
-            }
-          }
-
           proposal.metadata.acquireExpansion = {
             duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
             noLimit: acquireExpansionNoLimit || false,
@@ -2849,7 +2834,14 @@ export class GovernanceService {
       throw new BadRequestException('Address has already voted on this proposal');
     }
 
-    const voteWeight = await this.getVotingPower(proposal.vaultId, userId, 'vote');
+    // EVM: weigh the vote by the proposal's own snapshot, so VT moved after the
+    // proposal was created cannot vote a second time from another wallet.
+    const voteWeight = await this.getVotingPower(
+      proposal.vaultId,
+      userId,
+      'vote',
+      proposal.vault?.chain_type === ChainType.robinhood ? proposal.snapshotId : undefined
+    );
 
     // Collect the voting fee before the vote is recorded. Nothing linked a vote
     // to a payment before this: the fee builder existed but vote() never checked
@@ -3427,7 +3419,12 @@ export class GovernanceService {
     };
   }
 
-  async getVotingPower(vaultId: string, userId: string, action?: 'vote' | 'create_proposal'): Promise<string> {
+  async getVotingPower(
+    vaultId: string,
+    userId: string,
+    action?: 'vote' | 'create_proposal',
+    snapshotId?: string
+  ): Promise<string> {
     // Check if distribution is processed - don't use cache during distribution
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -3438,7 +3435,7 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    const cacheKey = `voting_power:${vaultId}:${userId}:${action || 'general'}`;
+    const cacheKey = `voting_power:${vaultId}:${userId}:${action || 'general'}:${snapshotId ?? 'latest'}`;
 
     // Only check cache if distribution is processed
     if (vault.distribution_processed) {
@@ -3462,7 +3459,7 @@ export class GovernanceService {
     }
 
     try {
-      const power = await this._getVotingPowerUncached(vaultId, userId, action);
+      const power = await this._getVotingPowerUncached(vaultId, userId, action, snapshotId);
 
       // Cache successful result only if distribution is processed
       if (vault.distribution_processed) {
@@ -4325,13 +4322,13 @@ export class GovernanceService {
   private async _getVotingPowerUncached(
     vaultId: string,
     userId: string,
-    action?: 'vote' | 'create_proposal'
+    action?: 'vote' | 'create_proposal',
+    snapshotId?: string
   ): Promise<string> {
     try {
-      let snapshot = await this.snapshotRepository.findOne({
-        where: { vaultId },
-        order: { createdAt: 'DESC' },
-      });
+      let snapshot = await this.snapshotRepository.findOne(
+        snapshotId ? { where: { id: snapshotId, vaultId } } : { where: { vaultId }, order: { createdAt: 'DESC' } }
+      );
 
       // EVM vault with no snapshot yet: create one on-demand so voting power
       // is available immediately after the airdrop without waiting for the cron.

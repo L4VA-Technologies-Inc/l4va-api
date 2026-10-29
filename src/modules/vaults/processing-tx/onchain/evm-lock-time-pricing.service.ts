@@ -134,7 +134,8 @@ export class EvmLockTimePricingService {
     private readonly contractReader: EvmContractReader,
     private readonly configService: ConfigService
   ) {
-    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    // Robinhood mainnet is chain 4663, independent of the Cardano network setting.
+    this.isMainnet = Number(this.configService.get<string>('EVM_CHAIN_ID')) === 4663;
   }
 
   /**

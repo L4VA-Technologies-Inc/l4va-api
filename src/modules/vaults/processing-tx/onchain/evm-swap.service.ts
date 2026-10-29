@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { type Address, type Hex } from 'viem';
+import { erc20Abi, zeroAddress, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
@@ -75,7 +75,8 @@ export class EvmSwapService {
     private readonly adminSigner: EvmAdminSigner
   ) {}
 
-  async swap(vaultId: string, params: SwapParams): Promise<SwapResult> {
+  /** `proposalId` ties a governance swap to its proposal in the vault activity feed. */
+  async swap(vaultId: string, params: SwapParams, context: { proposalId?: string } = {}): Promise<SwapResult> {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
@@ -97,6 +98,7 @@ export class EvmSwapService {
           amountIn: params.amountIn.toString(),
           assetOut: params.assetOut,
           minAmountOut: params.minAmountOut.toString(),
+          ...(context.proposalId && { proposalId: context.proposalId }),
         },
       })
     );
@@ -128,6 +130,9 @@ export class EvmSwapService {
     // and let the rebalance move on as if the leg had filled.
     const args = await this.requireSwappedEvent(adminTx.id, result, vaultAddress, params);
 
+    // The activity feed shows what was actually traded, so keep the filled output
+    // and both tokens' symbol/decimals next to the request parameters.
+    const [tokenIn, tokenOut] = await Promise.all([this.tokenInfo(params.assetIn), this.tokenInfo(params.assetOut)]);
     await this.transactionsRepository.update(
       { id: adminTx.id },
       {
@@ -135,6 +140,16 @@ export class EvmSwapService {
         reconciliation_status: EvmReconciliationStatus.success,
         reconciled_at: new Date(),
         reconciliation_last_error: null,
+        tx_hash: result.hash,
+        metadata: {
+          ...(adminTx.metadata ?? {}),
+          grossOut: args.grossOut.toString(),
+          fee: args.fee.toString(),
+          assetInSymbol: tokenIn.symbol,
+          assetInDecimals: tokenIn.decimals,
+          assetOutSymbol: tokenOut.symbol,
+          assetOutDecimals: tokenOut.decimals,
+        } as any,
       }
     );
 
@@ -188,6 +203,21 @@ export class EvmSwapService {
     }
 
     return match.args as unknown as SwappedArgs;
+  }
+
+  /** Symbol/decimals for display; native is ETH. Falls back to a short address when unreadable. */
+  private async tokenInfo(asset: Address): Promise<{ symbol: string; decimals: number }> {
+    if (asset.toLowerCase() === zeroAddress) return { symbol: 'ETH', decimals: 18 };
+    try {
+      const client = this.contractReader.publicClient;
+      const [symbol, decimals] = await Promise.all([
+        client.readContract({ address: asset, abi: erc20Abi, functionName: 'symbol' }),
+        client.readContract({ address: asset, abi: erc20Abi, functionName: 'decimals' }),
+      ]);
+      return { symbol: String(symbol), decimals: Number(decimals) };
+    } catch {
+      return { symbol: `${asset.slice(0, 6)}…${asset.slice(-4)}`, decimals: 18 };
+    }
   }
 
   async isOperationIdUsed(vaultAddress: Address, operationId: Hex): Promise<boolean> {

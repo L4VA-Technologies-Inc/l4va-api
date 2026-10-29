@@ -35,18 +35,26 @@ import {
   IndexRebalanceActivityEvent,
   PhaseTransitionEvent,
   ProposalActivityEvent,
+  ProposalLifecycleStage,
+  VaultLockSummary,
+  TerminationActivityEvent,
+  TerminationActivityStatus,
+  TerminationStep,
   TransactionActivityEvent,
   VaultActivityItem,
 } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
+import { TerminationStatus } from './phase-management/governance/termination.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainWebhookService } from './processing-tx/onchain/blockchain-webhook.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { EvmContractReader } from './processing-tx/onchain/evm-contract-reader.service';
 import { EvmContributionBackfillService } from './processing-tx/onchain/evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
+import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
+import { buildOperationId } from './processing-tx/onchain/evm-position.service';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
@@ -56,9 +64,11 @@ import { EvmVaultOnchainStatus, VAULT_ABI } from './processing-tx/onchain/vault.
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Claim } from '@/database/claim.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
+import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -74,6 +84,7 @@ import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -180,6 +191,17 @@ const ERC165_ABI = parseAbi(['function supportsInterface(bytes4 interfaceId) vie
 const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
 const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
 
+/** Admin txs of the EVM termination flow, nested under the termination card. */
+const EVM_TERMINATION_TX_TYPES = [
+  TransactionType.evmBeginTerminationPreparing,
+  TransactionType.evmBeginTermination,
+  TransactionType.evmRedeemFor,
+  TransactionType.evmDeferTerminationAsset,
+  TransactionType.evmResumeTerminationAsset,
+  TransactionType.evmFinalizeTermination,
+  TransactionType.evmSweepTerminationRemainder,
+];
+
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
@@ -221,6 +243,10 @@ export class VaultsService {
     private readonly evmContributionsRepository: Repository<EvmContribution>,
     @InjectRepository(EvmIndexRebalance)
     private readonly indexRebalanceRepository: Repository<EvmIndexRebalance>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
+    @InjectRepository(EvmValuationSnapshot)
+    private readonly evmSnapshotRepository: Repository<EvmValuationSnapshot>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -2536,6 +2562,21 @@ export class VaultsService {
         'vault_status',
         'created_at',
         'vault_archetype',
+        'chain_type',
+        'ft_token_supply',
+        'ft_token_decimals',
+        'vault_token_ticker',
+        'tokens_for_acquires',
+        'liquidity_pool_contribution',
+        'total_assets_cost_ada',
+        'total_acquired_value_ada',
+        'fdv',
+        'evm_close_cycle_tx_hash',
+        'failure_reason',
+        'failure_details',
+        'deactivated_at',
+        'updated_at',
+        'termination_metadata',
       ],
     });
 
@@ -2544,9 +2585,10 @@ export class VaultsService {
     }
 
     const allActivities: VaultActivityItem[] = [];
+    let transactionEvents: TransactionActivityEvent[] = [];
+    let rebalanceEvents: IndexRebalanceActivityEvent[] = [];
 
-    const shouldFetchTransactions =
-      filter !== VaultActivityFilter.GOVERNANCE && filter !== VaultActivityFilter.REBALANCE;
+    const shouldFetchTransactions = filter !== VaultActivityFilter.REBALANCE;
     const shouldFetchRebalances =
       vault.vault_archetype === VaultArchetype.index_weighted &&
       (filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.REBALANCE);
@@ -2556,11 +2598,25 @@ export class VaultsService {
       const transactionTypes: TransactionType[] = [];
 
       if (filter === VaultActivityFilter.ALL) {
-        transactionTypes.push(TransactionType.createVault, TransactionType.contribute, TransactionType.acquire);
+        transactionTypes.push(
+          TransactionType.createVault,
+          TransactionType.contribute,
+          TransactionType.acquire,
+          // Vault-side trades (governance swaps) belong in the vault's history too.
+          TransactionType.evmSwap,
+          // Failed-vault path: cycle cancel + refunds of contributions / acquires.
+          TransactionType.cancel,
+          TransactionType.evmCancelCycle,
+          TransactionType.evmRefund,
+          ...EVM_TERMINATION_TX_TYPES
+        );
       } else if (filter === VaultActivityFilter.CONTRIBUTE) {
         transactionTypes.push(TransactionType.contribute);
       } else if (filter === VaultActivityFilter.ACQUIRE) {
         transactionTypes.push(TransactionType.acquire);
+      } else if (filter === VaultActivityFilter.GOVERNANCE) {
+        // Only to nest under the proposals that executed them.
+        transactionTypes.push(TransactionType.evmSwap, ...EVM_TERMINATION_TX_TYPES);
       }
 
       if (transactionTypes.length > 0) {
@@ -2573,7 +2629,7 @@ export class VaultsService {
           .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
           .getMany();
 
-        const transactionEvents: TransactionActivityEvent[] = transactions.map(tx => ({
+        transactionEvents = transactions.map(tx => ({
           ...tx,
           assets: tx.assets?.map(asset => ({
             ...asset,
@@ -2581,8 +2637,6 @@ export class VaultsService {
           })) as Asset[],
           activityType: ActivityType.TRANSACTION,
         }));
-
-        allActivities.push(...transactionEvents);
       }
     }
 
@@ -2616,19 +2670,68 @@ export class VaultsService {
           vaultId: vault.id,
           phase: VaultStatus.locked,
           created_at: vault.locked_at,
+          summary: await this.getLockSummary(vault),
         };
         allActivities.push(lockedPhaseEvent);
       }
-    }
 
-    if (shouldFetchProposals) {
-      const proposalEvents = await this.getProposalsActivity(vault_id);
-      allActivities.push(...proposalEvents);
+      if (vault.vault_status === VaultStatus.failed) {
+        // Cancel + refund txs are shown inside the failed event, not as separate items.
+        const refundTypes: string[] = [
+          TransactionType.cancel,
+          TransactionType.evmCancelCycle,
+          TransactionType.evmRefund,
+        ];
+        const failureActions = transactionEvents
+          .filter(tx => refundTypes.includes(tx.type))
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        transactionEvents = transactionEvents.filter(tx => !refundTypes.includes(tx.type));
+
+        const failedPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_failed_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.failed,
+          created_at: vault.deactivated_at ?? vault.updated_at,
+          failure: {
+            reason: vault.failure_reason ?? null,
+            message: vault.failure_details?.message ?? null,
+            details: vault.failure_details ?? null,
+            hasDeposits: transactionEvents.some(
+              tx => tx.type === TransactionType.contribute || tx.type === TransactionType.acquire
+            ),
+          },
+          actions: failureActions,
+        };
+        allActivities.push(failedPhaseEvent);
+      }
     }
 
     if (shouldFetchRebalances) {
-      allActivities.push(...(await this.getIndexRebalancesActivity(vault_id)));
+      rebalanceEvents = await this.getIndexRebalancesActivity(vault_id);
     }
+
+    if (shouldFetchProposals) {
+      const allProposalEvents = await this.getProposalsActivity(vault_id, transactionEvents, rebalanceEvents);
+      // Termination proposals are shown as one termination card with the whole wind-down.
+      const terminationProposals = allProposalEvents.filter(p => p.proposalType === ProposalType.TERMINATION);
+      const proposalEvents = allProposalEvents.filter(p => p.proposalType !== ProposalType.TERMINATION);
+      if (terminationProposals.length > 0) {
+        allActivities.push(...(await this.getTerminationActivity(vault, terminationProposals, transactionEvents)));
+      }
+      const terminationTxTypes: string[] = EVM_TERMINATION_TX_TYPES;
+      transactionEvents = transactionEvents.filter(tx => !terminationTxTypes.includes(tx.type));
+      // Actions a proposal executed are shown inside it, not as separate items.
+      const nested = new Set(proposalEvents.flatMap(p => p.actions.map(a => a.id)));
+      transactionEvents = transactionEvents.filter(tx => !nested.has(tx.id));
+      rebalanceEvents = rebalanceEvents.filter(run => !nested.has(run.id));
+      allActivities.push(...proposalEvents);
+    }
+
+    if (filter !== VaultActivityFilter.GOVERNANCE) {
+      allActivities.push(...transactionEvents);
+    }
+    allActivities.push(...rebalanceEvents);
 
     allActivities.sort((a, b) => {
       const dateA = new Date(a.created_at).getTime();
@@ -2648,6 +2751,199 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * One card per termination proposal. Only the proposal named in
+   * `termination_metadata` carries on-chain steps; older ones (rejected) show
+   * just their vote. Steps come from admin tx rows (EVM) or the Cardano
+   * termination status machine plus the hashes it stored.
+   */
+  private async getTerminationActivity(
+    vault: Vault,
+    proposals: ProposalActivityEvent[],
+    transactions: TransactionActivityEvent[]
+  ): Promise<TerminationActivityEvent[]> {
+    const meta = vault.termination_metadata;
+    const isEvm = vault.chain_type !== ChainType.cardano;
+
+    // One query for all termination proposals' dates (the activity events don't carry them).
+    const rows = await this.proposalRepository.find({
+      where: { id: In(proposals.map(p => p.proposalId)) },
+      select: ['id', 'title', 'status', 'startDate', 'endDate', 'createdAt'],
+    });
+    const byId = new Map(rows.map(row => [row.id, row]));
+
+    return Promise.all(
+      proposals.map(async proposal => {
+        const p = byId.get(proposal.proposalId);
+        const isActive = meta?.proposalId === proposal.proposalId;
+        const voting = [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE].includes(p.status);
+        const rejected = p.status === ProposalStatus.REJECTED;
+
+        const steps: TerminationStep[] = [{ key: 'proposal_created', status: 'done', at: p.createdAt }];
+        if (voting) {
+          steps.push({ key: 'voting_ends', status: 'current', at: p.endDate });
+        } else if (rejected) {
+          steps.push({ key: 'voting_rejected', status: 'failed', at: p.endDate });
+        } else {
+          steps.push({ key: 'voting_ended', status: 'done', at: p.endDate, note: 'Passed' });
+        }
+
+        let status: TerminationActivityStatus = voting
+          ? TerminationActivityStatus.VOTING
+          : rejected
+            ? TerminationActivityStatus.REJECTED
+            : TerminationActivityStatus.IN_PROGRESS;
+        let redemption: TerminationActivityEvent['redemption'] = null;
+
+        if (!voting && !rejected) {
+          const chainSteps = isEvm
+            ? this.getEvmTerminationSteps(vault, transactions)
+            : await this.getCardanoTerminationSteps(vault, isActive);
+          steps.push(...chainSteps.steps);
+          redemption = isActive ? chainSteps.redemption : null;
+
+          if (vault.vault_status === VaultStatus.burned) {
+            status = TerminationActivityStatus.COMPLETED;
+          } else if (isActive && meta?.error) {
+            status = TerminationActivityStatus.FAILED;
+          }
+        }
+
+        const latest = steps
+          .filter(step => step.at && step.status !== 'upcoming')
+          .reduce((max, step) => Math.max(max, new Date(step.at).getTime()), 0);
+
+        return {
+          id: `${vault.id}_termination_${p.id}`,
+          activityType: ActivityType.TERMINATION,
+          vaultId: vault.id,
+          chain: isEvm ? 'evm' : 'cardano',
+          status,
+          proposal: { id: p.id, title: p.title, status: p.status, startDate: p.startDate, endDate: p.endDate },
+          redemption,
+          steps,
+          error: isActive ? (meta?.error ?? null) : null,
+          created_at: latest ? new Date(latest) : p.createdAt,
+        } satisfies TerminationActivityEvent;
+      })
+    );
+  }
+
+  private getEvmTerminationSteps(
+    vault: Vault,
+    transactions: TransactionActivityEvent[]
+  ): { steps: TerminationStep[]; redemption: TerminationActivityEvent['redemption'] } {
+    const evm = vault.termination_metadata?.evm;
+    const txs = transactions
+      .filter(tx => (EVM_TERMINATION_TX_TYPES as string[]).includes(tx.type))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const has = (type: TransactionType): boolean => txs.some(tx => tx.type === type);
+    const keyByType: Record<string, string> = {
+      [TransactionType.evmBeginTerminationPreparing]: 'preparing',
+      [TransactionType.evmBeginTermination]: 'rates_committed',
+      [TransactionType.evmRedeemFor]: 'redemption_sent',
+      [TransactionType.evmDeferTerminationAsset]: 'asset_deferred',
+      [TransactionType.evmResumeTerminationAsset]: 'asset_resumed',
+      [TransactionType.evmFinalizeTermination]: 'finalized',
+      [TransactionType.evmSweepTerminationRemainder]: 'remainder_swept',
+    };
+
+    const deadline = evm?.terminationDeadline ? new Date(Number(evm.terminationDeadline) * 1000) : null;
+    const steps: TerminationStep[] = txs.map(tx => ({
+      key: keyByType[tx.type],
+      status: 'done',
+      at: tx.created_at,
+      txHash: tx.tx_hash ?? null,
+      note:
+        tx.type === TransactionType.evmBeginTermination && evm?.assets?.length
+          ? `${evm.assets.length} ${evm.assets.length === 1 ? 'asset' : 'assets'} redeemable per VT`
+          : null,
+    }));
+
+    // Steps not reached yet, in protocol order.
+    if (!has(TransactionType.evmBeginTerminationPreparing) && !has(TransactionType.evmBeginTermination)) {
+      steps.push({ key: 'preparing', status: 'current' });
+    }
+    if (!has(TransactionType.evmBeginTermination)) steps.push({ key: 'rates_committed', status: 'upcoming' });
+    if (deadline) {
+      steps.push({ key: 'deadline', status: deadline.getTime() <= Date.now() ? 'done' : 'upcoming', at: deadline });
+    }
+    if (!has(TransactionType.evmFinalizeTermination)) steps.push({ key: 'finalized', status: 'upcoming' });
+    if (!has(TransactionType.evmSweepTerminationRemainder)) {
+      steps.push({ key: 'remainder_swept', status: 'upcoming' });
+    }
+    steps.sort((a, b) => {
+      // Keep undated (upcoming) steps last, in insertion order.
+      if (!a.at || !b.at) return a.at ? -1 : b.at ? 1 : 0;
+      return new Date(a.at).getTime() - new Date(b.at).getTime();
+    });
+
+    const pushes = txs.filter(tx => tx.type === TransactionType.evmRedeemFor).length;
+    return {
+      steps,
+      redemption: has(TransactionType.evmBeginTermination) ? { deadline, claimed: pushes, total: null } : null,
+    };
+  }
+
+  private async getCardanoTerminationSteps(
+    vault: Vault,
+    isActive: boolean
+  ): Promise<{ steps: TerminationStep[]; redemption: TerminationActivityEvent['redemption'] }> {
+    const meta = vault.termination_metadata;
+    if (!isActive || !meta) return { steps: [], redemption: null };
+
+    const flow: { key: string; status: TerminationStatus; hash?: string }[] = [
+      { key: 'nfts_burned', status: TerminationStatus.NFT_BURNED, hash: meta.nftBurnTxHash },
+      { key: 'lp_removal_sent', status: TerminationStatus.LP_REMOVAL_PENDING, hash: meta.lpRemovalTxHash },
+      { key: 'lp_returned', status: TerminationStatus.LP_RETURN_RECEIVED, hash: meta.lpReturnTxHash },
+      { key: 'vt_burned', status: TerminationStatus.VT_BURNED, hash: meta.vtBurnTxHash },
+      { key: 'ada_to_treasury', status: TerminationStatus.ADA_IN_TREASURY, hash: meta.adaTransferTxHash },
+      { key: 'claims_created', status: TerminationStatus.CLAIMS_CREATED },
+      { key: 'claims_processing', status: TerminationStatus.CLAIMS_COMPLETE },
+      { key: 'vault_burned', status: TerminationStatus.VAULT_BURNED, hash: meta.vaultBurnTxHash },
+    ];
+    const order = Object.values(TerminationStatus);
+    const reached = order.indexOf(meta.status as TerminationStatus);
+
+    const hashes = flow.map(f => f.hash).filter(Boolean);
+    const txs = hashes.length
+      ? await this.transactionRepository.find({
+          where: { tx_hash: In(hashes) },
+          select: ['tx_hash', 'updated_at', 'created_at'],
+        })
+      : [];
+    const timeByHash = new Map(txs.map(tx => [tx.tx_hash, tx.updated_at ?? tx.created_at]));
+
+    let currentMarked = false;
+    const steps: TerminationStep[] = flow.map(f => {
+      // A step is done once the machine reached its status or stored its hash.
+      const done = order.indexOf(f.status) <= reached || !!f.hash;
+      let status: TerminationStep['status'] = done ? 'done' : 'upcoming';
+      if (!done && !currentMarked) {
+        status = meta.error ? 'failed' : 'current';
+        currentMarked = true;
+      }
+      return {
+        key: f.key,
+        status,
+        txHash: f.hash ?? null,
+        at:
+          (f.hash && timeByHash.get(f.hash)) ||
+          (f.key === 'claims_created' && meta.claimsCreatedAt ? new Date(meta.claimsCreatedAt) : null),
+      };
+    });
+
+    const claims = await this.claimRepository.find({
+      where: { vault_id: vault.id, type: ClaimType.TERMINATION },
+      select: ['id', 'status'],
+    });
+    const claimed = claims.filter(c => c.status === ClaimStatus.CLAIMED).length;
+    const processing = steps.find(step => step.key === 'claims_processing');
+    if (processing && claims.length) processing.note = `${claimed} / ${claims.length} claimed`;
+
+    return { steps, redemption: claims.length ? { claimed, total: claims.length } : null };
   }
 
   /**
@@ -2710,7 +3006,105 @@ export class VaultsService {
       });
   }
 
-  private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+  /** Lock outcome for the activity feed; null when it cannot be derived (yet). */
+  private async getLockSummary(vault: Vault): Promise<VaultLockSummary | null> {
+    try {
+      const isEvm = vault.chain_type === ChainType.robinhood;
+      const vtDecimals = Number(vault.ft_token_decimals ?? 0);
+      const vtSupply = BigInt(Math.round(Number(vault.ft_token_supply ?? 0))) * 10n ** BigInt(vtDecimals);
+
+      const participants = await this.transactionRepository
+        .createQueryBuilder('t')
+        .select('t.type', 'type')
+        .addSelect('COUNT(DISTINCT t.user_id)', 'count')
+        .where('t.vault_id = :id', { id: vault.id })
+        .andWhere('t.type IN (:...types)', { types: [TransactionType.contribute, TransactionType.acquire] })
+        .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+        .groupBy('t.type')
+        .getRawMany<{ type: TransactionType; count: string }>();
+      const countOf = (type: TransactionType): number => Number(participants.find(p => p.type === type)?.count ?? 0);
+
+      const base = {
+        vtTicker: vault.vault_token_ticker ?? null,
+        vtDecimals,
+        vtSupply: vtSupply.toString(),
+        acquirersPercent: Number(vault.tokens_for_acquires ?? 0),
+        lpPercent: Number(vault.liquidity_pool_contribution ?? 0),
+        contributorsCount: countOf(TransactionType.contribute),
+        acquirersCount: countOf(TransactionType.acquire),
+      };
+
+      if (isEvm) {
+        const snapshot = await this.evmSnapshotRepository.findOne({
+          where: { vault_id: vault.id, status: EvmSnapshotStatus.confirmed },
+          order: { created_at: 'ASC' },
+        });
+        if (!snapshot) return null;
+        const lp = snapshot.lp_carveout as Partial<EvmLpCarveoutRecord>;
+        const lpVt = BigInt(lp.lpVtAmount ?? 0);
+        // Mirrors computeEvmAllocationRows: the acquirer pool is a share of the supply left after the LP.
+        const acquirersVt = ((vtSupply - lpVt) * BigInt(Math.round(base.acquirersPercent * 100))) / 10_000n;
+        const contributorsVt = BigInt(snapshot.total_vt_allocation) - acquirersVt;
+        return {
+          ...base,
+          nativeSymbol: 'ETH',
+          nativeDecimals: 18,
+          assetsValue: snapshot.total_asset_value_native,
+          totalRaised: snapshot.total_native_raised,
+          fdv: snapshot.fdv_native ?? null,
+          // Per-wallet floors can leave the allocation total a few units under the pools.
+          contributorsVt: (contributorsVt > 0n ? contributorsVt : 0n).toString(),
+          acquirersVt: acquirersVt.toString(),
+          lpVt: lpVt.toString(),
+          contributorsNative: snapshot.total_native_allocation,
+          lpNative: String(lp.lpNativeAmount ?? '0'),
+          txHash: vault.evm_close_cycle_tx_hash ?? null,
+        };
+      }
+
+      const totals = await this.claimRepository
+        .createQueryBuilder('c')
+        .select('c.type', 'type')
+        .addSelect('COALESCE(SUM(c.amount), 0)::text', 'vt')
+        .addSelect('COALESCE(SUM(c.lovelace_amount), 0)::text', 'native')
+        .where('c.vault_id = :id', { id: vault.id })
+        .andWhere('c.type IN (:...types)', { types: [ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER, ClaimType.LP] })
+        .groupBy('c.type')
+        .getRawMany<{ type: ClaimType; vt: string; native: string }>();
+      if (totals.length === 0) return null;
+      const total = (type: ClaimType, field: 'vt' | 'native'): string =>
+        BigInt(totals.find(t => t.type === type)?.[field]?.split('.')[0] ?? '0').toString();
+      const toLovelace = (ada: unknown): string => BigInt(Math.round(Number(ada ?? 0) * 1_000_000)).toString();
+
+      return {
+        ...base,
+        nativeSymbol: 'ADA',
+        nativeDecimals: 6,
+        assetsValue: toLovelace(vault.total_assets_cost_ada),
+        totalRaised: toLovelace(vault.total_acquired_value_ada),
+        fdv: vault.fdv ? toLovelace(vault.fdv) : null,
+        contributorsVt: total(ClaimType.CONTRIBUTOR, 'vt'),
+        acquirersVt: total(ClaimType.ACQUIRER, 'vt'),
+        lpVt: total(ClaimType.LP, 'vt'),
+        contributorsNative: total(ClaimType.CONTRIBUTOR, 'native'),
+        lpNative: total(ClaimType.LP, 'native'),
+        txHash: null,
+      };
+    } catch (error) {
+      this.logger.warn(`Lock summary for vault ${vault.id} unavailable: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * One item per proposal: the lifecycle stages it reached plus the swaps and
+   * rebalance runs it executed, picked out of `transactions` / `rebalances`.
+   */
+  private async getProposalsActivity(
+    vault_id: string,
+    transactions: TransactionActivityEvent[],
+    rebalances: IndexRebalanceActivityEvent[]
+  ): Promise<ProposalActivityEvent[]> {
     // Exclude UNPAID proposals from activity feed (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
       where: {
@@ -2720,53 +3114,66 @@ export class VaultsService {
       order: { createdAt: 'DESC' },
     });
 
+    const actionsByProposal = new Map<string, ProposalActivityEvent['actions']>();
+    const addAction = (proposalId: string, action: ProposalActivityEvent['actions'][number]): void => {
+      actionsByProposal.set(proposalId, [...(actionsByProposal.get(proposalId) ?? []), action]);
+    };
+
+    const swaps = transactions.filter(tx => tx.type === TransactionType.evmSwap);
+    if (swaps.length > 0) {
+      // Swaps recorded before `metadata.proposalId` existed are matched by their
+      // operationId, which is derived from (vault, proposal, action index).
+      const proposalByOperationId = new Map<string, string>();
+      for (const proposal of proposals) {
+        (proposal.metadata?.marketplaceActions ?? []).forEach((_, i) =>
+          proposalByOperationId.set(buildOperationId(vault_id, proposal.id, i).toLowerCase(), proposal.id)
+        );
+      }
+      for (const tx of swaps) {
+        const proposalId =
+          tx.metadata?.proposalId ?? proposalByOperationId.get(String(tx.metadata?.operationId ?? '').toLowerCase());
+        if (proposalId) addAction(proposalId, tx);
+      }
+    }
+    for (const run of rebalances) {
+      if (run.proposalId) addAction(run.proposalId, run);
+    }
+
     const events: ProposalActivityEvent[] = [];
     const now = new Date();
 
     for (const proposal of proposals) {
-      const createdAt = new Date(proposal.createdAt);
+      const lifecycle: ProposalActivityEvent['lifecycle'] = [
+        { stage: ProposalLifecycleStage.CREATED, at: new Date(proposal.createdAt) },
+      ];
       const startDate = new Date(proposal.startDate);
       const endDate = new Date(proposal.endDate);
+      if (startDate < now) lifecycle.push({ stage: ProposalLifecycleStage.STARTED, at: startDate });
+      if (endDate < now) lifecycle.push({ stage: ProposalLifecycleStage.ENDED, at: endDate });
+
+      const actions = (actionsByProposal.get(proposal.id) ?? []).sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      const latest = Math.max(
+        ...lifecycle.map(e => e.at.getTime()),
+        ...actions.map(a => new Date(a.created_at).getTime())
+      );
 
       events.push({
-        id: `${proposal.id}_created`,
-        activityType: ActivityType.PROPOSAL_CREATED,
+        id: proposal.id,
+        activityType: ActivityType.PROPOSAL,
         proposalId: proposal.id,
+        proposalType: proposal.proposalType,
         title: proposal.title,
         description: proposal.description,
         status: proposal.status,
+        stage: lifecycle[lifecycle.length - 1].stage,
+        lifecycle,
+        actions,
         creatorId: proposal.creatorId,
-        created_at: createdAt,
+        created_at: new Date(latest),
         executionError: proposal.metadata?.executionError?.message,
       });
-
-      if (startDate < now) {
-        events.push({
-          id: `${proposal.id}_started`,
-          activityType: ActivityType.PROPOSAL_STARTED,
-          proposalId: proposal.id,
-          title: proposal.title,
-          description: proposal.description,
-          status: proposal.status,
-          creatorId: proposal.creatorId,
-          created_at: startDate,
-          executionError: proposal.metadata?.executionError?.message,
-        });
-      }
-
-      if (endDate < now) {
-        events.push({
-          id: `${proposal.id}_ended`,
-          activityType: ActivityType.PROPOSAL_ENDED,
-          proposalId: proposal.id,
-          title: proposal.title,
-          description: proposal.description,
-          status: proposal.status,
-          creatorId: proposal.creatorId,
-          created_at: endDate,
-          executionError: proposal.metadata?.executionError?.message,
-        });
-      }
     }
 
     return events;
