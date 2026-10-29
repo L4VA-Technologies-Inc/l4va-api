@@ -31,6 +31,7 @@ import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
+import { VaultArchetype } from '@/types/index-vault.types';
 import {
   ChainType,
   VAULT_STATUSES_ACTIVE,
@@ -1757,11 +1758,11 @@ export class TaptoolsService {
 
     const vaults: Pick<
       Vault,
-      'id' | 'initial_total_value_ada' | 'vault_status' | 'ft_token_supply' | 'fdv' | 'owner'
+      'id' | 'initial_total_value_ada' | 'vault_status' | 'ft_token_supply' | 'fdv' | 'owner' | 'vault_archetype'
     >[] = await this.vaultRepository.find({
       where: { id: In(vaultIds) },
       relations: ['owner'],
-      select: ['id', 'initial_total_value_ada', 'vault_status', 'ft_token_supply', 'fdv', 'owner'],
+      select: ['id', 'initial_total_value_ada', 'vault_status', 'ft_token_supply', 'fdv', 'owner', 'vault_archetype'],
     });
 
     const vaultMap = new Map(vaults.map(v => [v.id, v]));
@@ -1769,6 +1770,14 @@ export class TaptoolsService {
     // Update vault totals
     const updatePromises = Array.from(batchResults.entries()).map(([vaultId, summary]) => {
       const vault = vaultMap.get(vaultId);
+
+      // Index vaults hold their basket on-chain; IndexVaultService.syncVaultTotals writes their TVL.
+      if (vault?.vault_archetype === VaultArchetype.index_weighted) {
+        return this.vaultRepository.update(
+          { id: vaultId },
+          { total_acquired_value_ada: summary.totalAcquiredAda, last_valuation_update: new Date() }
+        );
+      }
 
       const updateData: Partial<Vault> = {
         total_assets_cost_ada: summary.totalValueAda,
