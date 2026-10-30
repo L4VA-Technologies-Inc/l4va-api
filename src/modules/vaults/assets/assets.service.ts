@@ -291,7 +291,7 @@ export class AssetsService {
             WHEN asset.type = :ftType THEN 
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
             WHEN asset.type = :ethType THEN
-              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
+              (asset.quantity / 1000000000000000000.0) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), :ethPriceInAda, 0)
             ELSE 
               asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
           END
@@ -515,7 +515,7 @@ export class AssetsService {
             WHEN asset.type = :ftType THEN
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
             WHEN asset.type = :ethType THEN
-              (asset.quantity / 1000000000000000000.0) * COALESCE(asset.dex_price, asset.floor_price, :ethPriceInAda, 0)
+              (asset.quantity / 1000000000000000000.0) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), :ethPriceInAda, 0)
             ELSE asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
           END
         )`,

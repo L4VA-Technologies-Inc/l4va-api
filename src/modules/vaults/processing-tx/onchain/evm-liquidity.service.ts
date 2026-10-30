@@ -174,6 +174,10 @@ export interface EvmVaultLpView {
   lpTotalSupply: string | null;
   /** Share of the pool the vault owns, 0..100. */
   vaultSharePct: number | null;
+  /** Token the vault holds for its position: the V2 pair, or the v4 adapter's receipt. */
+  lpToken: string | null;
+  /** The vault's share of the pool in native wei (both sides, valued at the pool price). */
+  vaultValueNative: string | null;
   lastError: string | null;
 }
 
@@ -279,6 +283,8 @@ export class EvmLiquidityService {
       vaultLpTokens: null,
       lpTotalSupply: null,
       vaultSharePct: null,
+      lpToken: lp.protocol === 'uniswap-v4' ? (lp.adapter ?? null) : (lp.pair ?? null),
+      vaultValueNative: null,
       lastError: lp.lastError ?? null,
     };
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId }, select: ['id', 'contract_address'] });
@@ -314,6 +320,7 @@ export class EvmLiquidityService {
       vaultLpTokens: formatUnits(vaultLp, 18),
       lpTotalSupply: formatUnits(totalSupply, 18),
       vaultSharePct: totalSupply > 0n ? Number((vaultLp * 1_000_000n) / totalSupply) / 10_000 : null,
+      vaultValueNative: totalSupply > 0n ? ((2n * rawNative * vaultLp) / totalSupply).toString() : null,
     };
   }
 
@@ -373,6 +380,8 @@ export class EvmLiquidityService {
       vaultLpTokens: vaultLiquidity.toString(),
       lpTotalSupply: poolLiquidity.toString(),
       vaultSharePct: poolLiquidity > 0n ? Number((vaultLiquidity * 1_000_000n) / poolLiquidity) / 10_000 : null,
+      // Full range: the VT side is worth the native side at the pool price.
+      vaultValueNative: sqrtP > 0n ? ((2n * vaultLiquidity * Q96) / sqrtP).toString() : null,
     };
   }
 

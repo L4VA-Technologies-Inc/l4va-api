@@ -1756,9 +1756,11 @@ export class VaultsService {
     // Compute vaultStats object for frontend stats bar consumption
     const isAcquirePhase = vault.vault_status === VaultStatus.acquire;
     const hasActiveLp = vault.has_active_lp ?? false;
-    // TVL: acquire-only vaults use totalAcquiredAda (no contributed assets)
-    const vaultStatsTvlAda = vault.is_acquire_only ? assetsPrices.totalAcquiredAda : assetsPrices.totalValueAda;
-    const vaultStatsTvlUsd = vault.is_acquire_only ? assetsPrices.totalAcquiredUsd : assetsPrices.totalValueUsd;
+    // TVL: acquire-only vaults use totalAcquiredAda (no contributed assets). Index vaults spend
+    // the raise on their basket, so their stored totals (on-chain holdings) are the TVL.
+    const tvlFromAcquired = vault.is_acquire_only && vault.vault_archetype !== VaultArchetype.index_weighted;
+    const vaultStatsTvlAda = tvlFromAcquired ? assetsPrices.totalAcquiredAda : assetsPrices.totalValueAda;
+    const vaultStatsTvlUsd = tvlFromAcquired ? assetsPrices.totalAcquiredUsd : assetsPrices.totalValueUsd;
     // FDV: for acquire-only vaults FDV = TVL (all acquired ADA is the market cap proxy), so FDV/TVL = 1
     let vaultStatsFdvAda: number | null = null;
     let vaultStatsFdvUsd: number | null = null;
@@ -1767,7 +1769,9 @@ export class VaultsService {
       vaultStatsFdvAda = assetsPrices.totalAcquiredAda > 0 ? assetsPrices.totalAcquiredAda : null;
       vaultStatsFdvUsd = assetsPrices.totalAcquiredUsd > 0 ? assetsPrices.totalAcquiredUsd : null;
       vaultStatsFdvTvl = assetsPrices.totalAcquiredAda > 0 ? 1 : null;
-    } else if (hasActiveLp || isAcquirePhase) {
+    } else if ((hasActiveLp && additionalData.fdv) || isAcquirePhase) {
+      // A listed LP prices FDV from the DEX index; EVM pools are not indexed there, so they
+      // (like any LP the index has no FDV for) fall through to the vault-NAV FDV below.
       vaultStatsFdvAda = additionalData.fdv ?? null;
       vaultStatsFdvUsd = additionalData.fdvUsd ?? null;
       vaultStatsFdvTvl = additionalData.fdvTvl ?? null;
