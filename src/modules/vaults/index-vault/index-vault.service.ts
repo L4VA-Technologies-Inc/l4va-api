@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
-import { encodeAbiParameters, isAddress, keccak256, parseAbi, type Address, type Hex } from 'viem';
+import { In, IsNull, Not, Repository } from 'typeorm';
+import { encodeAbiParameters, formatUnits, isAddress, keccak256, parseAbi, type Address, type Hex } from 'viem';
 
 import {
   computeAllocation,
@@ -19,6 +20,7 @@ import { IndexSwapRouteService, NATIVE } from './index-swap-route.service';
 import { EvmIndexRebalance, IndexRebalancePhase } from '@/database/evm-index-rebalance.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
+import { PriceService } from '@/modules/price/price.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import { EvmSwapService } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
@@ -50,6 +52,13 @@ const ERC20_METADATA_ABI = parseAbi([
 const MIN_TRADE_NATIVE = 10n ** 15n;
 const SWAP_DEADLINE_SECONDS = 600n;
 const PORTFOLIO_CACHE_MS = 60_000;
+/** Statuses in which an index vault holds its basket. */
+const HOLDING_STATUSES = [
+  VaultStatus.locked,
+  VaultStatus.expansion,
+  VaultStatus.acquire_expansion,
+  VaultStatus.terminating,
+];
 const MAX_AUTO_ATTEMPTS = 3;
 const AUTO_RETRY_BACKOFF_MS = 10 * 60_000;
 const STALE_EXECUTING_MS = 30 * 60_000;
@@ -89,12 +98,26 @@ export interface IndexPortfolioAsset {
   driftBps: number;
   balance: string;
   valueNative: string;
+  valueUsd: number;
+  valueAda: number;
+}
+
+/** A native amount priced in every display currency. */
+export interface IndexValue {
+  valueNative: string;
+  valueUsd: number;
+  valueAda: number;
 }
 
 export interface IndexPortfolio {
+  /** Basket + cash; the allocation (target/actual bps) is measured against this. */
   navNative: string;
-  reserve: { targetBps: number; actualBps: number; valueNative: string };
+  reserve: { targetBps: number; actualBps: number } & IndexValue;
   assets: IndexPortfolioAsset[];
+  /** The vault's LP position (vault token / native), outside the basket allocation. */
+  lp: ({ token: string } & IndexValue) | null;
+  /** Everything the vault holds: basket + cash + LP. This is the vault's TVL. */
+  total: IndexValue;
   pricedAt: string;
   /** Set when the portfolio could not be read; the basket itself is still returned. */
   error?: string;
@@ -120,6 +143,7 @@ export class IndexVaultService {
     private readonly swapService: EvmSwapService,
     private readonly routeService: IndexSwapRouteService,
     private readonly liquidityService: EvmLiquidityService,
+    private readonly priceService: PriceService,
     configService: ConfigService
   ) {
     this.allowedAssets = (configService.get<string>('INDEX_BASKET_ALLOWED_ASSETS') ?? '')
@@ -268,11 +292,7 @@ export class IndexVaultService {
     rebalances: ReturnType<IndexVaultService['serializeRebalance']>[];
   }> {
     const vault = await this.requireIndexVault(vaultId);
-    const hasHoldings =
-      !!vault.contract_address &&
-      [VaultStatus.locked, VaultStatus.expansion, VaultStatus.acquire_expansion, VaultStatus.terminating].includes(
-        vault.vault_status
-      );
+    const hasHoldings = !!vault.contract_address && HOLDING_STATUSES.includes(vault.vault_status);
 
     const [portfolio, rebalances] = await Promise.all([
       hasHoldings ? this.getPortfolio(vault) : Promise.resolve(null),
@@ -308,7 +328,7 @@ export class IndexVaultService {
     const targets: WeightTarget[] = resolved.map(t => ({ asset: t.assetAddress, weightBps: t.weightBps }));
     const opts = this.planOptions(vault.index_config, reserveBps);
     const state = await this.readState(
-      vault.contract_address as Address,
+      vault,
       targets.map(t => t.asset as Address)
     );
 
@@ -343,10 +363,14 @@ export class IndexVaultService {
     const reserveBps = config?.reserveBps ?? 0;
 
     try {
-      const state = await this.readState(
-        vault.contract_address as Address,
-        targets.map(t => t.assetAddress as Address)
-      );
+      const [state, lp, prices] = await Promise.all([
+        this.readState(
+          vault,
+          targets.map(t => t.assetAddress as Address)
+        ),
+        this.liquidityService.getVaultLp(vault.id),
+        this.displayPrices(),
+      ]);
       const allocation = computeAllocation(
         state,
         targets.map(t => ({ asset: t.assetAddress, weightBps: t.weightBps })),
@@ -355,12 +379,14 @@ export class IndexVaultService {
       const byAddress = new Map(targets.map(t => [t.assetAddress, t]));
       const balances = new Map(state.holdings.map(h => [h.asset, h.balance]));
 
+      const lpValue = lp?.lpToken && lp.vaultValueNative ? BigInt(lp.vaultValueNative) : 0n;
+
       const data: IndexPortfolio = {
         navNative: allocation.nav.toString(),
         reserve: {
           targetBps: reserveBps,
           actualBps: allocation.reserveActualBps,
-          valueNative: state.nativeAvailable.toString(),
+          ...this.priced(state.nativeAvailable, prices),
         },
         assets: allocation.rows.map(row => {
           const target = byAddress.get(row.asset);
@@ -376,9 +402,11 @@ export class IndexVaultService {
             actualBps: row.actualBps,
             driftBps: row.driftBps,
             balance: (balances.get(row.asset) ?? 0n).toString(),
-            valueNative: row.valueNative.toString(),
+            ...this.priced(row.valueNative, prices),
           };
         }),
+        lp: lpValue > 0n ? { token: lp.lpToken, ...this.priced(lpValue, prices) } : null,
+        total: this.priced(allocation.nav + lpValue, prices),
         pricedAt: new Date().toISOString(),
       };
       this.portfolioCache.set(vault.id, { at: Date.now(), data });
@@ -387,8 +415,10 @@ export class IndexVaultService {
       this.logger.warn(`Index portfolio read failed for vault ${vault.id}: ${(err as Error).message}`);
       return {
         navNative: '0',
-        reserve: { targetBps: reserveBps, actualBps: 0, valueNative: '0' },
+        reserve: { targetBps: reserveBps, actualBps: 0, valueNative: '0', valueUsd: 0, valueAda: 0 },
         assets: [],
+        lp: null,
+        total: { valueNative: '0', valueUsd: 0, valueAda: 0 },
         pricedAt: new Date().toISOString(),
         error: 'Live holdings are temporarily unavailable',
       };
@@ -397,12 +427,18 @@ export class IndexVaultService {
 
   /**
    * Free native plus every ERC-20 the vault could hold a basket position in:
-   * the targets and anything already in custody. The vault's own token is never
-   * a holding. A basket asset that cannot be priced aborts — trading on a
-   * guessed value would mis-size every other leg.
+   * the targets and anything already in custody. The vault's own token and its
+   * LP receipt are never holdings (the receipt cannot be sold; the portfolio
+   * values it separately). A basket asset that cannot be priced aborts — trading
+   * on a guessed value would mis-size every other leg.
    */
-  private async readState(vaultAddress: Address, basketAssets: Address[]): Promise<PortfolioState> {
+  private async readState(
+    vault: Pick<Vault, 'id' | 'contract_address'>,
+    basketAssets: Address[]
+  ): Promise<PortfolioState> {
     const client = this.contractReader.publicClient;
+    const vaultAddress = vault.contract_address as Address;
+    const lpToken = (await this.liquidityService.getVaultLp(vault.id))?.lpToken?.toLowerCase();
     const [nativeAvailable, custody, vaultToken] = (await Promise.all([
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'availableNativeForOperations' }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'custodyTokens' }),
@@ -411,7 +447,7 @@ export class IndexVaultService {
 
     const basket = new Set(basketAssets.map(a => a.toLowerCase()));
     const tokens = [...new Set([...basket, ...custody.map(a => a.toLowerCase())])].filter(
-      t => t !== vaultToken.toLowerCase()
+      t => t !== vaultToken.toLowerCase() && t !== lpToken
     ) as Address[];
 
     const holdings: HoldingValue[] = [];
@@ -437,6 +473,54 @@ export class IndexVaultService {
     }
 
     return { nativeAvailable, holdings };
+  }
+
+  private async displayPrices(): Promise<{ ethUsd: number; adaUsd: number }> {
+    const [ethUsd, adaUsd] = await Promise.all([this.priceService.getEthPrice(), this.priceService.getAdaPrice()]);
+    return { ethUsd, adaUsd };
+  }
+
+  private priced(wei: bigint, prices: { ethUsd: number; adaUsd: number }): IndexValue {
+    const valueUsd = Number(formatUnits(wei, 18)) * prices.ethUsd;
+    return { valueNative: wei.toString(), valueUsd, valueAda: prices.adaUsd > 0 ? valueUsd / prices.adaUsd : 0 };
+  }
+
+  // ---------------------------------------------------------------------------
+  // TVL
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Index vaults hold what they bought on-chain, not the `assets` rows the
+   * generic valuation sums, so their TVL columns are written from the live
+   * portfolio here (TaptoolsService skips them).
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async syncVaultTotals(): Promise<void> {
+    const vaults = await this.vaultRepository.find({
+      where: {
+        vault_archetype: VaultArchetype.index_weighted,
+        chain_type: ChainType.robinhood,
+        vault_status: In(HOLDING_STATUSES),
+        contract_address: Not(IsNull()),
+        deleted: false,
+      },
+    });
+
+    for (const vault of vaults) {
+      const portfolio = await this.getPortfolio(vault);
+      if (portfolio.error) continue;
+      const { total } = portfolio;
+      const updates: Partial<Vault> = {
+        total_assets_cost_eth: Number(formatUnits(BigInt(total.valueNative), 18)),
+        total_assets_cost_usd: total.valueUsd,
+        total_assets_cost_ada: total.valueAda,
+        last_valuation_update: new Date(),
+      };
+      if (vault.vault_status === VaultStatus.locked && vault.fdv && total.valueAda > 0.0001) {
+        updates.fdv_tvl = Number((vault.fdv / total.valueAda).toFixed(2));
+      }
+      await this.vaultRepository.update({ id: vault.id }, updates);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -592,7 +676,7 @@ export class IndexVaultService {
           await this.settleStaleLegs(run, side, vaultAddress);
 
           const state = await this.readState(
-            vaultAddress,
+            vault,
             targets.map(t => t.asset as Address)
           );
           if (run.nav_native == null) {

@@ -30,6 +30,7 @@ const DEFAULT_SIWE_ORIGINS = [
   'https://app.l4va.org',
   'https://testnet.l4va.org',
   'https://testnet-29272671.l4va.org',
+  'https://stage-755289.l4va.org',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ];

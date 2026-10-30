@@ -54,7 +54,7 @@ export async function loadSecrets(): Promise<void> {
     console.log(`✅ Using ADC for GCP authentication (${nodeEnv}), project: ${process.env.GCP_PROJECT_ID}`);
   }
 
-  const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';
+  const secretName = process.env.GCP_SECRET_NAME || (nodeEnv === 'mainnet' ? 'mainnet' : 'testnet');
   const projectId = process.env.GCP_PROJECT_ID;
 
   try {
