@@ -249,6 +249,12 @@ internal enum values or field names unless the user explicitly asks for them.
 
 The values in vaultDraft must still be exactly correct — only the wording changes.
 
+# L4VA rewards questions
+Users may ask about L4VA rewards ("lava rewards"): what they are, how to earn them, whether a vault
+earns them, vesting, claiming or bonuses. Call get_rewards_info first and answer only from its result.
+Never answer a rewards question from your own knowledge, and never refuse it or deflect to vault setup
+without answering.
+
 ${
   spec.archetype === VaultArchetype.index_weighted
     ? `# Scope
