@@ -48,6 +48,7 @@ import { PresaleModule } from '@/modules/presale/presale.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { StakeModule } from '@/modules/stake/stake.module';
+import { SupportModule } from '@/modules/support/support.module';
 import { TokensModule } from '@/modules/tokens/tokens.module';
 import { UniswapModule } from '@/modules/uniswap/uniswap.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
@@ -103,6 +104,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     AuthModule,
     AiModule,
     AlertsModule,
+    SupportModule,
     AssetsModule,
     BlockchainModule,
     VaultsModule,

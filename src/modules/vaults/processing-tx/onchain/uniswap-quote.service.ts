@@ -74,6 +74,8 @@ export class UniswapQuoteService {
   private readonly logger = new Logger(UniswapQuoteService.name);
   private readonly chainId = 4663; // Robinhood Chain
   private readonly apiKey?: string;
+  /** Trading API rejects quotes without a `swapper`; the adapter is who actually swaps. */
+  private readonly swapper?: string;
   private readonly tradingApiBase = 'https://trade-api.gateway.uniswap.org/v1';
 
   constructor(
@@ -82,6 +84,7 @@ export class UniswapQuoteService {
     configService: ConfigService
   ) {
     this.apiKey = configService.get<string>('UNISWAP_API_KEY');
+    this.swapper = configService.get<string>('EVM_SWAP_ADAPTER_ADDRESS');
   }
 
   /**
@@ -99,11 +102,13 @@ export class UniswapQuoteService {
     slippageBps: number = 50,
     feeTier?: number
   ): Promise<UniswapQuoteResult> {
-    if (this.apiKey) {
+    if (this.apiKey && this.swapper) {
       try {
         return await this.quoteViaApi(tokenIn, tokenOut, amountIn, slippageBps, feeTier);
       } catch (err) {
-        this.logger.warn(`Uniswap Trading API quote failed, falling back to QuoterV2: ${(err as Error).message}`);
+        this.logger.warn(
+          `Uniswap Trading API quote failed, falling back to QuoterV2: ${(err as any)?.response?.data?.detail ?? (err as Error).message}`
+        );
       }
     }
     return this.quoteViaChain(tokenIn, tokenOut, amountIn, slippageBps, feeTier);
@@ -127,8 +132,7 @@ export class UniswapQuoteService {
       tokenOutChainId: this.chainId,
       amount: amountIn.toString(),
       type: 'EXACT_INPUT',
-      // For the adapter, we don't need swapper — no Permit2 involved.
-      // The adapter holds the tokens directly.
+      swapper: this.swapper,
     };
 
     const response = await firstValueFrom(

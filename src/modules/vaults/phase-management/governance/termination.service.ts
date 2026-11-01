@@ -31,7 +31,7 @@ import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import type { TerminationClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 /**
  * Termination flow status tracking
@@ -200,7 +200,7 @@ export class TerminationService {
     try {
       // Find vaults in terminating status
       const terminatingVaults = await this.vaultRepository.find({
-        where: { vault_status: VaultStatus.terminating }, // Will add to enum
+        where: { vault_status: VaultStatus.terminating },
         relations: ['treasury_wallet'],
       });
 
@@ -209,6 +209,8 @@ export class TerminationService {
       }
 
       for (const vault of terminatingVaults) {
+        // EVM vaults keep their own state under termination_metadata.evm and are driven by the EVM termination flow.
+        if (vault.chain_type === ChainType.robinhood) continue;
         try {
           await this.processTerminationStep(vault);
         } catch (error: any) {
