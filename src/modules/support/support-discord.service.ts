@@ -46,8 +46,19 @@ export interface TeamMessageEvent {
 
 type TeamMessageHandler = (event: TeamMessageEvent) => Promise<void>;
 /** Resolves to whether the channel belonged to a ticket of this environment. */
-type CloseHandler = (channelId: string, closedBy: string) => Promise<boolean>;
+/** `null`: the channel is not a ticket of this environment. */
+export type CloseResult = 'closed' | 'already_closed' | null;
+type CloseHandler = (channelId: string, closedBy: string) => Promise<CloseResult>;
 type ChannelDeletedHandler = (channelId: string) => Promise<void>;
+
+const closeButtonRow = (disabled: boolean): ActionRowBuilder<ButtonBuilder> =>
+  new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(CLOSE_TICKET_BUTTON_ID)
+      .setLabel(disabled ? 'Ticket closed' : 'Close ticket')
+      .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Danger)
+      .setDisabled(disabled)
+  );
 
 export const ticketChannelName = (number: number): string => `app-ticket-${String(number).padStart(4, '0')}`;
 
@@ -154,6 +165,9 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
             PermissionFlagsBits.SendMessages,
             PermissionFlagsBits.ReadMessageHistory,
             PermissionFlagsBits.ManageWebhooks,
+            // The bot's server role grants nothing; everything it needs here is set on the channel.
+            PermissionFlagsBits.EmbedLinks,
+            ...(this.pingRole ? [PermissionFlagsBits.MentionEveryone] : []),
           ],
         },
       ],
@@ -174,9 +188,7 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
           ...(info.pageUrl ? [{ name: 'Page', value: info.pageUrl.slice(0, 1024) }] : [])
         )
         .setTimestamp(new Date());
-      const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(CLOSE_TICKET_BUTTON_ID).setLabel('Close ticket').setStyle(ButtonStyle.Danger)
-      );
+      const closeRow = closeButtonRow(false);
       // Pings the support role so a new ticket is noticed.
       await channel.send({
         ...(this.pingRole ? { content: `<@&${this.roleId}>` } : {}),
@@ -261,9 +273,19 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
       interaction.user.globalName ||
       interaction.user.username;
     try {
-      const handled = await this.closeHandler(interaction.channelId, closedBy);
-      if (!handled) return;
-      await interaction.reply({ content: `Ticket closed by ${closedBy}. The user can no longer reply in the app.` });
+      // Discord fails the click unless it is acknowledged within 3s, so acknowledge before touching the DB.
+      await interaction.deferReply();
+      const result = await this.closeHandler(interaction.channelId, closedBy);
+      if (!result) {
+        await interaction.deleteReply();
+        return;
+      }
+      await interaction.editReply(
+        result === 'closed'
+          ? `Ticket closed by ${closedBy}. The user can no longer reply in the app.`
+          : 'This chat was already closed. The user can no longer reply in the app.'
+      );
+      await interaction.message.edit({ components: [closeButtonRow(true)] }).catch(() => undefined);
     } catch (error) {
       // During a deploy two API instances receive the click; the second reply fails harmlessly.
       this.logger.warn(`Close ticket interaction: ${(error as Error).message}`);

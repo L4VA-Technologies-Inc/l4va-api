@@ -13,7 +13,7 @@ import { Repository } from 'typeorm';
 
 import { OpenSupportTicketReq, SendSupportMessageReq } from './dto/support-ticket.req';
 import { SupportMessageRes, SupportTicketRes } from './dto/support-ticket.res';
-import { SupportDiscordService, TeamMessageEvent } from './support-discord.service';
+import { CloseResult, SupportDiscordService, TeamMessageEvent } from './support-discord.service';
 
 import { SupportMessage, SupportMessageAuthor } from '@/database/support-message.entity';
 import { SupportTicket, SupportTicketStatus } from '@/database/support-ticket.entity';
@@ -192,13 +192,12 @@ export class SupportService implements OnModuleInit {
     await this.ticketRepository.update(ticket.id, { last_message_at: new Date() });
   }
 
-  private async closeFromDiscord(channelId: string, closedBy: string): Promise<boolean> {
+  private async closeFromDiscord(channelId: string, closedBy: string): Promise<CloseResult> {
     const ticket = await this.ticketRepository.findOne({ where: { discord_channel_id: channelId } });
-    if (!ticket) return false;
-    if (ticket.status === SupportTicketStatus.open) {
-      await this.markClosed(ticket, `${closedBy} from the L4VA team closed this chat.`);
-    }
-    return true;
+    if (!ticket) return null;
+    if (ticket.status !== SupportTicketStatus.open) return 'already_closed';
+    await this.markClosed(ticket, `${closedBy} from the L4VA team closed this chat.`);
+    return 'closed';
   }
 
   private async handleChannelDeleted(channelId: string): Promise<void> {
