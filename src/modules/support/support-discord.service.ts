@@ -66,6 +66,8 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
   private readonly guildId?: string;
   private readonly categoryId?: string;
   private readonly roleId?: string;
+  /** Off for dev/staging: the role still sees test tickets but is not notified. */
+  private readonly pingRole: boolean;
   private client: Client | null = null;
   private ready: Promise<void> | null = null;
 
@@ -78,6 +80,7 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
     this.guildId = configService.get<string>('DISCORD_GUILD_ID');
     this.categoryId = configService.get<string>('DISCORD_SUPPORT_CATEGORY_ID');
     this.roleId = configService.get<string>('DISCORD_SUPPORT_ROLE_ID');
+    this.pingRole = configService.get<string>('DISCORD_SUPPORT_PING_ROLE') !== 'false';
   }
 
   get isConfigured(): boolean {
@@ -176,10 +179,10 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
       );
       // Pings the support role so a new ticket is noticed.
       await channel.send({
-        content: `<@&${this.roleId}>`,
+        ...(this.pingRole ? { content: `<@&${this.roleId}>` } : {}),
         embeds: [embed],
         components: [closeRow],
-        allowedMentions: { roles: [this.roleId] },
+        allowedMentions: { roles: this.pingRole ? [this.roleId] : [] },
       });
 
       return { channelId: channel.id, webhookId: webhook.id, webhookToken: webhook.token };
