@@ -15,6 +15,7 @@ import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
+import { totalVotingPower as snapshotVotingPower } from './voting-power.util';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -238,7 +239,7 @@ export class GovernanceExecutionService {
   }
 
   private async emitVoteTimeRunningOut(proposal: Proposal): Promise<void> {
-    const holderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+    const holderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
     const votedIds = new Set((proposal.votes || []).map(vote => vote.voterId));
     const nonVoterIds = holderIds.filter(id => !votedIds.has(id));
 
@@ -455,7 +456,7 @@ export class GovernanceExecutionService {
   }
 
   private async notifyProposalStarted(proposal: Proposal): Promise<void> {
-    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
     if (tokenHolderIds.length === 0) {
       this.logger.debug(`Proposal ${proposal.id} activated but no token holders were found to notify`);
       return;
@@ -501,6 +502,7 @@ export class GovernanceExecutionService {
           'votes.voteWeight',
           'votes.vote',
           'snapshot.addressBalances',
+          'snapshot.lpBalances',
         ])
         .getOne();
 
@@ -513,12 +515,7 @@ export class GovernanceExecutionService {
       const participationThreshold = proposal.vault.cosigning_threshold || 0;
 
       // Calculate total voting power from snapshot
-      let totalVotingPower = BigInt(0);
-      if (proposal.snapshot?.addressBalances) {
-        for (const balance of Object.values(proposal.snapshot.addressBalances)) {
-          totalVotingPower += BigInt(balance);
-        }
-      }
+      const totalVotingPower = proposal.snapshot ? snapshotVotingPower(proposal.snapshot) : BigInt(0);
 
       // Use vote counting service to calculate results with both thresholds
       const voteResult = this.voteCountingService.calculateResult(
@@ -534,9 +531,7 @@ export class GovernanceExecutionService {
         voteResult.noVotes === BigInt(0) &&
         voteResult.abstainVotes > BigInt(0);
 
-      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-        proposal.snapshot?.addressBalances
-      );
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
 
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
@@ -624,6 +619,7 @@ export class GovernanceExecutionService {
           'treasury_wallet.treasury_address',
           'owner.address',
           'snapshot.addressBalances',
+          'snapshot.lpBalances',
         ])
         .getOne();
 
@@ -632,9 +628,7 @@ export class GovernanceExecutionService {
         return;
       }
 
-      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-        proposal.snapshot?.addressBalances
-      );
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
 
       // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
@@ -834,9 +828,7 @@ export class GovernanceExecutionService {
       }
 
       // For other errors, store them and emit failure event
-      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-        proposal.snapshot?.addressBalances
-      );
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
@@ -2349,9 +2341,7 @@ export class GovernanceExecutionService {
           throwOnFailure: false,
         });
 
-        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-          proposal.snapshot?.addressBalances
-        );
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,

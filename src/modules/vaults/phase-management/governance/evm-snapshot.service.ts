@@ -7,6 +7,8 @@ import { parseAbiItem, type Address } from 'viem';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
+import { EvmLpVotingService } from './evm-lp-voting.service';
+
 import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -42,7 +44,8 @@ export class EvmSnapshotService {
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Snapshot) private readonly snapshotRepository: Repository<Snapshot>,
     private readonly contractReader: EvmContractReader,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly lpVoting: EvmLpVotingService
   ) {}
 
   /**
@@ -151,11 +154,19 @@ export class EvmSnapshotService {
       addressBalancesForSnapshot[address] = String(balance);
     }
 
+    const lpBalances = await this.attributeLpVt(
+      vaultId,
+      vault.contract_address as Address,
+      vtAddress,
+      pinnedBlock.number
+    );
+
     const snapshot = this.snapshotRepository.create({
       vaultId,
       // Use the VaultToken ERC-20 address as assetId (mirrors Cardano policy+name pattern).
       assetId: vtAddress.toLowerCase(),
       addressBalances: addressBalancesForSnapshot,
+      lpBalances,
       snapshotBlock: String(pinnedBlock.number),
       snapshotTimepoint: String(pinnedBlock.timestamp),
     });
@@ -270,6 +281,29 @@ export class EvmSnapshotService {
     for (const holder of excluded) balances.delete(holder);
     if (excluded.length > 0) {
       this.logger.debug(`[EVM Snapshot] Vault ${vaultId}: excluded non-voting holders ${excluded.join(', ')}`);
+    }
+  }
+
+  /**
+   * Voting weight for VT that holders put into Uniswap pools. A failure here leaves LP
+   * providers without a vote on this snapshot rather than blocking the proposal.
+   */
+  private async attributeLpVt(
+    vaultId: string,
+    vaultAddress: Address,
+    vtAddress: Address,
+    atBlock: bigint
+  ): Promise<Record<string, string> | null> {
+    try {
+      const fromBlock = (await this.vaultCreationBlock(vaultId)) ?? this.factoryDeployBlock();
+      const lp = await this.lpVoting.attributeLpVt(vaultId, vaultAddress, vtAddress, fromBlock, atBlock);
+      if (lp.size === 0) return null;
+      return Object.fromEntries([...lp.entries()].map(([address, vt]) => [address, String(vt)]));
+    } catch (error) {
+      this.logger.error(
+        `[EVM Snapshot] Vault ${vaultId}: LP voting attribution failed, LP providers get no vote on this snapshot — ${(error as Error).message}`
+      );
+      return null;
     }
   }
 

@@ -34,6 +34,7 @@ import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { SnapshotService } from './snapshot.service';
 import { VoteCountingService } from './vote-counting.service';
+import { totalVotingPower as snapshotVotingPower, votingBalances } from './voting-power.util';
 
 import { MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION } from '@/constants/expansion.constants';
 import { Asset } from '@/database/asset.entity';
@@ -2479,8 +2480,8 @@ export class GovernanceService {
 
       if (user?.address && proposal.snapshot) {
         const normalizedUserAddress = this.normalizeAddress(user.address);
-        const voteWeight = proposal.snapshot.addressBalances[normalizedUserAddress];
-        const hasVotingPower = voteWeight && voteWeight !== '0';
+        const voteWeight = votingBalances(proposal.snapshot).get(normalizedUserAddress.toLowerCase()) ?? 0n;
+        const hasVotingPower = voteWeight > 0n;
 
         const existingVote = await this.voteRepository
           .createQueryBuilder('vote')
@@ -3384,10 +3385,7 @@ export class GovernanceService {
       throw new NotFoundException('Snapshot not found');
     }
 
-    const totalVotingPowerBigInt = Object.values(snapshot.addressBalances).reduce(
-      (sum, balance) => BigInt(sum) + BigInt(balance),
-      BigInt(0)
-    );
+    const totalVotingPowerBigInt = snapshotVotingPower(snapshot);
     const totalVotingPower = totalVotingPowerBigInt.toString();
 
     // Use vote counting service to calculate all vote totals and percentages
@@ -4376,19 +4374,16 @@ export class GovernanceService {
         );
       }
 
-      const voteWeight = snapshot.addressBalances[user.address.toLocaleLowerCase()];
+      const voteWeight = String(votingBalances(snapshot).get(user.address.toLowerCase()) ?? 0n);
 
-      if (!voteWeight || voteWeight === '0') {
+      if (voteWeight === '0') {
         throw new BadRequestException(
           'NO_VOTING_POWER',
           'You have no voting power in this vault. You must hold vault tokens to vote.'
         );
       }
 
-      const totalVotingPower = Object.values(snapshot.addressBalances)
-        .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
-        .toString();
-      const voteWeightPercentFromAll = (BigInt(voteWeight) * BigInt(100)) / BigInt(totalVotingPower);
+      const voteWeightPercentFromAll = (BigInt(voteWeight) * BigInt(100)) / snapshotVotingPower(snapshot);
 
       if (voteWeightPercentFromAll < vault.creation_threshold && action === 'create_proposal') {
         throw new BadRequestException(

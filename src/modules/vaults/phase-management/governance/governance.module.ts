@@ -10,6 +10,7 @@ import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 import { DistributionService } from './distribution.service';
 import { EvmDistributionService } from './evm-distribution.service';
 import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
+import { EvmLpVotingService } from './evm-lp-voting.service';
 import { EvmSnapshotService } from './evm-snapshot.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
@@ -87,6 +88,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     GovernanceExecutionService,
     EvmGovernanceExecutionService,
     EvmSnapshotService,
+    EvmLpVotingService,
     EvmDistributionService,
     GovernanceRefundService,
     ProposalSchedulerService,
