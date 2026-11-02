@@ -3,13 +3,15 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, zeroAddress, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, zeroAddress, zeroHash, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
+import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
 import { EvmSnapshotService } from './evm-snapshot.service';
+import { votingBalances } from './voting-power.util';
 
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -206,13 +208,30 @@ export class EvmDistributionService {
       );
     }
 
+    // Vaults that support it pay by snapshot voting weight (held VT + VT in
+    // liquidity positions), like Cardano; older vaults pay pro-rata on-chain.
+    let tree: DistributionTree | null = null;
+    if (await this.supportsMerkleDistribution(vaultAddress)) {
+      const snapshot = await this.snapshotForTimepoint(proposal, timepoint);
+      if (!snapshot) throw new Error(`Proposal ${proposal.id}: no snapshot at timepoint ${timepoint} to weight from`);
+      tree = this.buildTree(vaultAddress, executionKey, snapshot);
+    }
+
+    const window = BigInt(DEFAULT_CLAIM_WINDOW_SECONDS);
     const result = await this.adminSigner.sendAndConfirm(
-      {
-        address: vaultAddress,
-        abi: VAULT_ABI,
-        functionName: 'openDistribution',
-        args: [executionKey, asset, BigInt(amount), Number(timepoint), BigInt(DEFAULT_CLAIM_WINDOW_SECONDS)],
-      },
+      tree
+        ? {
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'openDistributionMerkle',
+            args: [executionKey, asset, BigInt(amount), Number(timepoint), tree.root, tree.totalWeight, window],
+          }
+        : {
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'openDistribution',
+            args: [executionKey, asset, BigInt(amount), Number(timepoint), window],
+          },
       ['DistributionOpened']
     );
 
@@ -231,7 +250,8 @@ export class EvmDistributionService {
     const distributionId = String(opened.args.distributionId as bigint);
     this.logger.log(
       `Proposal ${proposal.id}: opened distribution ${distributionId} on ${vaultAddress} — ` +
-        `asset=${asset} netPot=${opened.args.netPot} supply=${opened.args.supply} timepoint=${timepoint} tx=${result.hash}`
+        `asset=${asset} netPot=${opened.args.netPot} supply=${opened.args.supply} timepoint=${timepoint} ` +
+        `${tree ? `merkleRoot=${tree.root} holders=${tree.entries.size} ` : ''}tx=${result.hash}`
     );
 
     return {
@@ -371,20 +391,34 @@ export class EvmDistributionService {
       return 0;
     }
 
+    const tree = await this.treeForDistribution(proposal, vaultAddress, distributionId, snapshot);
+    if (tree === undefined) return 0; // Merkle distribution whose tree cannot be rebuilt; logged
+
     let sent = 0;
     let pending = false;
     const failures: Record<string, number> = { ...(dist.autoClaimFailures ?? {}) };
     let failuresChanged = false;
-    for (const holder of Object.keys(snapshot.addressBalances ?? {})) {
+    const holders = tree ? [...tree.entries.keys()] : Object.keys(snapshot.addressBalances ?? {});
+    for (const holder of holders) {
       // A holder whose claim keeps reverting (e.g. a contract that rejects ETH) is skipped;
       // it can still claim itself until the deadline.
       if ((failures[holder] ?? 0) >= AUTO_CLAIM_MAX_FAILURES_PER_HOLDER) continue;
-      const claimable = (await this.contractReader.publicClient.readContract({
-        address: vaultAddress,
-        abi: VAULT_ABI,
-        functionName: 'distributionClaimable',
-        args: [distributionId, holder as Address],
-      })) as bigint;
+      const entry = tree?.entries.get(holder);
+      const claimable = entry
+        ? await this.merkleClaimable(
+            vaultAddress,
+            distributionId,
+            holder as Address,
+            entry.weight,
+            BigInt(dist.netPot),
+            BigInt(dist.supply)
+          )
+        : ((await this.contractReader.publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'distributionClaimable',
+            args: [distributionId, holder as Address],
+          })) as bigint);
       if (claimable === 0n) continue;
 
       if (sent >= budget) {
@@ -393,12 +427,19 @@ export class EvmDistributionService {
       }
       try {
         const result = await this.adminSigner.sendAndConfirm(
-          {
-            address: vaultAddress,
-            abi: VAULT_ABI,
-            functionName: 'claimDistributionFor',
-            args: [distributionId, holder as Address],
-          },
+          entry
+            ? {
+                address: vaultAddress,
+                abi: VAULT_ABI,
+                functionName: 'claimDistributionWithProofFor',
+                args: [distributionId, holder as Address, entry.weight, entry.proof],
+              }
+            : {
+                address: vaultAddress,
+                abi: VAULT_ABI,
+                functionName: 'claimDistributionFor',
+                args: [distributionId, holder as Address],
+              },
           ['DistributionClaimed']
         );
         sent++;
@@ -451,14 +492,31 @@ export class EvmDistributionService {
     this.logger.log(`Distribution ${fresh.metadata.evmDistribution.distributionId} auto-claim complete (${reason})`);
   }
 
-  /** What `holder` can claim right now, straight from the contract. */
+  /** What `holder` can claim right now: from the contract, or from the tree for a Merkle distribution. */
   async claimableFor(vaultId: string, distributionId: string, holder: Address): Promise<string> {
     const vault = await this.requireEvmVault(vaultId);
+    const vaultAddress = vault.contract_address as Address;
+    const id = BigInt(distributionId);
+
+    if ((await this.readMerkleRoot(vaultAddress, id)) !== zeroHash) {
+      const proposal = await this.proposalRepository
+        .createQueryBuilder('p')
+        .where('p.vault_id = :vaultId', { vaultId })
+        .andWhere(`p.metadata->'evmDistribution'->>'distributionId' = :id`, { id: distributionId })
+        .getOne();
+      const onchain = await this.readDistribution(vaultAddress, id);
+      const snapshot = proposal ? await this.snapshotForTimepoint(proposal, BigInt(onchain.timepoint)) : null;
+      const tree = proposal && snapshot ? await this.treeForDistribution(proposal, vaultAddress, id, snapshot) : null;
+      const entry = tree?.entries.get(holder.toLowerCase());
+      if (!entry) return '0';
+      return String(await this.merkleClaimable(vaultAddress, id, holder, entry.weight, onchain.netPot, onchain.supply));
+    }
+
     const amount = (await this.contractReader.publicClient.readContract({
-      address: vault.contract_address as Address,
+      address: vaultAddress,
       abi: VAULT_ABI,
       functionName: 'distributionClaimable',
-      args: [BigInt(distributionId), holder],
+      args: [id, holder],
     })) as bigint;
     return String(amount);
   }
@@ -591,6 +649,91 @@ export class EvmDistributionService {
       deadline: bigint;
       swept: boolean;
     };
+  }
+
+  /** Vaults deployed before Merkle distributions have no `distributionMerkleRoot`. */
+  private async supportsMerkleDistribution(vaultAddress: Address): Promise<boolean> {
+    try {
+      await this.readMerkleRoot(vaultAddress, 0n, false);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** `zeroHash` for a pro-rata distribution or a vault without Merkle support. */
+  private async readMerkleRoot(vaultAddress: Address, distributionId: bigint, tolerateMissing = true): Promise<Hex> {
+    try {
+      return (await this.contractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'distributionMerkleRoot',
+        args: [distributionId],
+      })) as Hex;
+    } catch (error) {
+      if (tolerateMissing) return zeroHash;
+      throw error;
+    }
+  }
+
+  private buildTree(vaultAddress: Address, executionKey: Hex, snapshot: Snapshot): DistributionTree {
+    return buildDistributionTree(
+      vaultAddress,
+      BigInt(this.contractReader.chainId),
+      executionKey,
+      votingBalances(snapshot)
+    );
+  }
+
+  /**
+   * The tree a Merkle distribution was opened with, rebuilt from its snapshot.
+   * `null` for pro-rata; `undefined` when the rebuilt root does not match the
+   * one on-chain (the snapshot changed), in which case nothing is paid.
+   */
+  private async treeForDistribution(
+    proposal: Proposal,
+    vaultAddress: Address,
+    distributionId: bigint,
+    snapshot: Snapshot
+  ): Promise<DistributionTree | null | undefined> {
+    const root = await this.readMerkleRoot(vaultAddress, distributionId);
+    if (root === zeroHash) return null;
+    const tree = this.buildTree(vaultAddress, this.buildExecutionKey(proposal.vaultId, proposal.id), snapshot);
+    if (tree.root.toLowerCase() !== root.toLowerCase()) {
+      this.logger.error(
+        `Distribution ${distributionId} on ${vaultAddress}: rebuilt tree root ${tree.root} does not match on-chain ${root} ` +
+          `(snapshot ${snapshot.id}). Not paying out; holders can still be paid once the snapshot is restored.`
+      );
+      return undefined;
+    }
+    return tree;
+  }
+
+  private async merkleClaimable(
+    vaultAddress: Address,
+    distributionId: bigint,
+    holder: Address,
+    weight: bigint,
+    netPot: bigint,
+    supply: bigint
+  ): Promise<bigint> {
+    const claimed = (await this.contractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'isDistributionClaimed',
+      args: [distributionId, holder],
+    })) as boolean;
+    return claimed || supply === 0n ? 0n : (weight * netPot) / supply;
+  }
+
+  /** The snapshot a distribution is weighted from: the one at its timepoint, else the proposal's. */
+  private async snapshotForTimepoint(proposal: Proposal, timepoint: bigint): Promise<Snapshot | null> {
+    return (
+      (await this.snapshotRepository.findOne({
+        where: { vaultId: proposal.vaultId, snapshotTimepoint: String(timepoint) },
+      })) ??
+      (proposal.snapshotId ? await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId } }) : null)
+    );
   }
 
   private async latestSnapshot(vaultId: string): Promise<Snapshot | null> {
