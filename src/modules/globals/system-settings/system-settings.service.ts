@@ -431,14 +431,19 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   get minContributionDuration(): number {
-    // Environment-based: 10 min (preprod) / 5 days (mainnet)
-    // Always use environment-based value
-    return this.isMainnet ? 432000000 : 600000;
+    // Environment-based: 10 min (preprod) / 5 days (mainnet); MIN_CONTRIBUTION_DURATION_MS overrides (e.g. staging)
+    return this.durationOverride('MIN_CONTRIBUTION_DURATION_MS') ?? (this.isMainnet ? 432000000 : 600000);
   }
 
   get minAcquireWindowDuration(): number {
-    // Environment-based: 5 min (preprod, matches the client form) / 24 hours (mainnet)
-    return this.isMainnet ? 86400000 : 300000;
+    // Environment-based: 5 min (preprod, matches the client form) / 24 hours (mainnet);
+    // MIN_ACQUIRE_WINDOW_DURATION_MS overrides (e.g. staging)
+    return this.durationOverride('MIN_ACQUIRE_WINDOW_DURATION_MS') ?? (this.isMainnet ? 86400000 : 300000);
+  }
+
+  private durationOverride(key: string): number | null {
+    const value = Number(this.configService.get<string>(key));
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
   get maxAcquireWindowDuration(): number {
