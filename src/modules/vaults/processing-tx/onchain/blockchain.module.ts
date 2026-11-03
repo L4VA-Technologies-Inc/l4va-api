@@ -30,6 +30,7 @@ import { EvmSwapService } from './evm-swap.service';
 import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
 import { EvmTerminationService } from './evm-termination.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
+import { EvmVaultEventIndexerService } from './evm-vault-event-indexer.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { EvmVaultSignerService } from './evm-vault-signer.service';
 import { EvmWebhookService } from './evm-webhook.service';
@@ -101,6 +102,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmVaultSignerService,
     EvmVaultContributionService,
     EvmVaultEventReconciler,
+    EvmVaultEventIndexerService,
     EvmContributionBackfillService,
     EvmWebhookService,
     EvmOpenCycleService,

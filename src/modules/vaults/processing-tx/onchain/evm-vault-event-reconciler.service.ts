@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import { decodeEventLog, type Address, type Hex } from 'viem';
 
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
 import { EvmContractReader } from './evm-contract-reader.service';
+import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { lpTechnicalCycleRoot } from './evm-lp.config';
 import { EvmAssetKindOnchain, EvmCycleStatus, VAULT_ABI } from './vault.abi';
@@ -23,8 +26,11 @@ import { AssetStatus } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { IndexLegStatus, IndexRebalanceStatus } from '@/types/index-vault.types';
-import { ExpectedEventSpec, TransactionStatus } from '@/types/transaction.types';
+import { ExpectedEventSpec, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
+
+/** How long a contribution may wait for the app's /confirm before the reconciler binds it itself. */
+const ADOPTION_GRACE_SECONDS = 15 * 60;
 
 export interface VaultLogInput {
   address: string;
@@ -81,7 +87,8 @@ export class EvmVaultEventReconciler {
     @InjectRepository(EvmIndexRebalance) private readonly rebalancesRepository: Repository<EvmIndexRebalance>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
-    private readonly cycleCloseService: EvmCycleCloseService
+    private readonly cycleCloseService: EvmCycleCloseService,
+    private readonly transactionsService: TransactionsService
   ) {}
 
   /** Process a batch of vault-emitted logs. Unknown events are ignored. */
@@ -270,14 +277,18 @@ export class EvmVaultEventReconciler {
       return;
     }
 
-    const transaction = await this.findParentTransactionForContribution(vault.id, log.txHash);
+    let transaction = await this.findParentTransactionForContribution(vault.id, log.txHash);
     if (!transaction) {
-      // No parent Transaction row means the contribution happened outside our
-      // prepare-tx flow (nobody uses this codepath today — all contributions
-      // originate via /vaults/blockchain/evm/contribute/prepare which creates
-      // a Transaction row). Skip silently; sweep-level services already emit
-      // aggregate skipped counters.
-      return;
+      // Give the app's own /confirm time to land first; the contribution backfill sweep retries.
+      if (!(await this.isOlderThan(log, ADOPTION_GRACE_SECONDS))) return;
+      transaction = await this.adoptContributionByNonce(vault, log, BigInt(contributionId), contributor);
+    }
+    if (!transaction) {
+      // Every contribution needs our signature, so this is a signature whose
+      // Transaction row is gone. Left unindexed, it blocks the cycle close.
+      throw new Error(
+        `ContributionMade tx=${log.txHash} contributionId=${contributionId}: no Transaction issued its authorization`
+      );
     }
 
     const userAddr = transaction.user?.address?.toLowerCase();
@@ -619,6 +630,81 @@ export class EvmVaultEventReconciler {
       .getOne();
   }
 
+  /**
+   * Parent lookup for a contribution submitted outside our confirm flow: the
+   * user took the signed authorization from prepare and sent it from another
+   * frontend, a script, or closed the tab before /confirm. The on-chain
+   * `authNonce` is `deriveContributionNonce(txId, index)`, which names the
+   * Transaction exactly. The tx hash is then bound to it the way /confirm
+   * would, so the health cron confirms it and its Asset rows exist.
+   */
+  private async adoptContributionByNonce(
+    vault: Vault,
+    log: VaultLogInput,
+    contributionId: bigint,
+    contributor: string
+  ): Promise<Transaction | null> {
+    if (!vault.contract_address) return null;
+    const onchain = await this.contractReader.getContribution(vault.contract_address as Address, contributionId);
+    const authNonce = BigInt(onchain.authNonce);
+
+    const candidates = await this.transactionsRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.user', 'user')
+      .where('t.vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere('t.type IN (:...types)', { types: [TransactionType.contribute, TransactionType.acquire] })
+      .andWhere('LOWER(user.address) = :contributor', { contributor })
+      .getMany();
+
+    for (const candidate of candidates) {
+      const meta = candidate.metadata as unknown;
+      const metaAssets = Array.isArray(meta) ? meta : ((meta as { assets?: unknown[] })?.assets ?? []);
+      const assetRows = await this.assetsRepository.count({ where: { transaction: { id: candidate.id } } });
+      const slots = Math.max(metaAssets.length, assetRows);
+      for (let i = 0; i < slots; i++) {
+        if (deriveContributionNonce(candidate.id, i) === authNonce) {
+          await this.bindContributionHash(candidate, log.txHash, metaAssets.length > 0 && assetRows === 0);
+          return candidate;
+        }
+      }
+    }
+    return null;
+  }
+
+  private async isOlderThan(log: VaultLogInput, seconds: number): Promise<boolean> {
+    if (log.blockNumber == null) return true;
+    const block = await this.contractReader.publicClient.getBlock({ blockNumber: BigInt(log.blockNumber) });
+    return Number(block.timestamp) <= Math.floor(Date.now() / 1000) - seconds;
+  }
+
+  /** What /confirm does for the user: record the hash and create the Asset rows still pending in metadata. */
+  private async bindContributionHash(transaction: Transaction, txHash: string, createAssets: boolean): Promise<void> {
+    if (!transaction.tx_hash) {
+      // Claim the row first so a late /confirm cannot create the same Asset rows again.
+      const claimed = await this.transactionsRepository.update(
+        { id: transaction.id, tx_hash: IsNull() },
+        { tx_hash: txHash, status: TransactionStatus.submitted }
+      );
+      if ((claimed.affected ?? 0) > 0 && createAssets) await this.transactionsService.createAssets(transaction.id);
+      transaction.tx_hash = txHash;
+    } else if (transaction.tx_hash !== txHash) {
+      // One more asset of an already confirmed contribution; record it where the parent lookup finds it.
+      const fresh = await this.transactionsRepository.findOne({ where: { id: transaction.id } });
+      const meta = (fresh?.metadata ?? {}) as Record<string, unknown>;
+      const base = Array.isArray(meta) ? { assets: meta } : meta;
+      const children = Array.isArray(base.evmChildTxHashes) ? (base.evmChildTxHashes as string[]) : [];
+      if (!children.includes(txHash)) {
+        await this.transactionsRepository.update(
+          { id: transaction.id },
+          { metadata: { ...base, evmChildTxHashes: [...children, txHash] } }
+        );
+      }
+    }
+    this.logger.warn(
+      `ContributionMade tx=${txHash} was submitted outside the confirm flow; bound to transaction ${transaction.id}`
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // PositionOpened / PositionClosed
   // ---------------------------------------------------------------------------
@@ -709,16 +795,16 @@ export class EvmVaultEventReconciler {
       .getOne();
 
     const claimsRepository = this.dataSource.getRepository(Claim);
-    const existing = await claimsRepository.findOne({
-      where: {
-        vault_id: vault.id,
-        type: ClaimType.DISTRIBUTION,
-        user_id: user?.id,
-        proposal_id: matching?.id,
-      },
-    });
-    const existingMeta = existing?.metadata as EvmDistributionClaimMetadata | undefined;
-    if (existingMeta?.evmDistributionId === distributionId) {
+    // Keyed on the on-chain (distributionId, holder): holders without an account have no
+    // user_id, and an undefined user_id in a TypeORM `where` matches any row.
+    const existing = await claimsRepository
+      .createQueryBuilder('c')
+      .where('c.vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere('c.type = :type', { type: ClaimType.DISTRIBUTION })
+      .andWhere("c.metadata ->> 'evmDistributionId' = :distributionId", { distributionId })
+      .andWhere("c.metadata ->> 'evmHolder' = :holder", { holder })
+      .getOne();
+    if (existing) {
       return; // already recorded
     }
 

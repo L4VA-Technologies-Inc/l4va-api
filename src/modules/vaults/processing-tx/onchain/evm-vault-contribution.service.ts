@@ -2,16 +2,18 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { keccak256, parseEther, toBytes, type Address, type Hex } from 'viem';
+import { parseEther, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { VAULT_ABI } from './vault.abi';
 
+import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
@@ -267,7 +269,7 @@ export class EvmVaultContributionService {
 
       // Per-asset nonce derived from txId + index. Deterministic (idempotent
       // if the user retries with the same txId) yet still unique on-chain.
-      const nonce = this.deriveNonce(txId, i);
+      const nonce = deriveContributionNonce(txId, i);
 
       const authorization: EvmContributionAuthorization = {
         cycleId: currentCycleId.toString(),
@@ -337,7 +339,9 @@ export class EvmVaultContributionService {
     }
 
     try {
-      await this.transactionsService.createAssets(txId);
+      // The vault event reconciler may already have bound a contribution sent without /confirm.
+      const assetRows = await this.transactionRepository.manager.count(Asset, { where: { transaction: { id: txId } } });
+      if (assetRows === 0) await this.transactionsService.createAssets(txId);
       await this.transactionsService.updateTransactionHash(txId, txHash);
       this.logger.log(`EVM contribution confirmed — txId=${txId} txHash=${txHash}`);
 
@@ -616,11 +620,5 @@ export class EvmVaultContributionService {
       default:
         return { required: false };
     }
-  }
-
-  /** Deterministic per-(txId, index) nonce so retries collapse on-chain to the same slot. */
-  private deriveNonce(txId: string, index: number): bigint {
-    const digest = keccak256(toBytes(`${txId}:${index}`));
-    return BigInt(digest);
   }
 }
