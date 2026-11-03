@@ -148,7 +148,12 @@ export class EvmOpenCycleService {
         }
       );
       // Transition vault DB status to acquire so contribution endpoints open.
-      await manager.update(Vault, { id: vaultId }, { vault_status: VaultStatus.acquire });
+      // evm_cancel_cycle_tx_hash tracks the current cycle only; a cancel of an earlier cycle must not block this one.
+      await manager.update(
+        Vault,
+        { id: vaultId },
+        { vault_status: VaultStatus.acquire, evm_cancel_cycle_tx_hash: null }
+      );
     });
 
     this.logger.log(`openCycle confirmed for vault ${vaultId} — cycleId=${cycleId} tx=${result.hash}`);
