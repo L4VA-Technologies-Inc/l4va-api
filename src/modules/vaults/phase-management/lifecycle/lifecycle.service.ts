@@ -3139,7 +3139,11 @@ export class LifecycleService {
     }
   ): Promise<void> {
     try {
-      const cancelResponse = await this.evmCycleCloseService.cancelCurrentCycle(vaultId, data.cancelReason);
+      const cancelResponse = await this.evmCycleCloseService.cancelCurrentCycle(
+        vaultId,
+        data.cancelReason,
+        data.failureDetails.message
+      );
 
       await this.executePhaseTransition({
         vaultId,

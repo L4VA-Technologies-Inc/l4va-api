@@ -218,7 +218,7 @@ export class EvmRefundOrchestrator {
         );
 
         this.logger.warn(`Vault ${vault.id} cycle ${onChainCycleId}: ${reason}, cancelling`);
-        await this.cycleCloseService.cancelCurrentCycle(vault.id, reason);
+        await this.cycleCloseService.cancelCurrentCycle(vault.id, reason, failureDetails.message);
         result.cancellationsInitiated++;
       } catch (err) {
         result.cancellationsFailed++;
