@@ -21,16 +21,16 @@ export class SnapshotService {
   ) {}
 
   /**
-   * Resolve user IDs from snapshot addressBalances.
-   * All addresses in the snapshot are included; unregistered wallets are silently skipped.
-   * Returns deduplicated user IDs.
-   *
-   * @param addressBalances - Snapshot address balances record
-   * @returns Array of unique user IDs
+   * Resolve user IDs of everyone with voting weight in the snapshot: VT holders plus,
+   * on EVM, owners of Uniswap positions holding VT (`lpBalances`).
+   * Unregistered wallets are silently skipped. Returns deduplicated user IDs.
    */
-  async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
-    if (!addressBalances) return [];
-    const addresses = [...new Set(Object.keys(addressBalances).map(address => address?.trim().toLowerCase()))].filter(
+  async getTokenHolderIdsFromSnapshot(
+    snapshot?: Pick<Snapshot, 'addressBalances' | 'lpBalances'> | null
+  ): Promise<string[]> {
+    if (!snapshot) return [];
+    const holders = [...Object.keys(snapshot.addressBalances ?? {}), ...Object.keys(snapshot.lpBalances ?? {})];
+    const addresses = [...new Set(holders.map(address => address?.trim().toLowerCase()))].filter(
       (address): address is string => !!address
     );
     if (addresses.length === 0) return [];
@@ -60,9 +60,9 @@ export class SnapshotService {
     const snapshot = await this.snapshotsRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
-      select: ['addressBalances'],
+      select: ['addressBalances', 'lpBalances'],
     });
 
-    return this.getTokenHolderIdsFromSnapshot(snapshot?.addressBalances);
+    return this.getTokenHolderIdsFromSnapshot(snapshot);
   }
 }

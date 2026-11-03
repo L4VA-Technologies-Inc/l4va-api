@@ -73,6 +73,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "csv-parse": "^5.6.0",
+    "discord.js": "^14.27.0",
     "dotenv": "^17.2.3",
     "multer": "^2.2.0",
     "node-cache": "^5.1.2",

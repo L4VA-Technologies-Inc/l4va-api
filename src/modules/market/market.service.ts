@@ -539,6 +539,8 @@ export class MarketService implements OnModuleInit {
       asset_vault_name: mapped.asset_vault_name ?? null,
       has_active_lp: Boolean(item.vault?.has_active_lp),
       tags: (item.vault?.tags ?? []).map(tag => tag.name),
+      // Vault tokens are minted when the vault locks; the market row is a fallback for older vaults.
+      minted_at: item.vault?.locked_at ?? item.created_at ?? null,
     };
   }
 

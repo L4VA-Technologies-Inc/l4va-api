@@ -19,6 +19,16 @@ export class Snapshot {
   @Column({ name: 'address_balances', type: 'jsonb' })
   addressBalances: Record<string, string>;
 
+  /**
+   * EVM only: VT that holders keep in Uniswap v4 positions, attributed to the position
+   * owner. Counts toward voting weight only; distributions follow `addressBalances`
+   * (the VaultToken's own `balanceOfAt`). Null on Cardano, where LP holders are folded
+   * into `addressBalances` directly.
+   */
+  @Expose({ name: 'lpBalances' })
+  @Column({ name: 'lp_balances', type: 'jsonb', nullable: true })
+  lpBalances: Record<string, string> | null;
+
   @Expose({ name: 'createdAt' })
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

@@ -528,6 +528,40 @@ export const VAULT_ABI = [
   {
     type: 'function',
     stateMutability: 'nonpayable',
+    name: 'openDistributionMerkle',
+    inputs: [
+      { name: 'executionKey', type: 'bytes32' },
+      { name: 'asset', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'timepoint', type: 'uint48' },
+      { name: 'merkleRoot', type: 'bytes32' },
+      { name: 'totalWeight', type: 'uint256' },
+      { name: 'claimWindow', type: 'uint64' },
+    ],
+    outputs: [{ name: 'distributionId', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'claimDistributionWithProofFor',
+    inputs: [
+      { name: 'distributionId', type: 'uint256' },
+      { name: 'holder', type: 'address' },
+      { name: 'weight', type: 'uint256' },
+      { name: 'proof', type: 'bytes32[]' },
+    ],
+    outputs: [{ name: 'amount', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'distributionMerkleRoot',
+    inputs: [{ name: 'distributionId', type: 'uint256' }],
+    outputs: [{ name: '', type: 'bytes32' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
     name: 'claimDistributionFor',
     inputs: [
       { name: 'distributionId', type: 'uint256' },
@@ -1132,6 +1166,14 @@ export const VAULT_ABI = [
       { name: 'timepoint', type: 'uint48', indexed: false },
       { name: 'supply', type: 'uint256', indexed: false },
       { name: 'deadline', type: 'uint64', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'DistributionMerkleRootSet',
+    inputs: [
+      { name: 'distributionId', type: 'uint256', indexed: true },
+      { name: 'merkleRoot', type: 'bytes32', indexed: false },
     ],
   },
   {
