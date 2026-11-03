@@ -165,6 +165,7 @@ export class ExpansionService {
       );
 
       this.logger.log(`Vault ${vaultId} status changed back to LOCKED with ${expansionMultipliers.length} multipliers`);
+      await this.recordExpansionClose(proposalId, reason, onChainResult.txHash);
 
       // Emit event for tracking
       this.eventEmitter.emit('vault.expansion.closed', {
@@ -176,6 +177,25 @@ export class ExpansionService {
     } catch (error) {
       this.logger.error(`Error closing expansion for vault ${vaultId}: ${error.message}`, error.stack);
     }
+  }
+
+  /**
+   * Store how the window closed on the proposal, for the activity feed. Merged
+   * in SQL so concurrent metadata writes (progress counters) are not clobbered.
+   */
+  private async recordExpansionClose(
+    proposalId: string,
+    reason: 'duration_expired' | 'asset_max_reached' | 'max_ada_reached',
+    txHash: string
+  ): Promise<void> {
+    const expansionClose = { closedAt: new Date().toISOString(), reason, txHash };
+    await this.proposalRepository
+      .createQueryBuilder()
+      .update(Proposal)
+      .set({ metadata: () => `COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('expansionClose', :close::jsonb)` })
+      .where('id = :id', { id: proposalId })
+      .setParameters({ close: JSON.stringify(expansionClose) })
+      .execute();
   }
 
   /**
@@ -576,6 +596,7 @@ export class ExpansionService {
       );
 
       this.logger.log(`Vault ${vaultId} status changed back to LOCKED with new multiplier ${newMultiplier}`);
+      await this.recordExpansionClose(proposalId, reason, onChainResult.txHash);
 
       // Emit event for tracking
       this.eventEmitter.emit('vault.acquire_expansion.closed', {

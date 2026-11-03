@@ -31,6 +31,8 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import {
   ActivityType,
+  ExpansionDistribution,
+  ExpansionRecipient,
   IndexRebalanceActivityAsset,
   IndexRebalanceActivityEvent,
   PhaseTransitionEvent,
@@ -44,6 +46,7 @@ import {
   VaultActivityItem,
 } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { BoundaryTx, ExpansionWindow, getExpansionWindows } from './expansion-activity';
 import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TerminationStatus } from './phase-management/governance/termination.service';
@@ -66,6 +69,7 @@ import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
@@ -187,6 +191,9 @@ function normalizeMinAcquireThresholdForDb(
 // ERC-165 detection for EVM asset-whitelist entries (used to reject NFT
 // collections at vault-creation time when evm_nft_assets_enabled is off).
 // ---------------------------------------------------------------------------
+/** Recipients listed on an expansion card; the card shows the full count. */
+const EXPANSION_RECIPIENTS_LIMIT = 25;
+
 const ERC165_ABI = parseAbi(['function supportsInterface(bytes4 interfaceId) view returns (bool)']);
 const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
 const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
@@ -2592,6 +2599,23 @@ export class VaultsService {
     let transactionEvents: TransactionActivityEvent[] = [];
     let rebalanceEvents: IndexRebalanceActivityEvent[] = [];
 
+    // Where expansion windows end: Cardano metadata updates, EVM cycle closes / cancels.
+    const boundaryTxs = await this.transactionRepository.find({
+      where: {
+        vault_id,
+        type: In([TransactionType.updateVault, TransactionType.evmCloseCycle, TransactionType.evmCancelCycle]),
+        status: In([TransactionStatus.submitted, TransactionStatus.confirmed]),
+      },
+      select: ['id', 'type', 'created_at', 'metadata', 'tx_hash'],
+      order: { created_at: 'ASC' },
+    });
+    // EVM rewrites locked_at on every cycle close; the vault first locked at its first close.
+    const firstClose = boundaryTxs.find(tx => tx.type === TransactionType.evmCloseCycle);
+    const lockedAt =
+      firstClose && (!vault.locked_at || firstClose.created_at < vault.locked_at)
+        ? firstClose.created_at
+        : vault.locked_at;
+
     const shouldFetchTransactions = filter !== VaultActivityFilter.REBALANCE;
     const shouldFetchRebalances =
       vault.vault_archetype === VaultArchetype.index_weighted &&
@@ -2667,17 +2691,22 @@ export class VaultsService {
         allActivities.push(acquirePhaseEvent);
       }
 
-      if (vault.locked_at) {
+      if (lockedAt) {
         const lockedPhaseEvent: PhaseTransitionEvent = {
           id: `${vault.id}_locked_phase`,
           activityType: ActivityType.PHASE_TRANSITION,
           vaultId: vault.id,
           phase: VaultStatus.locked,
-          created_at: vault.locked_at,
+          created_at: lockedAt,
           summary: await this.getLockSummary(vault),
         };
         allActivities.push(lockedPhaseEvent);
       }
+
+      const expansion = await this.getExpansionActivity(vault, boundaryTxs, transactionEvents);
+      allActivities.push(...expansion.events);
+      // Cancel + refund txs of a cancelled window are shown inside its card.
+      transactionEvents = transactionEvents.filter(tx => !expansion.nestedTxIds.has(tx.id));
 
       if (vault.vault_status === VaultStatus.failed) {
         // Cancel + refund txs are shown inside the failed event, not as separate items.
@@ -2755,6 +2784,194 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * Started / closed cards for each executed expansion. A cancelled window
+   * (EVM cycle cancelled) carries its cancel + refund txs and the reason; a
+   * closed one carries who received vault tokens for it.
+   */
+  private async getExpansionActivity(
+    vault: Pick<Vault, 'id' | 'chain_type' | 'failure_details' | 'ft_token_decimals' | 'vault_token_ticker'>,
+    boundaryTxs: BoundaryTx[],
+    transactions: TransactionActivityEvent[]
+  ): Promise<{ events: PhaseTransitionEvent[]; nestedTxIds: Set<string> }> {
+    const nestedTxIds = new Set<string>();
+    const proposals = await this.proposalRepository.find({
+      where: {
+        vaultId: vault.id,
+        proposalType: In([ProposalType.EXPANSION, ProposalType.ACQUIRE_EXPANSION]),
+        status: ProposalStatus.EXECUTED,
+      },
+      select: ['id', 'proposalType', 'executionDate', 'metadata'],
+    });
+    if (proposals.length === 0) return { events: [], nestedTxIds };
+
+    const windows = getExpansionWindows(proposals, boundaryTxs);
+    if (vault.chain_type !== ChainType.cardano) await this.resolveExpansionCycles(vault.id, windows);
+    const distributions = await this.getExpansionDistributions(
+      vault,
+      windows.filter(w => w.closedAt && !w.cancelled)
+    );
+    const refundTypes: string[] = [TransactionType.evmCancelCycle, TransactionType.evmRefund, TransactionType.cancel];
+
+    const events: PhaseTransitionEvent[] = [];
+    for (const w of windows) {
+      const phase =
+        w.proposalType === ProposalType.ACQUIRE_EXPANSION ? VaultStatus.acquire_expansion : VaultStatus.expansion;
+      events.push({
+        id: `${vault.id}_expansion_${w.proposalId}_started`,
+        activityType: ActivityType.PHASE_TRANSITION,
+        vaultId: vault.id,
+        phase,
+        created_at: w.startedAt,
+        expansion: { proposalId: w.proposalId, number: w.number, stage: 'started' },
+      });
+      if (!w.closedAt) continue;
+
+      let actions: TransactionActivityEvent[] | undefined;
+      let reasonMessage: string | null = null;
+      if (w.cancelled) {
+        const from = w.closedAt.getTime();
+        const to = w.nextStartedAt?.getTime() ?? Infinity;
+        actions = transactions
+          .filter(tx => refundTypes.includes(tx.type))
+          .filter(tx => {
+            const t = new Date(tx.created_at).getTime();
+            return t >= from && t < to;
+          })
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        actions.forEach(tx => nestedTxIds.add(tx.id));
+        // Older cancels kept no message on the tx; the vault keeps the latest cancel's details.
+        const details = vault.failure_details;
+        reasonMessage =
+          w.closeTx?.metadata?.message ??
+          (details?.cycleId && details.cycleId === w.cycleId ? (details.message ?? null) : null);
+      }
+
+      events.push({
+        id: `${vault.id}_expansion_${w.proposalId}_closed`,
+        activityType: ActivityType.PHASE_TRANSITION,
+        vaultId: vault.id,
+        phase,
+        created_at: w.closedAt,
+        actions,
+        expansion: {
+          proposalId: w.proposalId,
+          number: w.number,
+          stage: 'closed',
+          outcome: w.cancelled ? 'cancelled' : 'completed',
+          reason: w.reason,
+          reasonMessage,
+          distribution: w.cancelled ? null : (distributions.get(w.proposalId) ?? null),
+        },
+      });
+    }
+    return { events, nestedTxIds };
+  }
+
+  /**
+   * EVM cycle each window ran as: a closed window from the snapshot its close
+   * tx committed, a cancelled one from the contributions made during it.
+   * Cycle ids can't be counted from openCycle txs: not every open left a row.
+   */
+  private async resolveExpansionCycles(vaultId: string, windows: ExpansionWindow[]): Promise<void> {
+    const manager = this.claimRepository.manager;
+    const closeHashes = windows.map(w => w.closeTx?.tx_hash).filter(Boolean);
+    const [snapshots, contributions] = await Promise.all([
+      closeHashes.length
+        ? manager.find(EvmValuationSnapshot, {
+            where: { vault_id: vaultId, submit_tx_hash: In(closeHashes) },
+            select: ['id', 'cycle_id', 'submit_tx_hash'],
+          })
+        : ([] as EvmValuationSnapshot[]),
+      manager.find(EvmContribution, { where: { vault_id: vaultId }, select: ['id', 'cycle_id', 'created_at'] }),
+    ]);
+    const cycleByHash = new Map(snapshots.map(s => [s.submit_tx_hash?.toLowerCase(), String(s.cycle_id)]));
+
+    for (const w of windows) {
+      const fromSnapshot = w.closeTx?.tx_hash ? cycleByHash.get(w.closeTx.tx_hash.toLowerCase()) : undefined;
+      const end = (w.closedAt ?? w.nextStartedAt)?.getTime() ?? Infinity;
+      const contribution = contributions.find(c => {
+        const t = new Date(c.created_at).getTime();
+        return t >= w.startedAt.getTime() && t < end;
+      });
+      w.cycleId = fromSnapshot ?? (contribution ? String(contribution.cycle_id) : null);
+    }
+  }
+
+  /**
+   * Vault tokens issued per closed window, keyed by proposal id. EVM: the
+   * cycle's allocation leaves. Cardano: the expansion / acquirer claims the
+   * proposal created.
+   */
+  private async getExpansionDistributions(
+    vault: Pick<Vault, 'id' | 'chain_type' | 'ft_token_decimals' | 'vault_token_ticker'>,
+    windows: ExpansionWindow[]
+  ): Promise<Map<string, ExpansionDistribution>> {
+    const result = new Map<string, ExpansionDistribution>();
+    if (windows.length === 0) return result;
+    const recipientsByProposal = new Map<string, ExpansionRecipient[]>();
+
+    if (vault.chain_type !== ChainType.cardano) {
+      const byCycle = new Map(windows.filter(w => w.cycleId).map(w => [w.cycleId, w.proposalId]));
+      if (byCycle.size === 0) return result;
+      const leaves = await this.claimRepository.manager.find(EvmAllocation, {
+        where: { vault_id: vault.id, cycle_id: In([...byCycle.keys()]) },
+        select: ['id', 'cycle_id', 'contributor', 'vt_amount', 'claimed_at', 'claim_tx_hash'],
+      });
+      for (const leaf of leaves) {
+        const proposalId = byCycle.get(String(leaf.cycle_id));
+        if (!proposalId) continue;
+        const list = recipientsByProposal.get(proposalId) ?? [];
+        list.push({
+          address: leaf.contributor,
+          vtAmount: leaf.vt_amount,
+          received: Boolean(leaf.claimed_at),
+          txHash: leaf.claim_tx_hash ?? null,
+        });
+        recipientsByProposal.set(proposalId, list);
+      }
+    } else {
+      const claims = await this.claimRepository.find({
+        where: {
+          proposal_id: In(windows.map(w => w.proposalId)),
+          type: In([ClaimType.EXPANSION, ClaimType.ACQUIRER]),
+        },
+        relations: { user: true, distribution_transaction: true },
+        select: {
+          id: true,
+          proposal_id: true,
+          amount: true,
+          status: true,
+          user: { id: true, address: true },
+          distribution_transaction: { id: true, tx_hash: true },
+        },
+      });
+      for (const claim of claims) {
+        const list = recipientsByProposal.get(claim.proposal_id) ?? [];
+        list.push({
+          address: claim.user?.address ?? null,
+          vtAmount: claim.amount,
+          received: claim.status === ClaimStatus.CLAIMED,
+          txHash: claim.distribution_transaction?.tx_hash ?? null,
+        });
+        recipientsByProposal.set(claim.proposal_id, list);
+      }
+    }
+
+    for (const [proposalId, recipients] of recipientsByProposal) {
+      const sorted = recipients.sort((a, b) => (BigInt(b.vtAmount) > BigInt(a.vtAmount) ? 1 : -1));
+      result.set(proposalId, {
+        vtTicker: vault.vault_token_ticker ?? null,
+        vtDecimals: vault.ft_token_decimals ?? 0,
+        totalVt: recipients.reduce((sum, r) => sum + BigInt(r.vtAmount), 0n).toString(),
+        recipientsCount: recipients.length,
+        receivedCount: recipients.filter(r => r.received).length,
+        recipients: sorted.slice(0, EXPANSION_RECIPIENTS_LIMIT),
+      });
+    }
+    return result;
   }
 
   /**
@@ -3356,7 +3573,11 @@ export class VaultsService {
 
     if (!cancelTxHash && (await this.readEvmVaultStatus(vaultAddress)) === EvmVaultOnchainStatus.Active) {
       try {
-        const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(vault.id, 'Cancelled by owner');
+        const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(
+          vault.id,
+          'Cancelled by owner',
+          'Cancelled by the vault owner'
+        );
         cancelTxHash = txHash;
         vault.evm_cancel_cycle_tx_hash = txHash;
       } catch (err) {
