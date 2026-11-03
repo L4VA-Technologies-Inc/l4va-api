@@ -23,6 +23,13 @@ import {
 
 import { WayUpTransactionInput } from '@/modules/wayup/wayup.types';
 
+interface EnvVarCheck {
+  key: string;
+  value: string | undefined;
+  critical: boolean;
+  sensitive?: boolean;
+}
+
 @Injectable()
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
@@ -60,9 +67,7 @@ export class BlockchainService {
    * Logs warnings for missing critical configuration
    */
   private validateEnvironmentVariables(): void {
-    this.logger.log('=== Validating Blockchain Service Configuration ===');
-
-    const requiredVars = [
+    this.validateVars('Blockchain Service', [
       { key: 'ANVIL_API_URL', value: this.configService.get<string>('ANVIL_API_URL'), critical: true },
       { key: 'ANVIL_API_KEY', value: this.configService.get<string>('ANVIL_API_KEY'), critical: true, sensitive: true },
       { key: 'DISPATCH_SCRIPT_HASH', value: this.unparametizedDispatchHash, critical: true },
@@ -74,12 +79,45 @@ export class BlockchainService {
         critical: true,
         sensitive: true,
       },
-    ];
+    ]);
+
+    const env = (key: string, critical: boolean, sensitive = false): EnvVarCheck => ({
+      key,
+      value: this.configService.get<string>(key),
+      critical,
+      sensitive,
+    });
+    this.validateVars('EVM (Robinhood) Configuration', [
+      env('EVM_RPC_URL', true),
+      env('EVM_CHAIN_ID', true),
+      env('EVM_FACTORY_ADDRESS', true),
+      env('EVM_ADMIN_ADDRESS', true),
+      env('EVM_ADMIN_PRIVATE_KEY', true, true),
+      env('EVM_MINTING_SIGNER_ADDRESS', true),
+      env('EVM_MINTING_SIGNER_PRIVATE_KEY', true, true),
+      env('EVM_TREASURY_ADDRESS', true),
+      env('EVM_FACTORY_DEPLOY_BLOCK', false),
+      env('EVM_LP_ADAPTER_ADDRESS', false),
+      env('EVM_SWAP_ADAPTER_ADDRESS', false),
+      env('EVM_ADAPTER_REGISTRY_ADDRESS', false),
+      env('EVM_GOVERNANCE_FEE_ADDRESS', false),
+      env('UNISWAP_API_KEY', false, true),
+    ]);
+
+    // The public endpoint rate-limits (429) under our cron load.
+    const rpcUrl = this.configService.get<string>('EVM_RPC_URL') ?? '';
+    if (rpcUrl.includes('rpc.mainnet.chain.robinhood.com')) {
+      this.logger.warn('⚠️  EVM_RPC_URL is the public Robinhood RPC; expect 429s. Use a dedicated (Alchemy) endpoint.');
+    }
+  }
+
+  private validateVars(title: string, vars: EnvVarCheck[]): void {
+    this.logger.log(`=== Validating ${title} ===`);
 
     let missingCritical = 0;
     let missingOptional = 0;
 
-    requiredVars.forEach(({ key, value, critical, sensitive }) => {
+    vars.forEach(({ key, value, critical, sensitive }) => {
       if (!value || value === '' || value === 'undefined') {
         if (critical) {
           this.logger.error(`❌ MISSING CRITICAL: ${key}`);
@@ -108,7 +146,7 @@ export class BlockchainService {
       this.logger.log('✅ All required environment variables are configured');
     }
 
-    this.logger.log('=== Configuration Validation Complete ===');
+    this.logger.log(`=== ${title} Validation Complete ===`);
   }
 
   getNetworkId(): number {

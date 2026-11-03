@@ -1101,8 +1101,12 @@ export class TaptoolsService {
         uniqueAssets,
         async asset => {
           try {
-            // Skip lovelace
-            if (asset.type === AssetType.ADA) {
+            // Skip lovelace and EVM native ETH: totals price both from the native price feed
+            if (
+              asset.type === AssetType.ADA ||
+              asset.policy_id === '0x0000000000000000000000000000000000000000' ||
+              asset.asset_id === 'eth'
+            ) {
               return;
             }
 
