@@ -7,7 +7,6 @@ import { GenerateVaultImageReq, GenerateVaultImageRes } from './dto/generate-vau
 import { GetVaultCreationSpecDto } from './dto/get-vault-creation-spec.dto';
 import { VaultAssistantMessageReq } from './dto/vault-assistant-message.req';
 import { VaultAssistantMessageRes } from './dto/vault-assistant-message.res';
-import { resolveVaultCreationSpec } from './spec/resolve-spec';
 import { ResolvedVaultCreationSpec, SpecChain } from './spec/spec.types';
 import { VaultAssistantService } from './vault-assistant.service';
 
@@ -27,7 +26,7 @@ export class VaultAssistantController {
   })
   @Get('vault-creation-spec')
   getVaultCreationSpec(@Query() query: GetVaultCreationSpecDto): ResolvedVaultCreationSpec {
-    return resolveVaultCreationSpec(query.chain as SpecChain, query.network);
+    return this.vaultAssistantService.resolveSpec(query.chain as SpecChain, query.network);
   }
 
   @ApiDoc({

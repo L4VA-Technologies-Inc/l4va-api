@@ -1,4 +1,4 @@
-import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork, VaultFieldSpec } from './spec.types';
+import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork, VaultFieldOverride, VaultFieldSpec } from './spec.types';
 import { VAULT_CREATION_SPEC } from './vault-creation-spec';
 
 import { VaultArchetype } from '@/types/index-vault.types';
@@ -16,11 +16,13 @@ export function isSpecNetwork(value: unknown): value is SpecNetwork {
  * Merge base fields with the network overrides, then the chain profile, then the
  * archetype the chain is currently offering. The archetype comes last because it
  * describes a different product, not a variation of the chain's defaults.
+ * `runtimeOverrides` (env-driven bounds, e.g. staging's short phase minimums) win over all of them.
  */
 export function resolveVaultCreationSpec(
   chain: SpecChain,
   network: SpecNetwork,
-  archetype: VaultArchetype = VaultArchetype.standard
+  archetype: VaultArchetype = VaultArchetype.standard,
+  runtimeOverrides: Record<string, VaultFieldOverride> = {}
 ): ResolvedVaultCreationSpec {
   const profile = VAULT_CREATION_SPEC.chainProfiles[chain];
   const networkOverrides = VAULT_CREATION_SPEC.networkOverrides[network];
@@ -33,7 +35,13 @@ export function resolveVaultCreationSpec(
       ...(networkOverrides[name] ?? {}),
       ...(profile.fields?.[name] ?? {}),
       ...(archetypeProfile.fields?.[name] ?? {}),
+      ...(runtimeOverrides[name] ?? {}),
     };
+    // A raised minimum must not leave the default below it.
+    const { min, default: fallback } = fields[name];
+    if (typeof min === 'number' && typeof fallback === 'number' && fallback < min) {
+      fields[name].default = min;
+    }
   }
 
   return {

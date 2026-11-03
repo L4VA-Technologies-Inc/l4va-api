@@ -6,6 +6,7 @@ import { VaultAssistantMessageReq } from './dto/vault-assistant-message.req';
 import { VaultAssistantMessageRes } from './dto/vault-assistant-message.res';
 import { VaultAssistantOption } from './dto/vault-assistant-option';
 import { extractPartialJsonString } from './extract-partial-json-string';
+import { firstJsonObject } from './first-json-object';
 import { ChatMessage, ChatTurn, ChatTurnParams, OpenAiClient } from './openai.client';
 import { buildVaultAssistantPrompt, PresetContext } from './prompts/vault-assistant.prompt';
 import { buildVaultCompletionContext } from './spec/completion-context';
@@ -266,7 +267,24 @@ export class VaultAssistantService {
     if (!content) {
       throw new Error('AI response was empty');
     }
-    return JSON.parse(content) as AssistantCompletion;
+    try {
+      return JSON.parse(content) as AssistantCompletion;
+    } catch (error) {
+      // The model occasionally emits a second object after the reply; the first one is the answer.
+      const first = firstJsonObject(content);
+      if (!first) throw error;
+      this.logger.warn('Vault assistant returned trailing content after JSON; using the first object');
+      return JSON.parse(first) as AssistantCompletion;
+    }
+  }
+
+  /** The creation spec with phase minimums taken from settings, so env overrides (staging) apply here too. */
+  resolveSpec(chain: SpecChain, network: SpecNetwork, archetype?: VaultArchetype): ResolvedVaultCreationSpec {
+    const { minContributionDuration, minAcquireWindowDuration } = this.systemSettingsService;
+    return resolveVaultCreationSpec(chain, network, archetype, {
+      contributionDuration: { min: minContributionDuration },
+      acquireWindowDuration: { min: minAcquireWindowDuration },
+    });
   }
 
   private async buildTurnContext(userId: string, request: VaultAssistantMessageReq): Promise<AssistantTurnContext> {
@@ -275,7 +293,7 @@ export class VaultAssistantService {
     // and that is operational config, not a constant.
     const chain = request.chain as SpecChain;
     const [archetype = VaultArchetype.standard] = this.systemSettingsService.vaultArchetypesEnabled(chain);
-    const spec = resolveVaultCreationSpec(chain, request.network, archetype);
+    const spec = this.resolveSpec(chain, request.network, archetype);
 
     const presets = await this.presetsService.getAllPresets(userId);
     // The assistant may only fill a basket from this fixed list; it never sees or invents addresses.

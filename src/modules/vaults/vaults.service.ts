@@ -1494,6 +1494,7 @@ export class VaultsService {
       totalValueEth: Number(vault.total_assets_cost_eth ?? 0),
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
+      totalAcquiredEth: ethPrice > 0 ? (totalAcquiredAda * adaPrice) / ethPrice : 0,
       assetsByPolicy,
     };
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
