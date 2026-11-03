@@ -847,7 +847,10 @@ export class Vault {
   @Column({ name: 'evm_root_committed_at', type: 'timestamptz', nullable: true })
   evm_root_committed_at?: Date;
 
-  /** Hash of the admin `cancelCurrentCycle` transaction (failed-vault path). */
+  /**
+   * Hash of the `cancelCurrentCycle` transaction for the cycle in `evm_current_cycle_id` (failed-vault path).
+   * Cleared when a new cycle opens; refunds of earlier cancelled cycles key off on-chain cycle status instead.
+   */
   @Expose({ name: 'evmCancelCycleTxHash' })
   @Column({ name: 'evm_cancel_cycle_tx_hash', nullable: true })
   evm_cancel_cycle_tx_hash?: string;

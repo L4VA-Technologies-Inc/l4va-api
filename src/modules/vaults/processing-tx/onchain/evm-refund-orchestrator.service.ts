@@ -67,6 +67,8 @@ export interface RefundBatchResult {
 export class EvmRefundOrchestrator {
   private readonly logger = new Logger(EvmRefundOrchestrator.name);
   private readonly processingVaults = new Set<string>();
+  /** `${vaultId}:${cycleId}` seen Locked on-chain. Locked is terminal, so these never need refunds. */
+  private readonly lockedCycles = new Set<string>();
   private readonly factoryAddress?: string;
 
   constructor(
@@ -240,24 +242,41 @@ export class EvmRefundOrchestrator {
       txHashes: [],
     };
 
-    // Find vaults with a cancel tx recorded and at least one still-active
-    // EvmContribution row. cycle_id comes from the contribution rows so we
-    // handle vaults with multiple cancelled cycles gracefully.
+    // Every (vault, cycle) with a still-active EvmContribution row. Whether the
+    // cycle is refundable is decided per cycle from on-chain status: a vault can
+    // hold both Locked and Cancelled cycles, so a vault-level cancel flag is not
+    // enough (evm_cancel_cycle_tx_hash only tracks the current cycle).
     const eligible = await this.contribsRepository
       .createQueryBuilder('c')
       .innerJoin(Vault, 'vault', 'vault.id = c.vault_id')
       .where('c.status = :active', { active: EvmContributionRowStatus.active })
       .andWhere('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.evm_cancel_cycle_tx_hash IS NOT NULL')
       .select('c.vault_id', 'vault_id')
+      .addSelect('vault.contract_address', 'contract_address')
       .addSelect('c.cycle_id', 'cycle_id')
       .groupBy('c.vault_id')
+      .addGroupBy('vault.contract_address')
       .addGroupBy('c.cycle_id')
-      .getRawMany<{ vault_id: string; cycle_id: string }>();
+      .getRawMany<{ vault_id: string; contract_address: string; cycle_id: string }>();
 
-    for (const { vault_id, cycle_id } of eligible) {
+    for (const { vault_id, contract_address, cycle_id } of eligible) {
       if (this.processingVaults.has(vault_id)) continue;
+      const cycleKey = `${vault_id}:${cycle_id}`;
+      if (this.lockedCycles.has(cycleKey)) continue;
+
+      let status: EvmCycleStatus;
+      try {
+        status = (await this.contractReader.getCycle(contract_address as Address, BigInt(cycle_id))).status;
+      } catch (err) {
+        this.logger.warn(
+          `pushAllVaults: getCycle failed for vault ${vault_id} cycle ${cycle_id}: ${(err as Error).message}`
+        );
+        continue;
+      }
+      if (status === EvmCycleStatus.Locked) this.lockedCycles.add(cycleKey);
+      if (status !== EvmCycleStatus.Cancelled) continue;
+
       this.processingVaults.add(vault_id);
       try {
         const one = await this.pushOneBatchForVault(vault_id, BigInt(cycle_id));
@@ -283,12 +302,6 @@ export class EvmRefundOrchestrator {
     if (!vault.contract_address) {
       throw new BadRequestException(`Vault ${vaultId} has no contract address`);
     }
-    if (!vault.evm_cancel_cycle_tx_hash) {
-      throw new BadRequestException(
-        `Vault ${vaultId} cycle ${cycleId} has no cancel tx recorded — refund pipeline not applicable`
-      );
-    }
-
     const vaultAddress = vault.contract_address as Address;
 
     // Preflight: on-chain cycle must actually be Cancelled. Prevents pushing
@@ -664,6 +677,8 @@ export class EvmRefundOrchestrator {
       .createQueryBuilder('vault')
       .where('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
       .andWhere('vault.evm_cancel_cycle_tx_hash IS NOT NULL')
+      // A vault that ever locked a cycle holds assets; a later cancelled cycle does not fail it.
+      .andWhere('vault.locked_at IS NULL')
       .andWhere('vault.vault_status IN (:...statuses)', {
         statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.published],
       })

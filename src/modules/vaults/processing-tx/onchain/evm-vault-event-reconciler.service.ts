@@ -106,11 +106,11 @@ export class EvmVaultEventReconciler {
       }
       return e;
     };
-    const recordApplied = (hash: string, event: string) => {
+    const recordApplied = (hash: string, event: string): void => {
       const e = outcome(hash);
       e.applied.set(event, (e.applied.get(event) ?? 0) + 1);
     };
-    const recordError = (hash: string, msg: string) => {
+    const recordError = (hash: string, msg: string): void => {
       outcome(hash).errors.push(msg);
     };
 
@@ -534,12 +534,17 @@ export class EvmVaultEventReconciler {
     const nextStatus = Number(args.next);
     if (nextStatus !== EvmCycleStatus.Cancelled) return;
     if (vault.evm_cancel_cycle_tx_hash) return; // idempotent
-    await this.vaultsRepository
+    // The column tracks the current cycle only. A replayed cancel of an earlier cycle (multi-cycle vault)
+    // must not flag the vault — the refund pipeline reads per-cycle status on-chain.
+    if (vault.evm_current_cycle_id && vault.evm_current_cycle_id !== cycleId) return;
+    const res = await this.vaultsRepository
       .createQueryBuilder()
       .update(Vault)
       .set({ evm_cancel_cycle_tx_hash: log.txHash })
       .where('id = :id AND evm_cancel_cycle_tx_hash IS NULL', { id: vault.id })
+      .andWhere('(evm_current_cycle_id IS NULL OR evm_current_cycle_id = :cycleId)', { cycleId })
       .execute();
+    if (!res.affected) return;
     this.logger.warn(
       `CycleStatusChanged(Cancelled) vault=${vault.id} cycle=${cycleId} tx=${log.txHash} recorded via reconciler`
     );
