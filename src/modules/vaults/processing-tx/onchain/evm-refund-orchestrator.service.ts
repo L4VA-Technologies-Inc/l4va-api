@@ -137,10 +137,11 @@ export class EvmRefundOrchestrator {
       if (cycleView.status !== EvmCycleStatus.Active) continue;
 
       // The contribution (asset) window must have closed before a vault can be
-      // judged failed. `end === 0n` is the "unset" sentinel (see Vault
-      // `_validateWindow`) and must NOT be treated as "ended" — an open-ended
-      // window means contributions are still possible.
-      const contributionEnded = cycleView.assetWindow.end !== 0n && cycleView.assetWindow.end <= nowSec;
+      // judged failed. `{0, 0}` is a skipped phase (acquire-only vaults): the
+      // contract rejects every asset contribution then, so it counts as ended.
+      const assetSkipped = cycleView.assetWindow.start === 0n && cycleView.assetWindow.end === 0n;
+      const contributionEnded =
+        assetSkipped || (cycleView.assetWindow.end !== 0n && cycleView.assetWindow.end <= nowSec);
       if (!contributionEnded) continue;
 
       // If an acquire window has been opened, it must also have ended before we
