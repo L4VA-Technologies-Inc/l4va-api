@@ -21,6 +21,7 @@ import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
 import { EvmLiquidityController } from './evm-liquidity.controller';
 import { EvmLiquidityService } from './evm-liquidity.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
+import { EvmMarketStatsService } from './evm-market-stats.service';
 import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
 import { EvmPositionService } from './evm-position.service';
@@ -49,6 +50,7 @@ import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
+import { Market } from '@/database/market.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -83,6 +85,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
       EvmAssetPriceFeedEntity,
       EvmExternalPosition,
       EvmIndexRebalance,
+      Market,
     ]),
   ],
   controllers: [BlockchainController, EvmLiquidityController],
@@ -97,6 +100,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmLockTimePricingService,
     EvmCycleCloseService,
     EvmLiquidityService,
+    EvmMarketStatsService,
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmVaultSignerService,
