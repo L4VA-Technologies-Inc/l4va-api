@@ -365,11 +365,15 @@ export class EvmVaultSignerService {
     const now = BigInt(Math.floor(Date.now() / 1000));
     const oneDay = BigInt(86400);
 
-    // Asset (contribution) window — default 7 days from now if not specified
-    const assetWindowStart = now;
-    const assetWindowEnd = data.contributionDuration
-      ? now + BigInt(Math.floor(Number(data.contributionDuration) / 1000))
-      : now + oneDay * 7n;
+    // Asset (contribution) window — default 7 days from now if not specified.
+    // Acquire-only vaults take no assets: { 0, 0 } skips the phase, otherwise the
+    // form's default contribution duration would hold the cycle open past the acquire window.
+    const assetWindowStart = data.isAcquireOnly ? 0n : now;
+    const assetWindowEnd = data.isAcquireOnly
+      ? 0n
+      : data.contributionDuration
+        ? now + BigInt(Math.floor(Number(data.contributionDuration) / 1000))
+        : now + oneDay * 7n;
 
     // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
     // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
