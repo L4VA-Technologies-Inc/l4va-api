@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createPublicClient, http, type Address, type Hex } from 'viem';
+import { createPublicClient, fallback, http, type Address, type Hex } from 'viem';
 
 import { PROTOCOL_FEE_CONFIG_ABI, type ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
+
+/** Alchemy subdomain per Robinhood chain id, used to build the default backup RPC. */
+const ALCHEMY_HOST_BY_CHAIN_ID: Record<number, string> = {
+  4663: 'robinhood-mainnet',
+  46630: 'robinhood-testnet',
+};
 
 /** Shape returned by Vault.getCycle(cycleId). Mirrors CycleView in Vault.sol. */
 export interface OnchainCycleView {
@@ -60,9 +66,27 @@ export class EvmContractReader {
     }
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
+    // Optional backup RPCs (comma-separated). viem retries a failed request (e.g. a 429
+    // from the public RPC) on the next URL. Keep the primary first: it serves wide
+    // getLogs ranges that a free-tier Alchemy key rejects (10-block cap).
+    // Without an explicit list, default to Alchemy for the configured chain when a key exists.
+    const explicitFallbacks = (this.configService.get<string>('EVM_RPC_FALLBACK_URLS') || '')
+      .split(',')
+      .map(u => u.trim())
+      .filter(Boolean);
+    const alchemyKey = this.configService.get<string>('ALCHEMY_API_KEY')?.trim();
+    const alchemyHost = ALCHEMY_HOST_BY_CHAIN_ID[this.chainId];
+    const defaultFallbacks = alchemyKey && alchemyHost ? [`https://${alchemyHost}.g.alchemy.com/v2/${alchemyKey}`] : [];
+    const fallbackUrls = (explicitFallbacks.length ? explicitFallbacks : defaultFallbacks).filter(
+      u => u.replace(/\/$/, '') !== rpcUrl.replace(/\/$/, '')
+    );
+
     this.client = createPublicClient({
-      transport: http(rpcUrl),
+      transport: fallbackUrls.length ? fallback([http(rpcUrl), ...fallbackUrls.map(u => http(u))]) : http(rpcUrl),
     });
+    if (fallbackUrls.length) {
+      this.logger.log(`EVM RPC: primary + ${fallbackUrls.length} fallback transport(s)`);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
