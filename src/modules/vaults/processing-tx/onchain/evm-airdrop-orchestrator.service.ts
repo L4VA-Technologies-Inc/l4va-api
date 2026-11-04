@@ -40,6 +40,8 @@ interface PushResult {
   claimsBroadcast: number;
   alreadyClaimedSkipped: number;
   txHashes: Hex[];
+  /** Vaults that got at least one confirmed claim batch in this run. */
+  vaultIds?: string[];
 }
 
 /**
@@ -99,7 +101,13 @@ export class EvmAirdropOrchestrator {
       .addGroupBy('snap.cycle_id')
       .getRawMany<{ vault_id: string; cycle_id: string }>();
 
-    const totals: PushResult = { batchesBroadcast: 0, claimsBroadcast: 0, alreadyClaimedSkipped: 0, txHashes: [] };
+    const totals: PushResult = {
+      batchesBroadcast: 0,
+      claimsBroadcast: 0,
+      alreadyClaimedSkipped: 0,
+      txHashes: [],
+      vaultIds: [],
+    };
 
     for (const { vault_id, cycle_id } of eligible) {
       if (this.processingVaults.has(vault_id)) continue;
@@ -110,6 +118,7 @@ export class EvmAirdropOrchestrator {
         totals.claimsBroadcast += one.claimsBroadcast;
         totals.alreadyClaimedSkipped += one.alreadyClaimedSkipped;
         totals.txHashes.push(...one.txHashes);
+        if (one.batchesBroadcast > 0 && !totals.vaultIds.includes(vault_id)) totals.vaultIds.push(vault_id);
       } catch (err) {
         this.logger.error(`Airdrop batch failed for vault ${vault_id} cycle ${cycle_id}: ${(err as Error).message}`);
         void this.alerts.sendAlert('evm_airdrop_batch_failed', {
