@@ -10,6 +10,7 @@ import { EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
@@ -42,7 +43,8 @@ export class EvmOpenCycleService {
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
-    private readonly adminSigner: EvmAdminSigner
+    private readonly adminSigner: EvmAdminSigner,
+    private readonly alerts: AlertsService
   ) {}
 
   /**
@@ -179,6 +181,11 @@ export class EvmOpenCycleService {
       this.logger.log(`closeAssetWindow confirmed for vault ${vaultId}`);
     } catch (err) {
       this.logger.error(`closeAssetWindow failed for vault ${vaultId}: ${(err as Error).message}`);
+      void this.alerts.sendAlert('evm_close_asset_window_failed', {
+        chain: 'robinhood',
+        vaultId,
+        error: (err as Error).message,
+      });
     }
   }
 }

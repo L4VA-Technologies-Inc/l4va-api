@@ -13,6 +13,7 @@ import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuatio
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
@@ -70,7 +71,8 @@ export class EvmAirdropOrchestrator {
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
-    private readonly adminSigner: EvmAdminSigner
+    private readonly adminSigner: EvmAdminSigner,
+    private readonly alerts: AlertsService
   ) {}
 
   // --------------------------------------------------------------------------
@@ -110,6 +112,12 @@ export class EvmAirdropOrchestrator {
         totals.txHashes.push(...one.txHashes);
       } catch (err) {
         this.logger.error(`Airdrop batch failed for vault ${vault_id} cycle ${cycle_id}: ${(err as Error).message}`);
+        void this.alerts.sendAlert('evm_airdrop_batch_failed', {
+          chain: 'robinhood',
+          vaultId: vault_id,
+          cycleId: String(cycle_id),
+          error: (err as Error).message,
+        });
       } finally {
         this.processingVaults.delete(vault_id);
       }

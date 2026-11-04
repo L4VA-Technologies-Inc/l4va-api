@@ -12,6 +12,7 @@ import { EvmContractReader } from './evm-contract-reader.service';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
@@ -135,7 +136,8 @@ export class EvmVaultSignerService {
     private readonly usersRepository: Repository<User>,
     private readonly configService: ConfigService,
     private readonly transactionsService: TransactionsService,
-    private readonly contractReader: EvmContractReader
+    private readonly contractReader: EvmContractReader,
+    private readonly alerts: AlertsService
   ) {
     this.factoryAddress = this.configService.get<string>('EVM_FACTORY_ADDRESS') as Address;
     this.adminAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS') as Address;
@@ -218,6 +220,11 @@ export class EvmVaultSignerService {
       // Update transaction status to failed on error
       await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
       this.logger.error(`Failed to confirm vault creation: ${(error as Error).message}`);
+      void this.alerts.sendAlert('evm_vault_create_confirm_failed', {
+        chain: 'robinhood',
+        transactionId,
+        error: (error as Error).message,
+      });
       throw error;
     }
   }
@@ -253,6 +260,13 @@ export class EvmVaultSignerService {
       this.logger.error(
         `Refusing to bind VaultCreated for evmVaultId=${evmVaultId} vault=${vaultAddress} tx=${txHash}: ${mismatch}`
       );
+      void this.alerts.sendAlert('evm_vault_bind_refused', {
+        chain: 'robinhood',
+        evmVaultId,
+        vaultAddress,
+        txHash,
+        mismatch,
+      });
       return;
     }
 

@@ -16,6 +16,7 @@ import { VAULT_ABI } from './vault.abi';
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import {
   EvmGovernanceFeeService,
@@ -155,7 +156,8 @@ export class EvmVaultContributionService {
     private readonly contractReader: EvmContractReader,
     private readonly vaultEventReconciler: EvmVaultEventReconciler,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly evmFeeService: EvmGovernanceFeeService
+    private readonly evmFeeService: EvmGovernanceFeeService,
+    private readonly alerts: AlertsService
   ) {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
@@ -359,6 +361,11 @@ export class EvmVaultContributionService {
     } catch (err) {
       await this.transactionsService.updateTransactionStatusById(txId, TransactionStatus.failed);
       this.logger.error(`Failed to confirm EVM contribution ${txId}: ${(err as Error).message}`);
+      void this.alerts.sendAlert('evm_contribution_confirm_failed', {
+        chain: 'robinhood',
+        txId,
+        error: (err as Error).message,
+      });
       throw err;
     }
   }

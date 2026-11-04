@@ -9,6 +9,7 @@ import { EvmLpStatus } from './evm-lp.config';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { PriceService } from '@/modules/price/price.service';
 import { MarketType } from '@/types/market.types';
 import { ChainType, VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
@@ -29,7 +30,8 @@ export class EvmMarketStatsService {
     @InjectRepository(Market) private readonly marketRepository: Repository<Market>,
     private readonly liquidityService: EvmLiquidityService,
     private readonly priceService: PriceService,
-    configService: ConfigService
+    configService: ConfigService,
+    private readonly alerts: AlertsService
   ) {
     this.isMainnet = configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
@@ -42,6 +44,11 @@ export class EvmMarketStatsService {
       await this.updateAll();
     } catch (error) {
       this.logger.error(`EVM market stats update failed: ${(error as Error).message}`);
+      void this.alerts.sendAlert('evm_market_stats_failed', {
+        chain: 'robinhood',
+        pass: 'all',
+        error: (error as Error).message,
+      });
     }
   }
 
@@ -53,6 +60,11 @@ export class EvmMarketStatsService {
       await this.update(true);
     } catch (error) {
       this.logger.error(`EVM market stats (new vaults) failed: ${(error as Error).message}`);
+      void this.alerts.sendAlert('evm_market_stats_failed', {
+        chain: 'robinhood',
+        pass: 'new_vaults',
+        error: (error as Error).message,
+      });
     }
   }
 

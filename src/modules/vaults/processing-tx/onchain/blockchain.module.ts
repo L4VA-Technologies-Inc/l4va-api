@@ -11,6 +11,7 @@ import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
 import { EvmAdapterRegistryService } from './evm-adapter-registry.service';
+import { EvmAdminGasMonitorService } from './evm-admin-gas-monitor.service';
 import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmAirdropOrchestrator } from './evm-airdrop-orchestrator.service';
 import { EvmAllocationService } from './evm-allocation.service';
@@ -56,6 +57,7 @@ import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 
@@ -66,6 +68,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
       envFilePath: process.env.ENV_FILE || '.env',
     }),
     HttpModule,
+    AlertsModule,
     TransactionsModule,
     AssetsModule,
     RewardsModule,
@@ -90,6 +93,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
   ],
   controllers: [BlockchainController, EvmLiquidityController],
   providers: [
+    EvmAdminGasMonitorService,
     MetadataRegistryApiService,
     BlockchainService,
     VaultContributionService,

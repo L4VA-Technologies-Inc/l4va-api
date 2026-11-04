@@ -8,6 +8,7 @@ import { EvmWebhookDto, EvmWebhookTransaction } from './dto/evm-webhook.dto';
 import { WebhookTxSummaryDto } from './dto/handle-webhook.res';
 import { EvmVaultEventReconciler, VaultLogInput, PerTxOutcome } from './evm-vault-event-reconciler.service';
 
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { TransactionStatus } from '@/types/transaction.types';
 
 /**
@@ -24,7 +25,8 @@ export class EvmWebhookService {
   constructor(
     private readonly blockchainWebhookService: BlockchainWebhookService,
     private readonly configService: ConfigService,
-    private readonly vaultEventReconciler: EvmVaultEventReconciler
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly alerts: AlertsService
   ) {
     this.signingKey = this.configService.get<string>('ALCHEMY_WEBHOOK_SIGNING_KEY');
   }
@@ -129,6 +131,10 @@ export class EvmWebhookService {
         // above — those are the Alchemy-mandated ack. Log and continue; the
         // TransactionHealthService cron will pick these up on its next tick.
         this.logger.error(`Vault event reconciler failed: ${(err as Error).message}`);
+        void this.alerts.sendAlert('evm_webhook_reconciler_failed', {
+          chain: 'robinhood',
+          error: (err as Error).message,
+        });
       }
     }
 

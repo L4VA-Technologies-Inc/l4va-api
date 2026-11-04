@@ -10,6 +10,7 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmVaultEventReconciler, type VaultLogInput } from './evm-vault-event-reconciler.service';
 
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { ChainType } from '@/types/vault.types';
 
@@ -44,7 +45,8 @@ export class EvmVaultEventIndexerService {
     private readonly contractReader: EvmContractReader,
     private readonly reconciler: EvmVaultEventReconciler,
     private readonly configService: ConfigService,
-    @Inject(REDIS_CLIENT) private readonly redis: Redis
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly alerts: AlertsService
   ) {
     this.cursorKey = `evm:vault-event-indexer:${this.configService.get<string>('EVM_CHAIN_ID') || '46630'}:cursor`;
     this.enabled = this.configService.get<string>('EVM_VAULT_EVENT_INDEXER_ENABLED') !== 'false';
@@ -58,6 +60,7 @@ export class EvmVaultEventIndexerService {
       await this.indexOnce();
     } catch (err) {
       this.logger.error(`Vault event indexing failed: ${(err as Error).message}`);
+      void this.alerts.sendAlert('evm_event_indexer_failed', { chain: 'robinhood', error: (err as Error).message });
     } finally {
       this.running = false;
     }

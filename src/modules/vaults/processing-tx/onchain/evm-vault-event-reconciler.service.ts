@@ -22,6 +22,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { AssetStatus } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -88,7 +89,8 @@ export class EvmVaultEventReconciler {
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly cycleCloseService: EvmCycleCloseService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly alerts: AlertsService
   ) {}
 
   /** Process a batch of vault-emitted logs. Unknown events are ignored. */
@@ -202,6 +204,12 @@ export class EvmVaultEventReconciler {
         errors++;
         const msg = (err as Error).message;
         this.logger.error(`Failed to reconcile log (tx=${log.txHash}, addr=${log.address}): ${msg}`);
+        void this.alerts.sendAlert('evm_event_reconcile_failed', {
+          chain: 'robinhood',
+          txHash: log.txHash,
+          address: log.address,
+          error: msg,
+        });
         recordError(log.txHash, msg);
       }
     }

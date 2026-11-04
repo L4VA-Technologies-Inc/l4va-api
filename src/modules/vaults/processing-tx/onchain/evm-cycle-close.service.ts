@@ -10,6 +10,7 @@ import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import {
   EvmReconciliationStatus,
   ExpectedEventSpec,
@@ -54,7 +55,8 @@ export class EvmCycleCloseService {
     @InjectRepository(Transaction) private readonly transactionsRepository: Repository<Transaction>,
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
-    private readonly adminSigner: EvmAdminSigner
+    private readonly adminSigner: EvmAdminSigner,
+    private readonly alerts: AlertsService
   ) {}
 
   /**
@@ -339,6 +341,12 @@ export class EvmCycleCloseService {
       }
     );
     this.logger.error(`Reconciled snapshot ${snapshotId} → failed (mismatch)`);
+    void this.alerts.sendAlert('evm_snapshot_reconcile_mismatch', {
+      chain: 'robinhood',
+      snapshotId,
+      onChainRoot,
+      expectedRoot: snapshot.merkle_root,
+    });
     return { status: EvmSnapshotStatus.failed, onChainRoot };
   }
 
