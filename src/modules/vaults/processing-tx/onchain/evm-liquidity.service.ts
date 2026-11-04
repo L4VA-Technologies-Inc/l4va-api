@@ -25,6 +25,7 @@ import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { ChainType } from '@/types/vault.types';
 
 const LP_ADAPTER_ABI = [
@@ -218,7 +219,8 @@ export class EvmLiquidityService {
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(EvmValuationSnapshot) private readonly snapshotsRepository: Repository<EvmValuationSnapshot>,
     private readonly contractReader: EvmContractReader,
-    private readonly adminSigner: EvmAdminSigner
+    private readonly adminSigner: EvmAdminSigner,
+    private readonly alerts: AlertsService
   ) {}
 
   /** Cron entry: every confirmed raise whose pool is not seeded yet. */
@@ -232,9 +234,14 @@ export class EvmLiquidityService {
       .getMany();
 
     for (const snap of pending) {
-      await this.provideForSnapshot(snap.id).catch(err =>
-        this.logger.error(`LP for snapshot ${snap.id} failed: ${(err as Error).message}`)
-      );
+      await this.provideForSnapshot(snap.id).catch(err => {
+        this.logger.error(`LP for snapshot ${snap.id} failed: ${(err as Error).message}`);
+        void this.alerts.sendAlert('evm_lp_failed', {
+          chain: 'robinhood',
+          snapshotId: snap.id,
+          error: (err as Error).message,
+        });
+      });
     }
   }
 
@@ -499,11 +506,16 @@ export class EvmLiquidityService {
       // Never leave the vault parked in Active on our technical cycle: expansion,
       // termination and every Locked-only flow would be blocked for good.
       if (giveUp) {
-        await this.closeTechnicalCycleIfOpen(vaultAddress, raiseCycleId).catch(closeErr =>
+        await this.closeTechnicalCycleIfOpen(vaultAddress, raiseCycleId).catch(closeErr => {
           this.logger.error(
             `LP failed for vault ${vault.id} and its technical cycle could not be closed: ${(closeErr as Error).message}`
-          )
-        );
+          );
+          void this.alerts.sendAlert('evm_lp_cycle_close_failed', {
+            chain: 'robinhood',
+            vaultId: vault.id,
+            error: (closeErr as Error).message,
+          });
+        });
       }
       throw err;
     }

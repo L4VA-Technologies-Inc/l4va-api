@@ -15,6 +15,7 @@ import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contri
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -80,7 +81,8 @@ export class EvmRefundOrchestrator {
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
     private readonly cycleCloseService: EvmCycleCloseService,
-    configService: ConfigService
+    configService: ConfigService,
+    private readonly alerts: AlertsService
   ) {
     // Cache the factory address so we can exclude vaults whose contract_address
     // is accidentally the factory (an early-flow bug leaves some rows in this
@@ -224,6 +226,11 @@ export class EvmRefundOrchestrator {
       } catch (err) {
         result.cancellationsFailed++;
         this.logger.error(`cancelCurrentCycle failed for vault ${vault.id}: ${(err as Error).message}`);
+        void this.alerts.sendAlert('evm_cycle_cancel_failed', {
+          chain: 'robinhood',
+          vaultId: vault.id,
+          error: (err as Error).message,
+        });
       } finally {
         this.processingVaults.delete(vault.id);
       }
@@ -287,6 +294,12 @@ export class EvmRefundOrchestrator {
         totals.txHashes.push(...one.txHashes);
       } catch (err) {
         this.logger.error(`Refund batch failed for vault ${vault_id} cycle ${cycle_id}: ${(err as Error).message}`);
+        void this.alerts.sendAlert('evm_refund_batch_failed', {
+          chain: 'robinhood',
+          vaultId: vault_id,
+          cycleId: String(cycle_id),
+          error: (err as Error).message,
+        });
       } finally {
         this.processingVaults.delete(vault_id);
       }

@@ -7,6 +7,7 @@ import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { PROTOCOL_FEE_CONFIG_ABI, ProtocolFeeType } from './protocol-fee-config.abi';
 
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import {
   SYSTEM_SETTINGS_LOADED_EVENT,
   SystemSettingsService,
@@ -57,7 +58,8 @@ export class EvmProtocolFeeSyncService implements OnApplicationBootstrap {
     configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly contractReader: EvmContractReader,
-    private readonly adminSigner: EvmAdminSigner
+    private readonly adminSigner: EvmAdminSigner,
+    private readonly alerts: AlertsService
   ) {
     this.factoryAddress = (configService.get<string>('EVM_FACTORY_ADDRESS') as Address) || null;
   }
@@ -115,6 +117,7 @@ export class EvmProtocolFeeSyncService implements OnApplicationBootstrap {
       this.logger.log(`Acquire fee set on chain: ${current} -> ${desired} bps (${feeConfig}, tx ${hash})`);
     } catch (err) {
       this.logger.error(`Failed to sync evm_acquire_fee_bps on chain: ${(err as Error).message}`);
+      void this.alerts.sendAlert('evm_protocol_fee_sync_failed', { chain: 'robinhood', error: (err as Error).message });
     } finally {
       this.syncing = false;
     }

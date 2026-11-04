@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, Repository } from 'typeorm';
+import { Between, In, Not, Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
@@ -581,11 +581,67 @@ export class GovernanceExecutionService {
         `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
       );
 
+      if (proposal.proposalType === ProposalType.TERMINATION) {
+        await this.closeOtherProposalsAfterTermination(proposal.vaultId, proposal.id);
+      }
+
       // Immediately trigger execution
       await this.executePassedProposal(proposalId);
     } catch (error) {
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+
+  /**
+   * A passed termination ends the vault, so nothing else can still be voted on or started:
+   * every other UPCOMING / ACTIVE proposal of the vault is closed as REJECTED and its creation
+   * fee refunded, the same as a normal rejection. PASSED proposals already being executed are left alone.
+   */
+  private async closeOtherProposalsAfterTermination(vaultId: string, terminationProposalId: string): Promise<void> {
+    try {
+      const open = await this.proposalRepository.find({
+        where: {
+          vaultId,
+          id: Not(terminationProposalId),
+          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE]),
+        },
+        select: ['id', 'metadata'],
+      });
+
+      for (const other of open) {
+        const result = await this.proposalRepository
+          .createQueryBuilder()
+          .update(Proposal)
+          .set({
+            status: ProposalStatus.REJECTED,
+            metadata: {
+              ...other.metadata,
+              // Shown in the proposal list, so holders see why the vote ended early.
+              executionError: {
+                message: `Closed: termination proposal ${terminationProposalId} passed.`,
+                timestamp: new Date().toISOString(),
+                errorCode: 'CLOSED_BY_TERMINATION',
+                userFriendlyMessage: 'Closed because the vault termination proposal passed.',
+              },
+            },
+          })
+          .where('id = :id AND status IN (:...statuses)', {
+            id: other.id,
+            statuses: [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE],
+          })
+          .execute();
+        if (!result.affected) continue;
+
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(other.id, { throwOnFailure: false });
+        this.logger.log(`Proposal ${other.id}: REJECTED (vault terminated by proposal ${terminationProposalId})`);
+      }
+    } catch (error) {
+      // The termination itself must still execute even if this cleanup fails.
+      this.logger.error(
+        `Failed to close other proposals after termination ${terminationProposalId}: ${error.message}`,
+        error.stack
+      );
     }
   }
 
