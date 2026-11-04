@@ -3173,6 +3173,8 @@ export class VaultsService {
         status: proposal.status,
         stage: lifecycle[lifecycle.length - 1].stage,
         lifecycle,
+        // Lets the feed show the upcoming "Voting ends" step while voting is open.
+        endDate: proposal.endDate ? endDate : null,
         actions,
         creatorId: proposal.creatorId,
         created_at: new Date(latest),

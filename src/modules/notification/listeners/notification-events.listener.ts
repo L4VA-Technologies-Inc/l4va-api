@@ -153,13 +153,18 @@ export class NotificationEventsListener {
   async handleContributionComplete(event: {
     vaultId: string;
     vaultName: string;
-    totalValueLocked: number;
+    // Cardano only (ADA); EVM vaults send no value.
+    totalValueLocked?: number;
     contributorIds: string[];
   }) {
+    const tvl =
+      event.totalValueLocked !== undefined
+        ? ` Total value locked = ${event.totalValueLocked.toLocaleString()} ADA`
+        : '';
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} contribution stage complete`,
-        description: `${event.vaultName} vault has successfully completed contribution stage. Total value locked = ${event.totalValueLocked.toLocaleString()} ADA`,
+        description: `${event.vaultName} vault has successfully completed contribution stage.${tvl}`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
@@ -172,15 +177,20 @@ export class NotificationEventsListener {
     vaultId: string;
     vaultName: string;
     tokenHoldersIds: string[];
-    adaSpent: number;
+    // Cardano only (ADA); EVM vaults send no amounts.
+    adaSpent?: number;
     tokenPercentage: number;
     tokenTicker: string;
-    impliedVaultValue: number;
+    impliedVaultValue?: number;
   }) {
+    const amounts =
+      event.adaSpent !== undefined && event.impliedVaultValue !== undefined
+        ? ` ${event.adaSpent.toLocaleString()} ADA was sent to acquire ${event.tokenPercentage}% of ${event.tokenTicker} tokens. Implied vault value is ${event.impliedVaultValue.toLocaleString()} ADA`
+        : '';
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} vault success!`,
-        description: `${event.vaultName} vault has successfully completed acquire phase and locked. ${event.adaSpent.toLocaleString()} ADA was sent to acquire ${event.tokenPercentage}% of ${event.tokenTicker} tokens. Implied vault value is ${event.impliedVaultValue.toLocaleString()} ADA`,
+        description: `${event.vaultName} vault has successfully completed acquire phase and locked.${amounts}`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
@@ -193,7 +203,7 @@ export class NotificationEventsListener {
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} vault failed`,
-        description: `${event.vaultName} vault has failed to completed acquire phase. Assets and ADA will be refunded minus fees.`,
+        description: `${event.vaultName} vault has failed to completed acquire phase. Assets and funds will be refunded minus fees.`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },

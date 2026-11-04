@@ -98,9 +98,10 @@ export class GovernanceController {
   @ApiResponse({ status: 200, description: 'Paginated list of proposals', type: PaginatedResponseDto })
   async getProposals(
     @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Query() query: GetProposalsDto
+    @Query() query: GetProposalsDto,
+    @Req() req: AuthRequest
   ): Promise<PaginatedResponseDto<GetProposalsResItem>> {
-    return this.governanceService.getProposals(vaultId, query.page, query.limit);
+    return this.governanceService.getProposals(vaultId, query.page, query.limit, req.user?.sub);
   }
 
   @Post('proposals/:proposalId/vote')

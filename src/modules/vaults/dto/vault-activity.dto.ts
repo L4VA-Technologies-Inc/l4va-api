@@ -38,6 +38,7 @@ export interface ProposalActivityEvent {
   /** Latest lifecycle stage reached. */
   stage: ProposalLifecycleStage;
   lifecycle: ProposalLifecycleEvent[];
+  endDate: Date | null;
   /** Swaps / rebalance runs the proposal executed, oldest first. */
   actions: (TransactionActivityEvent | IndexRebalanceActivityEvent)[];
   creatorId: string;
