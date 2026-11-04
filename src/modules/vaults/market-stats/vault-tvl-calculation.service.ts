@@ -5,7 +5,7 @@ import { Repository, In } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { VAULT_STATUSES_ACTIVE } from '@/types/vault.types';
+import { VAULT_STATUSES_ACTIVE, VaultStatus } from '@/types/vault.types';
 
 /**
  * Service responsible for periodically updating vault asset prices and TVL calculations
@@ -102,6 +102,8 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
 
       this.logger.log('[]Starting vault valuation update process...');
 
+      await this.zeroBurnedVaultTotals();
+
       // Get active vaults (those with assets that need price updates)
       const activeVaults: Array<Pick<Vault, 'id' | 'name' | 'vault_status'>> = await this.vaultRepository.find({
         where: {
@@ -129,6 +131,25 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
       this.logger.error('Error updating vault valuations:', error);
     } finally {
       this.isProcessing = false;
+    }
+  }
+
+  /**
+   * Burned vaults leave the active set, so their cached TVL would otherwise stay frozen
+   * at the last value forever. Their assets are distributed or returned, so TVL is zero.
+   */
+  private async zeroBurnedVaultTotals(): Promise<void> {
+    const result = await this.vaultRepository
+      .createQueryBuilder()
+      .update(Vault)
+      .set({ total_assets_cost_ada: 0, total_assets_cost_usd: 0, total_assets_cost_eth: 0, fdv_tvl: 0 })
+      .where('vault_status = :status', { status: VaultStatus.burned })
+      .andWhere(
+        '(total_assets_cost_ada <> 0 OR total_assets_cost_usd <> 0 OR total_assets_cost_eth <> 0 OR fdv_tvl <> 0)'
+      )
+      .execute();
+    if (result.affected) {
+      this.logger.log(`Zeroed cached TVL for ${result.affected} burned vault(s)`);
     }
   }
 }
