@@ -2,6 +2,7 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AlertsModule } from '../alerts/alerts.module';
 import { DexHunterModule } from '../dexhunter/dexhunter.module';
 import { GoogleCloudStorageModule } from '../google_cloud/google_bucket/bucket.module';
 import { TaptoolsModule } from '../taptools/taptools.module';
@@ -45,6 +46,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
 
 @Module({
   imports: [
+    AlertsModule,
     GoogleCloudStorageModule,
     LifecycleModule,
     TransactionsModule,
