@@ -2362,7 +2362,8 @@ export class GovernanceService {
   async getProposals(
     vaultId: string,
     page: number = 1,
-    limit: number = 10
+    limit: number = 10,
+    userId?: string
   ): Promise<PaginatedResponseDto<GetProposalsResItem>> {
     const vaultExists = await this.vaultRepository.exists({
       where: { id: vaultId },
@@ -2383,6 +2384,25 @@ export class GovernanceService {
       take: limit,
     });
 
+    // The list must show the same "you voted" state as the detail view, which matches votes by
+    // the user's address. One query for the whole page instead of one per proposal.
+    const userVotes = new Map<string, VoteType>();
+    if (userId && proposals.length) {
+      const user = await this.userRepository.findOne({ where: { id: userId }, select: ['id', 'address'] });
+      if (user?.address) {
+        const rows = await this.voteRepository
+          .createQueryBuilder('vote')
+          .select('vote.proposalId', 'proposalId')
+          .addSelect('vote.vote', 'vote')
+          .where('vote.proposalId IN (:...ids)', { ids: proposals.map(p => p.id) })
+          .andWhere('LOWER(vote.voterAddress) = :voterAddress', {
+            voterAddress: this.normalizeAddress(user.address),
+          })
+          .getRawMany<{ proposalId: string; vote: VoteType }>();
+        rows.forEach(row => userVotes.set(row.proposalId, row.vote));
+      }
+    }
+
     // Process each proposal to add vote information
     const items = await Promise.all(
       proposals.map(async proposal => {
@@ -2396,6 +2416,7 @@ export class GovernanceService {
           startDate: proposal.startDate ? proposal.startDate.toISOString() : null,
           endDate: proposal.endDate ? proposal.endDate.toISOString() : null,
           abstain: proposal.abstain,
+          selectedVote: userVotes.get(proposal.id) ?? null,
           executionError: proposal.metadata?.executionError?.userFriendlyMessage
             ? proposal.metadata.executionError.userFriendlyMessage
             : proposal.metadata?.executionError?.message,

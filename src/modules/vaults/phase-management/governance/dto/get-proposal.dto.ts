@@ -4,11 +4,20 @@ import { FungibleTokenDto, NonFungibleTokenDto } from './create-proposal.req';
 
 import { PaginationDto } from '@/modules/vaults/dto/pagination.dto';
 import { ProposalStatus } from '@/types/proposal.types';
+import { VoteType } from '@/types/vote.types';
 
 export class GetProposalsDto extends PaginationDto {}
 
 // For base proposal data
 class BaseProposalDto {
+  @ApiProperty({
+    description: "The requesting user's vote, or null if they have not voted (or are not signed in)",
+    enum: VoteType,
+    required: false,
+    nullable: true,
+  })
+  selectedVote?: VoteType | null;
+
   @ApiProperty({
     description: 'Unique identifier of the proposal',
     example: '123e4567-e89b-12d3-a456-426614174000',

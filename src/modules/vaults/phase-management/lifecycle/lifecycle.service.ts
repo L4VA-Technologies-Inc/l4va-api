@@ -11,10 +11,12 @@ import { ExpansionService } from '../governance/expansion.service';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmAllocation } from '@/database/evm-allocation.entity';
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
@@ -2634,9 +2636,14 @@ export class LifecycleService {
         .andWhere('evm_root_committed_at IS NULL')
         .andWhere('evm_cancel_cycle_tx_hash IS NULL')
         .andWhere('CAST(tokens_for_acquires AS numeric) > 0')
+        .returning(['id'])
         .execute();
       if (result.affected && result.affected > 0) {
         this.logger.log(`EVM label flip: ${result.affected} vault(s) contribution → acquire`);
+        // Same notification the Cardano contribution → acquire transition sends.
+        for (const row of (result.raw ?? []) as { id: string }[]) {
+          await this.emitEvmContributionCompleteEvent(row.id);
+        }
       }
     } catch (err) {
       this.logger.error(`EVM contribution→acquire label sweep failed: ${(err as Error).message}`);
@@ -3045,6 +3052,8 @@ export class LifecycleService {
       try {
         this.logger.log(`EVM closeCycle: vault=${snap.vault_id} cycle=${snap.cycle_id} snapshot=${snap.id}`);
         await this.evmCycleCloseService.closeCycleForVault(snap.vault_id, BigInt(snap.cycle_id));
+        // closeCycleForVault returns once the cycle is confirmed and the vault is locked.
+        await this.emitEvmVaultLockedEvents(snap.vault_id, snap.cycle_id);
       } catch (err) {
         this.logger.error(
           `EVM closeCycle failed for vault ${snap.vault_id} cycle ${snap.cycle_id}: ${(err as Error).message}`
@@ -3161,6 +3170,68 @@ export class LifecycleService {
       await this.emitEvmVaultFailedEvents(vaultId);
     } catch (err) {
       this.logger.error(`EVM cancelAndFail failed for vault ${vaultId} cycle ${cycleId}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * EVM counterpart of the Cardano lock notifications (`vault.success` +
+   * `distribution.claim_available`). Recipients are the users behind the
+   * cycle's allocation addresses (contributors and acquirers alike).
+   */
+  private async emitEvmVaultLockedEvents(vaultId: string, cycleId: string): Promise<void> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'name', 'vault_status', 'vault_token_ticker', 'tokens_for_acquires'],
+      });
+      if (!vault || vault.vault_status !== VaultStatus.locked) return;
+
+      const allocations = await this.dataSource
+        .getRepository(EvmAllocation)
+        .find({ where: { vault_id: vaultId, cycle_id: cycleId }, select: ['contributor'] });
+      const addresses = [...new Set(allocations.map(a => a.contributor.toLowerCase()))];
+      const holders = addresses.length
+        ? await this.dataSource
+            .getRepository(User)
+            .createQueryBuilder('user')
+            .select('user.id', 'id')
+            .where('LOWER(user.address) IN (:...addresses)', { addresses })
+            .getRawMany<{ id: string }>()
+        : [];
+      const tokenHolderIds = holders.map(h => h.id);
+
+      this.eventEmitter.emit('distribution.claim_available', {
+        vaultId: vault.id,
+        vaultName: vault.name,
+        tokenHolderIds,
+      });
+      this.eventEmitter.emit('vault.success', {
+        vaultId: vault.id,
+        vaultName: vault.name,
+        tokenHoldersIds: tokenHolderIds,
+        tokenPercentage: vault.tokens_for_acquires,
+        tokenTicker: vault.vault_token_ticker,
+      });
+    } catch (err) {
+      this.logger.error(`Error emitting EVM vault locked events for vault ${vaultId}:`, err);
+    }
+  }
+
+  private async emitEvmContributionCompleteEvent(vaultId: string): Promise<void> {
+    try {
+      const assets = await this.assetsRepository.find({
+        where: { vault: { id: vaultId }, deleted: false },
+        relations: ['added_by'],
+      });
+      const vault = await this.vaultRepository.findOne({ where: { id: vaultId }, select: ['id', 'name'] });
+      if (!vault) return;
+      this.eventEmitter.emit('vault.contribution_complete', {
+        vaultId: vault.id,
+        vaultName: vault.name,
+        contributorIds: [...new Set(assets.map(asset => asset.added_by?.id).filter(Boolean))],
+      });
+    } catch (err) {
+      this.logger.error(`Error emitting EVM contribution complete event for vault ${vaultId}:`, err);
     }
   }
 
