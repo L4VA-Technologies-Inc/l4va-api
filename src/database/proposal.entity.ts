@@ -138,6 +138,13 @@ export class Proposal {
       currentAssetCount?: number; // Track progress
     };
 
+    // Expansion / acquire expansion: how the window closed (set by ExpansionService on close).
+    expansionClose?: {
+      closedAt: string; // ISO date string
+      reason: 'duration_expired' | 'asset_max_reached' | 'max_ada_reached';
+      txHash?: string;
+    };
+
     // Index re-weight: the basket holders vote on, frozen at proposal creation.
     indexReweight?: {
       targets: IndexTarget[];

@@ -62,6 +62,45 @@ export interface PhaseTransitionEvent {
   failure?: VaultFailureInfo | null;
   /** Failed vault only: cycle cancel + refund txs it triggered, oldest first. */
   actions?: TransactionActivityEvent[];
+  /** `expansion` / `acquire_expansion` phases: which window, and whether it opened or closed. */
+  expansion?: ExpansionPhaseInfo;
+}
+
+export type ExpansionOutcome = 'completed' | 'cancelled';
+
+export interface ExpansionPhaseInfo {
+  proposalId: string;
+  /** 1-based, counted per expansion type. */
+  number: number;
+  stage: 'started' | 'closed';
+  /** Closed only. `cancelled`: the EVM cycle was cancelled and contributions refunded. */
+  outcome?: ExpansionOutcome;
+  /** Closed only, when recorded: duration_expired | asset_max_reached | max_ada_reached. */
+  reason?: string | null;
+  /** Cancelled only: why the cycle was cancelled, when known. */
+  reasonMessage?: string | null;
+  /** Closed (not cancelled) only: who received vault tokens for this window. */
+  distribution?: ExpansionDistribution | null;
+}
+
+export interface ExpansionRecipient {
+  address: string | null;
+  /** VT base units. */
+  vtAmount: string;
+  /** EVM: claimed from the allocation root. Cardano: dispatched to the wallet. */
+  received: boolean;
+  txHash: string | null;
+}
+
+export interface ExpansionDistribution {
+  vtTicker: string | null;
+  vtDecimals: number;
+  /** VT base units across all recipients. */
+  totalVt: string;
+  recipientsCount: number;
+  receivedCount: number;
+  /** Largest first, capped; `recipientsCount` is the full count. */
+  recipients: ExpansionRecipient[];
 }
 
 export interface VaultFailureInfo {

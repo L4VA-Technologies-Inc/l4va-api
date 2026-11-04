@@ -349,7 +349,8 @@ export class EvmCycleCloseService {
    * Does NOT compute a snapshot — cancel simply locks contributions for
    * refund via `refundContributions(...)` in Phase C.
    */
-  async cancelCurrentCycle(vaultId: string, reason: string): Promise<{ txHash: Hex }> {
+  /** `message`: plain-language reason shown in the vault activity feed. */
+  async cancelCurrentCycle(vaultId: string, reason: string, message?: string): Promise<{ txHash: Hex }> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
     if (vault.chain_type !== ChainType.robinhood) {
@@ -386,6 +387,7 @@ export class EvmCycleCloseService {
       vaultId,
       vault,
       expectedEvents: [{ name: 'CycleStatusChanged', count: 1 }],
+      metadata: { cancelReason: reason, message: message ?? null },
     });
 
     const result = await this.adminSigner.sendAndConfirm(
@@ -454,6 +456,7 @@ export class EvmCycleCloseService {
     vaultId: string;
     vault: Vault;
     expectedEvents: ExpectedEventSpec[];
+    metadata?: Record<string, any>;
   }): Promise<Transaction> {
     const tx = this.transactionsRepository.create({
       type: params.type,
@@ -465,6 +468,7 @@ export class EvmCycleCloseService {
       reconciliation_status: EvmReconciliationStatus.pending,
       reconciliation_attempts: 0,
       expected_events: params.expectedEvents,
+      metadata: params.metadata,
     });
     return this.transactionsRepository.save(tx);
   }
