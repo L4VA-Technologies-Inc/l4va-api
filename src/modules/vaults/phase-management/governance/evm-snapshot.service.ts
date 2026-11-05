@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { parseAbiItem, type Address } from 'viem';
+import { erc20Abi, parseAbiItem, type Address } from 'viem';
 
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
@@ -32,6 +32,9 @@ export { VAULT_TOKEN_CHECKPOINT_ABI };
 
 /** Block range per getLogs request — stays safely within most RPC limits. */
 const LOG_CHUNK_BLOCKS = 10_000n;
+const VAULT_TOKEN_SUPPLY_ABI = [
+  parseAbiItem('function excludedSupplyAt(uint256 timepoint) view returns (uint256)'),
+] as const;
 const HOLDERS_API_PAGE_SIZE = 200;
 const ALCHEMY_BALANCE_BATCH_SIZE = 20;
 const DEFAULT_MAX_FULL_REPLAY_CHUNKS = 400;
@@ -85,7 +88,7 @@ export class EvmSnapshotService {
     const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
-      select: ['id', 'assetId', 'addressBalances', 'createdAt'],
+      select: ['id', 'assetId', 'addressBalances', 'createdAt', 'snapshotBlock'],
     });
 
     const canUseIncrementalBaseline =
@@ -132,7 +135,8 @@ export class EvmSnapshotService {
           balances = await this.buildHolderBalances(
             vtAddress,
             vaultId,
-            canUseIncrementalBaseline ? latestSnapshot : null
+            canUseIncrementalBaseline ? latestSnapshot : null,
+            pinnedBlock.number
           );
           balanceSource = 'transfer_replay';
         }
@@ -140,13 +144,30 @@ export class EvmSnapshotService {
         balances = await this.buildHolderBalances(
           vtAddress,
           vaultId,
-          canUseIncrementalBaseline ? latestSnapshot : null
+          canUseIncrementalBaseline ? latestSnapshot : null,
+          pinnedBlock.number
         );
         balanceSource = 'transfer_replay';
       }
     }
 
     await this.dropNonVoters(balances, vault.contract_address as Address, vtAddress, vaultId);
+
+    // A baseline-derived snapshot inherits any holder the baseline missed, and every later snapshot
+    // inherits it again. Self-check against the token: if the voters' balances do not add up to
+    // the voting supply at the pinned block, rebuild this snapshot from the token's deployment.
+    if (balanceSource !== 'holders_api' && canUseIncrementalBaseline) {
+      const expected = await this.votingSupplyAt(vtAddress, vault.contract_address as Address, pinnedBlock);
+      const tracked = [...balances.values()].reduce((sum, value) => sum + value, 0n);
+      if (expected !== null && tracked !== expected) {
+        this.logger.warn(
+          `[EVM Snapshot] Vault ${vaultId}: incremental balances ${tracked} != voting supply ${expected}; rebuilding from scratch`
+        );
+        balances = await this.buildHolderBalances(vtAddress, vaultId, null, pinnedBlock.number);
+        balanceSource = 'transfer_replay';
+        await this.dropNonVoters(balances, vault.contract_address as Address, vtAddress, vaultId);
+      }
+    }
 
     // Serialize bigint → string to match the Snapshot.addressBalances schema.
     const addressBalancesForSnapshot: Record<string, string> = {};
@@ -251,6 +272,50 @@ export class EvmSnapshotService {
    * and every address the VaultToken marks as excluded (the Uniswap v4 PoolManager
    * holding LP VT). Left in, the PoolManager alone outweighs all holders of a small vault.
    */
+  /**
+   * VT that can vote at `block`: total supply minus excluded holders (pools etc.) minus what the
+   * vault itself holds. Null when the token predates `excludedSupplyAt`, so the check is skipped.
+   */
+  private async votingSupplyAt(
+    vtAddress: Address,
+    vaultAddress: Address,
+    block: { number: bigint; timestamp: bigint }
+  ): Promise<bigint | null> {
+    try {
+      const client = this.contractReader.publicClient;
+      const at = { blockNumber: block.number };
+      // Checkpoints only answer for a past timepoint, so read one second before the pinned block.
+      const timepoint = block.timestamp - 1n;
+      const [supply, excluded, vaultBalance, vaultExcluded] = await Promise.all([
+        client.readContract({ address: vtAddress, abi: erc20Abi, functionName: 'totalSupply', ...at }),
+        client.readContract({
+          address: vtAddress,
+          abi: VAULT_TOKEN_SUPPLY_ABI,
+          functionName: 'excludedSupplyAt',
+          args: [timepoint],
+          ...at,
+        }),
+        client.readContract({
+          address: vtAddress,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [vaultAddress],
+          ...at,
+        }),
+        client.readContract({
+          address: vtAddress,
+          abi: VAULT_TOKEN_EXCLUSION_ABI,
+          functionName: 'isExcludedHolder',
+          args: [vaultAddress],
+          ...at,
+        }),
+      ]);
+      return (supply as bigint) - (excluded as bigint) - (vaultExcluded ? 0n : (vaultBalance as bigint));
+    } catch {
+      return null;
+    }
+  }
+
   private async dropNonVoters(
     balances: Map<string, bigint>,
     vaultAddress: Address,
@@ -322,13 +387,16 @@ export class EvmSnapshotService {
   private async buildHolderBalances(
     vtAddress: Address,
     vaultId: string,
-    baselineSnapshot?: Snapshot | null
+    baselineSnapshot?: Snapshot | null,
+    toBlock?: bigint
   ): Promise<Map<string, bigint>> {
     const balances = baselineSnapshot
       ? this.snapshotAddressBalancesToMap(baselineSnapshot.addressBalances)
       : new Map<string, bigint>();
 
-    const latestBlock: bigint = await this.contractReader.publicClient.getBlockNumber();
+    // Replay up to the snapshot's pinned block so its balances match `snapshotBlock` exactly and the
+    // next incremental replay (which starts at snapshotBlock + 1) neither skips nor repeats transfers.
+    const latestBlock: bigint = toBlock ?? (await this.contractReader.publicClient.getBlockNumber());
     const startedAt = Date.now();
     let chunkIndex = 0;
     let totalLogs = 0;
@@ -336,8 +404,13 @@ export class EvmSnapshotService {
     let fromBlock: bigint;
 
     if (baselineSnapshot) {
-      const estimatedBaselineBlock = await this.estimateBlockForTimestamp(baselineSnapshot.createdAt, latestBlock);
-      fromBlock = estimatedBaselineBlock + 1n;
+      // Resume right after the block the baseline was read at. `createdAt` is the save time, which
+      // can land after transfers that happened while the snapshot was being built (e.g. the claims
+      // minted at lock); estimating from it skipped those transfers in every later snapshot.
+      const baselineBlock = baselineSnapshot.snapshotBlock
+        ? BigInt(baselineSnapshot.snapshotBlock)
+        : await this.estimateBlockForTimestamp(baselineSnapshot.createdAt, latestBlock);
+      fromBlock = baselineBlock + 1n;
       this.logger.debug(
         `[EVM Snapshot] Vault ${vaultId}: incremental replay from block ${fromBlock.toString()} (latest=${latestBlock.toString()})`
       );
