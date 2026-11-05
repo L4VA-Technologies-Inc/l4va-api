@@ -356,17 +356,19 @@ export class PriceService {
     const cached = this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    const url = `https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${pairAddress}/ohlcv/${timeframe}`;
-    const response = await axios.get(url, {
-      params: {
+    let response: { data: any };
+    try {
+      response = await this.geckoOnchainGet(`/networks/robinhood/pools/${pairAddress}/ohlcv/${timeframe}`, {
         aggregate,
         limit,
         currency: 'usd',
         token: 'base',
-      },
-      headers: { Accept: 'application/json' },
-      timeout: 15000,
-    });
+      });
+    } catch (error) {
+      const stale = this.cache.get<any[]>(`${cacheKey}_stale`);
+      if (stale) return stale;
+      throw error;
+    }
 
     const list: number[][] = response.data?.data?.attributes?.ohlcv_list ?? [];
     // GT returns newest-first; lightweight-charts wants unique ascending times
@@ -381,7 +383,45 @@ export class PriceService {
     );
 
     this.cache.set(cacheKey, mapped, 120);
+    this.cache.set(`${cacheKey}_stale`, mapped, 86400);
     return mapped;
+  }
+
+  /**
+   * GeckoTerminal on-chain data with fallbacks, in order:
+   *  1. CoinGecko on-chain API with our key (own rate-limit bucket; pro-api URL → pro header),
+   *  2. public GeckoTerminal API (~30 req/min per IP).
+   * Callers additionally fall back to the last good response (`<cacheKey>_stale`, 24h).
+   */
+  private async geckoOnchainGet(path: string, params: Record<string, unknown>): Promise<{ data: any }> {
+    const sources: Array<{ name: string; url: string; headers: Record<string, string> }> = [];
+    if (this.coinGeckoApiKey && this.coinGeckoApiUrl) {
+      const isPro = this.coinGeckoApiUrl.includes('pro-api');
+      sources.push({
+        name: 'CoinGecko onchain',
+        url: `${this.coinGeckoApiUrl}/v3/onchain${path}`,
+        headers: { [isPro ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key']: this.coinGeckoApiKey },
+      });
+    }
+    sources.push({ name: 'GeckoTerminal', url: `https://api.geckoterminal.com/api/v2${path}`, headers: {} });
+
+    let lastError: unknown;
+    for (const source of sources) {
+      try {
+        return await axios.get(source.url, {
+          params,
+          headers: { Accept: 'application/json', ...source.headers },
+          timeout: 15000,
+        });
+      } catch (error) {
+        lastError = error;
+        const status = (error as any)?.response?.status;
+        // 404 = pool not indexed; the other source uses the same index, so don't retry.
+        if (status === 404) throw error;
+        this.logger.warn(`${source.name} ${path} failed (${status ?? (error as Error).message}), trying next source`);
+      }
+    }
+    throw lastError;
   }
 
   /**
@@ -410,12 +450,16 @@ export class PriceService {
     const cached = this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    const url = `https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${pairAddress}/trades`;
-    const response = await axios.get(url, {
-      params: { trade_volume_in_usd_greater_than: 0 },
-      headers: { Accept: 'application/json' },
-      timeout: 15000,
-    });
+    let response: { data: any };
+    try {
+      response = await this.geckoOnchainGet(`/networks/robinhood/pools/${pairAddress}/trades`, {
+        trade_volume_in_usd_greater_than: 0,
+      });
+    } catch (error) {
+      const stale = this.cache.get<any[]>(`${cacheKey}_stale`);
+      if (stale) return stale;
+      throw error;
+    }
 
     const rows: any[] = Array.isArray(response.data?.data) ? response.data.data : [];
     const mapped = rows.slice(0, safeLimit).map(row => {
@@ -446,6 +490,7 @@ export class PriceService {
     });
 
     this.cache.set(cacheKey, mapped, 30);
+    this.cache.set(`${cacheKey}_stale`, mapped, 86400);
     return mapped;
   }
 
