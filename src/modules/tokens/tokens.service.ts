@@ -19,6 +19,8 @@ import { Market } from '@/database/market.entity';
 import { MarketService } from '@/modules/market/market.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import { MarketTokenKind } from '@/types/market.types';
 import { ChainType } from '@/types/vault.types';
 
@@ -42,12 +44,15 @@ export class TokensService {
   private readonly logger = new Logger(TokensService.name);
   private seed: SeedCoin[] | null = null;
   private mainnetBlockfrost: BlockFrostAPI | null = null;
+  /** Vault address → its ERC-20 vault token. Immutable on-chain, so cached forever. */
+  private readonly vaultTokenByVault = new Map<string, string>();
 
   constructor(
     private readonly configService: ConfigService,
     private readonly priceService: PriceService,
     private readonly tapToolsClient: TapToolsClient,
-    private readonly marketService: MarketService
+    private readonly marketService: MarketService,
+    private readonly evmContractReader: EvmContractReader
   ) {}
 
   private getMainnetBlockfrost(): BlockFrostAPI {
@@ -648,7 +653,7 @@ export class TokensService {
     const kind = this.detectTokenKind(id);
 
     if (kind === 'vault') {
-      return this.toVaultTokenDetail(await this.marketService.getVaultTokenById(id));
+      return this.toVaultTokenDetail(await this.loadVaultTokenRow(id));
     }
 
     if (kind === 'robinhood') {
@@ -657,7 +662,7 @@ export class TokensService {
       } catch (error) {
         if (error instanceof NotFoundException) {
           try {
-            return this.toVaultTokenDetail(await this.marketService.getVaultTokenById(id));
+            return this.toVaultTokenDetail(await this.loadVaultTokenRow(id));
           } catch {
             throw error;
           }
@@ -682,6 +687,11 @@ export class TokensService {
     const days = INTERVAL_TO_DAYS[safeInterval];
 
     if (kind === 'vault') {
+      const evmToken = await this.findEvmVaultTokenAddress(id);
+      if (evmToken) {
+        const result = await this.getEvmVaultTokenOhlc(evmToken, days);
+        if (result.ohlcv.length) return { id, interval: safeInterval, ohlcv: result.ohlcv };
+      }
       return this.getVaultTokenOhlcUsd(id, safeInterval);
     }
 
@@ -712,6 +722,26 @@ export class TokensService {
 
   async getTokenTrades(id: string, limit = 40) {
     const kind = this.detectTokenKind(id);
+    if (kind === 'vault') {
+      const evmToken = await this.findEvmVaultTokenAddress(id);
+      if (!evmToken) return { id, trades: [] as Array<Record<string, unknown>> };
+      const pairAddress = await this.findEvmPairAddress(evmToken);
+      if (!pairAddress) return { id, trades: [] as Array<Record<string, unknown>> };
+      try {
+        const trades = await this.priceService.getGeckoTerminalTrades(pairAddress, evmToken, limit);
+        return {
+          id,
+          pair_address: pairAddress,
+          trades: trades.map(trade => ({
+            ...trade,
+            tx_url: trade.tx_hash ? `https://robinhoodchain.blockscout.com/tx/${trade.tx_hash}` : null,
+          })),
+        };
+      } catch (error) {
+        this.logger.error(`GeckoTerminal trades failed for vault token ${evmToken}: ${error.message}`);
+        return { id, pair_address: pairAddress, trades: [] };
+      }
+    }
     if (kind !== 'robinhood') {
       return { id, trades: [] as Array<Record<string, unknown>> };
     }
@@ -731,6 +761,63 @@ export class TokensService {
         return { id, trades: [] };
       }
       throw error;
+    }
+  }
+
+  /** Vault market row with the EVM vault-token address resolved (the market row only stores the vault address). */
+  private async loadVaultTokenRow(id: string) {
+    const row = await this.marketService.getVaultTokenById(id);
+    const tokenAddress =
+      row.chain_type === 'robinhood' && row.contract_address
+        ? await this.resolveVaultTokenAddress(row.contract_address)
+        : null;
+    return { ...row, token_address: tokenAddress };
+  }
+
+  private async findEvmVaultTokenAddress(id: string): Promise<string | null> {
+    try {
+      return (await this.loadVaultTokenRow(id)).token_address;
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveVaultTokenAddress(vaultAddress: string): Promise<string | null> {
+    const key = vaultAddress.toLowerCase();
+    const cached = this.vaultTokenByVault.get(key);
+    if (cached) return cached;
+    try {
+      const token = (await this.evmContractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'vaultToken',
+      })) as string;
+      if (!token || /^0x0{40}$/i.test(token)) return null;
+      const normalized = token.toLowerCase();
+      this.vaultTokenByVault.set(key, normalized);
+      return normalized;
+    } catch (error) {
+      this.logger.warn(`vaultToken() read failed for ${vaultAddress}: ${error.message}`);
+      return null;
+    }
+  }
+
+  private async findEvmPairAddress(tokenAddress: string): Promise<string | null> {
+    const markets = await this.priceService.getDexScreenerMarkets([tokenAddress]);
+    return markets.get(tokenAddress.toLowerCase())?.pair_address ?? null;
+  }
+
+  private async getEvmVaultTokenOhlc(tokenAddress: string, days: number) {
+    const pairAddress = await this.findEvmPairAddress(tokenAddress);
+    if (!pairAddress) return { ohlcv: [] as TokenOhlcvPoint[] };
+    const timeframe: 'hour' | 'day' = days <= 7 ? 'hour' : 'day';
+    const limit = days <= 1 ? 24 : days <= 7 ? 168 : days;
+    try {
+      const ohlcv = await this.priceService.getGeckoTerminalOhlc(pairAddress, { timeframe, aggregate: 1, limit });
+      return { ohlcv: ohlcv as TokenOhlcvPoint[] };
+    } catch (error) {
+      this.logger.error(`GeckoTerminal OHLC failed for vault token ${tokenAddress}: ${error.message}`);
+      return { ohlcv: [] as TokenOhlcvPoint[] };
     }
   }
 
@@ -766,9 +853,10 @@ export class TokensService {
     return TOKEN_CHART_INTERVALS.includes(value as TokenChartInterval) ? (value as TokenChartInterval) : '1d';
   }
 
-  private toVaultTokenDetail(row: Awaited<ReturnType<MarketService['getVaultTokenById']>>): TokenDetail {
+  private toVaultTokenDetail(row: Awaited<ReturnType<TokensService['loadVaultTokenRow']>>): TokenDetail {
     const copyValue = this.buildVaultCopyValue(row);
     const swap = this.buildVaultSwap(row, copyValue);
+    const isEvmToken = Boolean(row.token_address);
     return {
       id: row.vault_id || row.id,
       source: 'vault',
@@ -802,9 +890,9 @@ export class TokensService {
       vault_id: row.vault_id ?? row.id,
       contract_address: row.contract_address ?? null,
       copy_value: copyValue,
-      explorer_url: null,
-      has_live_trades: false,
-      chart_kind: 'nav',
+      explorer_url: isEvmToken ? this.buildExplorerUrl('robinhood', copyValue) : null,
+      has_live_trades: isEvmToken,
+      chart_kind: isEvmToken ? 'usd' : 'nav',
       overview_fields: ['fdv', 'liquidity', 'mcap'],
       swap,
     };
@@ -887,6 +975,7 @@ export class TokensService {
   private buildVaultCopyValue(row: {
     chain_type?: string | null;
     contract_address?: string | null;
+    token_address?: string | null;
     script_hash?: string | null;
     asset_vault_name?: string | null;
     vault_id?: string | null;
@@ -894,7 +983,7 @@ export class TokensService {
   }): string {
     const fallback = row.vault_id || row.id || '';
     if (row.chain_type === 'robinhood') {
-      return row.contract_address || fallback;
+      return row.token_address || row.contract_address || fallback;
     }
     const policyId = row.script_hash || '';
     const assetName = row.asset_vault_name || '';
@@ -907,12 +996,13 @@ export class TokensService {
     row: {
       chain_type?: string | null;
       contract_address?: string | null;
+      token_address?: string | null;
       has_active_lp?: boolean;
     },
     copyValue: string
   ): TokenSwap | null {
-    if (row.chain_type === 'robinhood' && row.contract_address) {
-      return { kind: 'uniswap', token: row.contract_address };
+    if (row.chain_type === 'robinhood' && (row.token_address || row.contract_address)) {
+      return { kind: 'uniswap', token: row.token_address || row.contract_address };
     }
     if (row.chain_type === 'cardano' && row.has_active_lp && copyValue) {
       return { kind: 'dexhunter', token: copyValue };
