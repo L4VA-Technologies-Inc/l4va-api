@@ -7,12 +7,15 @@ import { encodeAbiParameters, formatUnits, isAddress, keccak256, parseAbi, type 
 
 import {
   computeAllocation,
+  computeNav,
   planBuys,
   planSells,
   validateWeights,
   type HoldingValue,
   type PlanOptions,
   type PortfolioState,
+  type SkippedLeg,
+  type SkipReason,
   type WeightTarget,
 } from './index-rebalance.planner';
 import { IndexSwapRouteService, NATIVE } from './index-swap-route.service';
@@ -318,6 +321,10 @@ export class IndexVaultService {
   ): Promise<{
     sells: { asset: string; amountIn: string; valueNative: string; exit: boolean }[];
     buys: { asset: string; nativeIn: string }[];
+    /** Needed legs that were not planned, with why — so an empty plan is never mistaken for "on target". */
+    skipped: { asset: string; side: 'sell' | 'buy'; reason: SkipReason; valueNative: string }[];
+    minTradeNative: string;
+    navNative: string;
   }> {
     const vault = await this.requireIndexVault(vaultId);
     if (!vault.contract_address) throw new BadRequestException('Vault is not deployed yet');
@@ -332,7 +339,8 @@ export class IndexVaultService {
       targets.map(t => t.asset as Address)
     );
 
-    const sells = planSells(state, targets, opts);
+    const skipped: SkippedLeg[] = [];
+    const sells = planSells(state, targets, opts, skipped);
     const afterSells: PortfolioState = {
       nativeAvailable: state.nativeAvailable + sells.reduce((s, x) => s + x.valueNative, 0n),
       holdings: state.holdings.map(h => {
@@ -341,9 +349,12 @@ export class IndexVaultService {
         return { asset: h.asset, balance: h.balance - sold.amountIn, valueNative: h.valueNative - sold.valueNative };
       }),
     };
-    const buys = planBuys(afterSells, targets, opts);
+    const buys = planBuys(afterSells, targets, opts, skipped);
 
     return {
+      skipped: skipped.map(s => ({ ...s, valueNative: s.valueNative.toString() })),
+      minTradeNative: opts.minTradeNative.toString(),
+      navNative: computeNav(state).toString(),
       sells: sells.map(s => ({
         asset: s.asset,
         amountIn: s.amountIn.toString(),

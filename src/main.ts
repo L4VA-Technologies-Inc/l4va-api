@@ -54,9 +54,11 @@ async function bootstrap(): Promise<void> {
   // prefixed path since this middleware runs before Nest routing/versioning.
   app.use('/api/v1/blockchain/evm-tx-webhook', bodyParser.raw({ type: 'application/json', limit: '50mb' }));
 
-  // JSON body parser for all other routes with increased limit
-  app.use(bodyParser.json({ limit: '50mb' }));
-  app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+  // JSON body parser for all other routes. Kept small to limit the DoS surface;
+  // the webhook endpoints above declare their own 50mb raw limit. File uploads
+  // go through multipart (FileInterceptor/multer), not this parser.
+  app.use(bodyParser.json({ limit: '5mb' }));
+  app.use(bodyParser.urlencoded({ extended: true, limit: '5mb' }));
 
   app.setGlobalPrefix('api');
   app.enableVersioning({
