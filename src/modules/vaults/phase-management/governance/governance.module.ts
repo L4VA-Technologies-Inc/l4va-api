@@ -117,7 +117,6 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     DistributionService,
     EvmDistributionService,
     ExpansionService,
-    EvmSnapshotService,
   ],
 })
 export class GovernanceModule {}

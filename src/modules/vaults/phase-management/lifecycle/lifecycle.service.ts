@@ -23,7 +23,6 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
-import { EvmSnapshotService } from '@/modules/vaults/phase-management/governance/evm-snapshot.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import {
   EmptyAllocationError,
@@ -101,8 +100,7 @@ export class LifecycleService {
     private readonly evmLockTimePricingService: EvmLockTimePricingService,
     private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
     private readonly evmTerminationService: EvmTerminationService,
-    private readonly indexVaultService: IndexVaultService,
-    private readonly evmSnapshotService: EvmSnapshotService
+    private readonly indexVaultService: IndexVaultService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -3315,15 +3313,6 @@ export class LifecycleService {
         this.logger.log(
           `EVM airdrop sweep: batches=${stats.batchesBroadcast} claims=${stats.claimsBroadcast} alreadyOnChain=${stats.alreadyClaimedSkipped}`
         );
-      }
-      // Holders just received VT; a governance snapshot taken earlier (e.g. during LP
-      // seeding) would leave them with zero voting power until the next 3h sweep.
-      for (const vaultId of stats.vaultIds ?? []) {
-        try {
-          await this.evmSnapshotService.createSnapshot(vaultId);
-        } catch (err) {
-          this.logger.warn(`Post-airdrop EVM snapshot failed for vault ${vaultId}: ${(err as Error).message}`);
-        }
       }
     } catch (err) {
       this.logger.error(`EVM airdrop sweep failed: ${(err as Error).message}`);
