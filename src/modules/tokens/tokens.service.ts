@@ -767,9 +767,11 @@ export class TokensService {
   /** Vault market row with the EVM vault-token address resolved (the market row only stores the vault address). */
   private async loadVaultTokenRow(id: string) {
     const row = await this.marketService.getVaultTokenById(id);
+    // evm-market-stats overwrites contract_address with the vault token once the LP is live;
+    // before that it is still the vault address. vaultToken() only succeeds on the vault.
     const tokenAddress =
       row.chain_type === 'robinhood' && row.contract_address
-        ? await this.resolveVaultTokenAddress(row.contract_address)
+        ? ((await this.resolveVaultTokenAddress(row.contract_address)) ?? row.contract_address.toLowerCase())
         : null;
     return { ...row, token_address: tokenAddress };
   }
@@ -797,7 +799,7 @@ export class TokensService {
       this.vaultTokenByVault.set(key, normalized);
       return normalized;
     } catch (error) {
-      this.logger.warn(`vaultToken() read failed for ${vaultAddress}: ${error.message}`);
+      this.logger.debug(`vaultToken() read failed for ${vaultAddress}: ${error.message}`);
       return null;
     }
   }
