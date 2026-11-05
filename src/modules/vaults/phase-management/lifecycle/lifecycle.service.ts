@@ -23,6 +23,7 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
+import { latestOutstandingAcquireDeadline } from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import {
   EmptyAllocationError,
@@ -56,6 +57,9 @@ import {
   VaultFailureReason,
   VaultStatus,
 } from '@/types/vault.types';
+
+/** Margin after the last outstanding contribution signature expires (block inclusion, clock skew). */
+const EVM_EARLY_CLOSE_MARGIN_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class LifecycleService {
@@ -2068,6 +2072,39 @@ export class LifecycleService {
    * Find acquire expansion vaults that have reached their ADA maximum
    * Queries acquire expansion proposals to check if currentAdaRaised >= maxAda
    */
+  /**
+   * Robinhood: once an acquire expansion's on-chain `nativeCollected` reaches the proposal's
+   * "Maximum ETH", move its end to when the last still-usable contribution signature expires
+   * (now, if none), plus a small margin — if that is earlier than the current end. Idempotent.
+   */
+  private async shortenAcquireExpansionAtMax(
+    vault: { id: string; expansion_phase_start?: Date | null; expansion_duration?: number | string | null },
+    nativeCollected: bigint
+  ): Promise<void> {
+    const proposal = await this.proposalRepository.findOne({
+      where: { vaultId: vault.id, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
+      order: { executionDate: 'DESC' },
+    });
+    const cfg = proposal?.metadata?.acquireExpansion;
+    if (!cfg || cfg.noMax || !cfg.maxAda) return;
+
+    // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
+    const maxWei = BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n;
+    if (maxWei <= 0n || nativeCollected < maxWei) return;
+
+    const start = new Date(vault.expansion_phase_start as Date).getTime();
+    const currentEnd = start + Number(vault.expansion_duration ?? 0);
+    const lastDeadline = await latestOutstandingAcquireDeadline(this.dataSource.getRepository(Transaction), vault.id);
+    const closeAt = Math.max(Date.now(), (lastDeadline ?? 0) * 1000) + EVM_EARLY_CLOSE_MARGIN_MS;
+    if (closeAt >= currentEnd) return;
+
+    await this.vaultRepository.update({ id: vault.id }, { expansion_duration: closeAt - start });
+    this.logger.log(
+      `EVM acquire expansion reached its maximum: vault=${vault.id} collected=${nativeCollected} max=${maxWei} wei — ` +
+        `window now ends ${new Date(closeAt).toISOString()} (was ${new Date(currentEnd).toISOString()})`
+    );
+  }
+
   private async findAcquireExpansionVaultsAtAdaMax(): Promise<
     Pick<
       Vault,
@@ -2763,6 +2800,15 @@ export class LifecycleService {
           !!vault.expansion_phase_start &&
           vault.expansion_duration != null &&
           new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration) <= Date.now();
+
+        // Acquire expansion that reached its "Maximum ETH" ends early: right away when no
+        // contribution signature is still usable, otherwise once the last one expires (ETH
+        // landing after the snapshot would sit in no Merkle leaf). New signatures are refused
+        // at the maximum. The duration-ended path then snapshots, closes the cycle
+        // (vault → locked) and mints the VT.
+        if (vault.vault_status === VaultStatus.acquire_expansion && !expansionEnded && vault.expansion_phase_start) {
+          await this.shortenAcquireExpansionAtMax(vault, cycleView.nativeCollected);
+        }
         const acquireEnded =
           expansionEnded || cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
         if (!assetEnded || !acquireEnded) {

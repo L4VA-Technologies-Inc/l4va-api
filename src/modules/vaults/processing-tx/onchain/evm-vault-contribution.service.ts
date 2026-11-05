@@ -2,18 +2,20 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { parseEther, type Address, type Hex } from 'viem';
+import { formatEther, parseEther, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
+import { sumOutstandingAcquireSignatures } from './evm-acquire-signatures';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { VAULT_ABI } from './vault.abi';
 
 import { Asset } from '@/database/asset.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
@@ -24,6 +26,7 @@ import {
   type EvmGovernanceFeePayment,
 } from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
 import { AssetType } from '@/types/asset.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
@@ -145,7 +148,12 @@ export class EvmVaultContributionService {
   private readonly mintingSignerPrivateKey: Hex;
   private readonly mintingSignerAddress: Address;
   /** Validity window for issued authorization signatures. */
-  private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour
+  private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour: asset contributions (approvals, NFT batches)
+  /**
+   * ETH acquires are one transaction, included within seconds on Robinhood Chain. A short life
+   * keeps acquire-expansion reservations (and the wait before an early close at the maximum) short.
+   */
+  private readonly ACQUIRE_AUTH_VALIDITY_SECONDS = 15 * 60;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -254,7 +262,10 @@ export class EvmVaultContributionService {
     }
 
     const deadline = Math.min(
-      Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS,
+      Math.floor(Date.now() / 1000) +
+        (transaction.type === TransactionType.acquire
+          ? this.ACQUIRE_AUTH_VALIDITY_SECONDS
+          : this.AUTH_VALIDITY_SECONDS),
       ...(expansionEndMs !== null ? [Math.floor(expansionEndMs / 1000)] : [])
     );
 
@@ -296,6 +307,18 @@ export class EvmVaultContributionService {
       });
     }
 
+    if (vault.vault_status === VaultStatus.acquire_expansion && transaction.type === TransactionType.acquire) {
+      const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
+      await this.reserveAcquireExpansionSignature(
+        vault.id,
+        vaultAddress,
+        currentCycleId,
+        transaction,
+        nativeWei,
+        deadline
+      );
+    }
+
     return {
       txId,
       vaultAddress,
@@ -304,6 +327,73 @@ export class EvmVaultContributionService {
       calls,
       feePayment: null,
     };
+  }
+
+  /**
+   * Acquire expansion: the signature is the real gate, so the "Maximum ETH" is enforced here
+   * exactly — ETH already in the cycle on-chain, plus every other still-valid signature, plus this
+   * one, must fit. The signature's deadline and ETH amount are stored on the transaction, so the
+   * lifecycle can close the window as soon as the last outstanding signature expires once the
+   * maximum is reached (instead of waiting a fixed hour).
+   */
+  private async reserveAcquireExpansionSignature(
+    vaultId: string,
+    vaultAddress: Address,
+    cycleId: bigint,
+    transaction: Transaction,
+    nativeWei: bigint,
+    deadline: number
+  ): Promise<void> {
+    const proposal = await this.transactionRepository.manager.findOne(Proposal, {
+      where: { vaultId, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
+      order: { executionDate: 'DESC' },
+    });
+    const cfg = proposal?.metadata?.acquireExpansion;
+    const maxWei =
+      cfg && !cfg.noMax && cfg.maxAda && nativeWei > 0n
+        ? // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
+          BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n
+        : null;
+
+    // Check-and-reserve must be atomic: two concurrent requests could each see room and together
+    // overfill the maximum. A transaction-scoped advisory lock per vault serialises them across
+    // every API instance; each one sees the reservation the previous one committed.
+    await this.transactionRepository.manager.transaction(async em => {
+      await em.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`acquire-expansion:${vaultId}`]);
+
+      if (maxWei !== null) {
+        const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
+        const reservedWei = await sumOutstandingAcquireSignatures(
+          em.getRepository(Transaction),
+          vaultId,
+          transaction.id
+        );
+        if (nativeCollected + reservedWei + nativeWei > maxWei) {
+          const used = nativeCollected + reservedWei;
+          const left = maxWei > used ? maxWei - used : 0n;
+          throw new BadRequestException(
+            nativeCollected >= maxWei
+              ? 'This acquire expansion has reached its maximum. No more ETH can be accepted.'
+              : left === 0n
+                ? 'The rest of this acquire expansion is reserved by contributions in progress. ' +
+                  'Try again in a few minutes in case some of them are not completed.'
+                : `This acquire expansion can accept only ${formatEther(left)} more ETH right now.`
+          );
+        }
+      }
+
+      // Re-read under the lock so the reservation is written onto the latest metadata.
+      const current = await em.getRepository(Transaction).findOne({ where: { id: transaction.id } });
+      const meta = (current?.metadata ?? transaction.metadata) as any; // jsonb, as in confirmContribution
+      if (meta && !Array.isArray(meta)) {
+        await em
+          .getRepository(Transaction)
+          .update(
+            { id: transaction.id },
+            { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
+          );
+      }
+    });
   }
 
   /**

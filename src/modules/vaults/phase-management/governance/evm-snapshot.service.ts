@@ -318,6 +318,11 @@ export class EvmSnapshotService {
   ): Promise<void> {
     balances.delete(vaultAddress.toLowerCase());
     balances.delete('0x0000000000000000000000000000000000000000');
+    // The v4 PoolManager holds the VT of every v4 pool. Drop it even when the VaultToken never
+    // excluded it (no LP of ours): its VT is attributed to position owners, so keeping it would
+    // double-count, and as a contract it could never claim a distribution share.
+    const poolManager = await this.lpVoting.poolManagerAddress(vaultId).catch(() => null);
+    if (poolManager) balances.delete(poolManager.toLowerCase());
 
     const holders = [...balances.keys()];
     const excluded: string[] = [];

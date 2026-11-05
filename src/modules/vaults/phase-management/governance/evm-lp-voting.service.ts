@@ -48,6 +48,11 @@ interface VtPool {
   initBlock: bigint;
 }
 
+/** Uniswap v4 PoolManager per chain, used only when neither env nor an LP adapter provides it. */
+const KNOWN_V4_POOL_MANAGER: Record<number, Address> = {
+  4663: '0x8366a39CC670B4001A1121B8F6A443A643e40951', // Robinhood Chain mainnet
+};
+
 /**
  * Voting weight for VT that holders put into Uniswap v4 pools.
  *
@@ -144,6 +149,19 @@ export class EvmLpVotingService {
       (a): a is string => !!a && /^0x[0-9a-fA-F]{40}$/.test(a)
     );
     return [...new Set(all.map(a => a.toLowerCase()))] as Address[];
+  }
+
+  /**
+   * The Uniswap v4 PoolManager, which custodies the VT of EVERY v4 pool (singleton). It must never
+   * count as a holder: its VT is attributed to position owners instead, so counting it too would
+   * double-count, and it can never claim a distribution share. Resolved even when the vault has no
+   * LP adapter of ours (a third party can still create a v4 pool for its VT).
+   */
+  async poolManagerAddress(vaultId: string): Promise<Address | null> {
+    const infra = await this.v4Infra(await this.lpAdapters(vaultId));
+    if (infra) return infra.poolManager;
+    const chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || 0);
+    return KNOWN_V4_POOL_MANAGER[chainId] ?? null;
   }
 
   /** v4 core addresses from env, else from an LP adapter (a v2 adapter has none). */

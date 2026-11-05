@@ -2042,6 +2042,13 @@ export class GovernanceService {
 
         // ── EVM acquire expansion ─────────────────────────────────────────────
         if (vault.chain_type === ChainType.robinhood) {
+          // "No duration limit" would open the on-chain acquire window for a year. Every
+          // Robinhood acquire expansion must end at a set time.
+          if (acquireExpansionNoLimit) {
+            throw new BadRequestException(
+              'Acquire expansion on Robinhood vaults needs a duration. "No duration limit" is not available.'
+            );
+          }
           // Market price is not applied when an EVM acquire-expansion cycle is allocated: the
           // buyers would receive the vault's full VT supply again. Limit price only until it is.
           if (acquireExpansionPriceType === 'market') {
