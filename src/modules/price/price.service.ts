@@ -388,22 +388,30 @@ export class PriceService {
   }
 
   /**
-   * GeckoTerminal on-chain data with fallbacks, in order:
-   *  1. CoinGecko on-chain API with our key (own rate-limit bucket; pro-api URL → pro header),
-   *  2. public GeckoTerminal API (~30 req/min per IP).
+   * GeckoTerminal on-chain data (Robinhood pools) with fallbacks:
+   *  - demo key: public GeckoTerminal first (~30 req/min per IP), CoinGecko on-chain only on failure,
+   *    so the shared monthly demo quota (also used for the ETH price) isn't spent on charts;
+   *  - pro key (`pro-api` URL): CoinGecko on-chain first (500 req/min), GeckoTerminal as fallback.
    * Callers additionally fall back to the last good response (`<cacheKey>_stale`, 24h).
    */
   private async geckoOnchainGet(path: string, params: Record<string, unknown>): Promise<{ data: any }> {
-    const sources: Array<{ name: string; url: string; headers: Record<string, string> }> = [];
+    type Source = { name: string; url: string; headers: Record<string, string> };
+    const geckoTerminal: Source = {
+      name: 'GeckoTerminal',
+      url: `https://api.geckoterminal.com/api/v2${path}`,
+      headers: {},
+    };
+    const sources: Source[] = [geckoTerminal];
     if (this.coinGeckoApiKey && this.coinGeckoApiUrl) {
       const isPro = this.coinGeckoApiUrl.includes('pro-api');
-      sources.push({
+      const coinGecko: Source = {
         name: 'CoinGecko onchain',
         url: `${this.coinGeckoApiUrl}/v3/onchain${path}`,
         headers: { [isPro ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key']: this.coinGeckoApiKey },
-      });
+      };
+      if (isPro) sources.unshift(coinGecko);
+      else sources.push(coinGecko);
     }
-    sources.push({ name: 'GeckoTerminal', url: `https://api.geckoterminal.com/api/v2${path}`, headers: {} });
 
     let lastError: unknown;
     for (const source of sources) {
