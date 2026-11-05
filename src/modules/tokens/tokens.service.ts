@@ -4,6 +4,7 @@ import * as path from 'path';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BaseError, ContractFunctionRevertedError } from 'viem';
 
 import {
   TOKEN_CHART_INTERVALS,
@@ -687,12 +688,7 @@ export class TokensService {
     const days = INTERVAL_TO_DAYS[safeInterval];
 
     if (kind === 'vault') {
-      const evmToken = await this.findEvmVaultTokenAddress(id);
-      if (evmToken) {
-        const result = await this.getEvmVaultTokenOhlc(evmToken, days);
-        if (result.ohlcv.length) return { id, interval: safeInterval, ohlcv: result.ohlcv };
-      }
-      return this.getVaultTokenOhlcUsd(id, safeInterval);
+      return this.getVaultOhlc(id, safeInterval, days);
     }
 
     if (kind === 'robinhood') {
@@ -701,8 +697,10 @@ export class TokensService {
         return { id: result.id, interval: safeInterval, ohlcv: result.ohlcv || [] };
       } catch (error) {
         if (error instanceof NotFoundException) {
+          // Not a listed Robinhood memecoin — it may be a vault token opened by its address
+          // (the market row's contract_address), so use the vault path (Uniswap pool via GT).
           try {
-            return this.getVaultTokenOhlcUsd(id, safeInterval);
+            return await this.getVaultOhlc(id, safeInterval, days);
           } catch {
             throw error;
           }
@@ -723,24 +721,7 @@ export class TokensService {
   async getTokenTrades(id: string, limit = 40) {
     const kind = this.detectTokenKind(id);
     if (kind === 'vault') {
-      const evmToken = await this.findEvmVaultTokenAddress(id);
-      if (!evmToken) return { id, trades: [] as Array<Record<string, unknown>> };
-      const pairAddress = await this.findEvmPairAddress(evmToken);
-      if (!pairAddress) return { id, trades: [] as Array<Record<string, unknown>> };
-      try {
-        const trades = await this.priceService.getGeckoTerminalTrades(pairAddress, evmToken, limit);
-        return {
-          id,
-          pair_address: pairAddress,
-          trades: trades.map(trade => ({
-            ...trade,
-            tx_url: trade.tx_hash ? `https://robinhoodchain.blockscout.com/tx/${trade.tx_hash}` : null,
-          })),
-        };
-      } catch (error) {
-        this.logger.error(`GeckoTerminal trades failed for vault token ${evmToken}: ${error.message}`);
-        return { id, pair_address: pairAddress, trades: [] };
-      }
+      return this.getVaultTrades(id, limit);
     }
     if (kind !== 'robinhood') {
       return { id, trades: [] as Array<Record<string, unknown>> };
@@ -758,9 +739,42 @@ export class TokensService {
       };
     } catch (error) {
       if (error instanceof NotFoundException) {
-        return { id, trades: [] };
+        // Vault token opened by its address — not in the memecoin list, but has a Uniswap pool.
+        return this.getVaultTrades(id, limit);
       }
       throw error;
+    }
+  }
+
+  /** Vault chart: Uniswap pool candles (GeckoTerminal) when the vault token trades, else vault NAV. */
+  private async getVaultOhlc(id: string, interval: TokenChartInterval, days: number) {
+    const evmToken = await this.findEvmVaultTokenAddress(id);
+    if (evmToken) {
+      const result = await this.getEvmVaultTokenOhlc(evmToken, days);
+      if (result.ohlcv.length) return { id, interval, ohlcv: result.ohlcv };
+    }
+    return this.getVaultTokenOhlcUsd(id, interval);
+  }
+
+  /** Vault token trades from its Uniswap pool (GeckoTerminal). `id` = vault id or token address. */
+  private async getVaultTrades(id: string, limit: number) {
+    const evmToken = await this.findEvmVaultTokenAddress(id);
+    if (!evmToken) return { id, trades: [] as Array<Record<string, unknown>> };
+    const pairAddress = await this.findEvmPairAddress(evmToken);
+    if (!pairAddress) return { id, trades: [] as Array<Record<string, unknown>> };
+    try {
+      const trades = await this.priceService.getGeckoTerminalTrades(pairAddress, evmToken, limit);
+      return {
+        id,
+        pair_address: pairAddress,
+        trades: trades.map(trade => ({
+          ...trade,
+          tx_url: trade.tx_hash ? `https://robinhoodchain.blockscout.com/tx/${trade.tx_hash}` : null,
+        })),
+      };
+    } catch (error) {
+      this.logger.error(`GeckoTerminal trades failed for vault token ${evmToken}: ${error.message}`);
+      return { id, pair_address: pairAddress, trades: [] };
     }
   }
 
@@ -799,6 +813,13 @@ export class TokensService {
       this.vaultTokenByVault.set(key, normalized);
       return normalized;
     } catch (error) {
+      // A revert means the address is not a vault — after the LP goes live evm-market-stats
+      // stores the vault token itself in contract_address. Cache it as its own token so we
+      // don't hit the RPC (and revert) on every request. Transient RPC errors are not cached.
+      if (error instanceof BaseError && error.walk(e => e instanceof ContractFunctionRevertedError)) {
+        this.vaultTokenByVault.set(key, key);
+        return key;
+      }
       this.logger.debug(`vaultToken() read failed for ${vaultAddress}: ${error.message}`);
       return null;
     }
