@@ -141,4 +141,20 @@ export class GetTerminationAssetsDto {
 
   @ApiProperty({ description: 'Overall validation status', type: TerminationValidationDto })
   validation: TerminationValidationDto;
+
+  @ApiPropertyOptional({
+    description:
+      'Robinhood only: how an EVM termination works for this vault — protocol LP that is withdrawn from ' +
+      'Uniswap first, and the redemption window (holders burn VT for a pro-rata share of every asset).',
+  })
+  evm?: {
+    lp: {
+      protocol: string | null;
+      /** Share of the pool the vault owns, 0..100. */
+      vaultSharePct: number | null;
+      /** The vault's position value in native wei (both sides). */
+      valueNative: string | null;
+    } | null;
+    claimWindowDays: number;
+  };
 }
