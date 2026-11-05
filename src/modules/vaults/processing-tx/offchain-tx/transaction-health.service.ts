@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createPublicClient, http, PublicClient } from 'viem';
+import { createPublicClient, PublicClient } from 'viem';
 
 import { BlockchainWebhookService } from '../onchain/blockchain-webhook.service';
 import { EvmContributionBackfillService } from '../onchain/evm-contribution-backfill.service';
@@ -12,6 +12,7 @@ import { EvmVaultEventReconciler, VaultLogInput } from '../onchain/evm-vault-eve
 
 import { TransactionsService } from './transactions.service';
 
+import { buildEvmTransport } from '@/common/evm/evm-transport';
 import { Transaction } from '@/database/transaction.entity';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -41,7 +42,7 @@ export class TransactionHealthService {
     const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
     if (evmRpcUrl) {
       this.evmClient = createPublicClient({
-        transport: http(evmRpcUrl),
+        transport: buildEvmTransport(this.configService, evmRpcUrl),
       }) as PublicClient;
     }
   }

@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import {
   createWalletClient,
   decodeEventLog,
-  http,
   type Abi,
   type Account,
   type Address,
@@ -14,6 +13,8 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { EvmContractReader } from './evm-contract-reader.service';
+
+import { buildEvmWriteTransport } from '@/common/evm/evm-transport';
 
 export interface AdminTxOptions<TAbi extends Abi, TFunctionName extends string> {
   address: Address;
@@ -106,7 +107,7 @@ export class EvmAdminSigner {
     this.publicClient = this.contractReader.publicClient;
     this.walletClient = createWalletClient({
       account: this.account,
-      transport: http(rpcUrl),
+      transport: buildEvmWriteTransport(rpcUrl),
     });
   }
 

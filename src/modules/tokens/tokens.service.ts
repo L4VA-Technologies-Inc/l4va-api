@@ -827,7 +827,8 @@ export class TokensService {
 
   private async findEvmPairAddress(tokenAddress: string): Promise<string | null> {
     const markets = await this.priceService.getDexScreenerMarkets([tokenAddress]);
-    return markets.get(tokenAddress.toLowerCase())?.pair_address ?? null;
+    const pair = markets.get(tokenAddress.toLowerCase())?.pair_address ?? null;
+    return pair ?? (await this.priceService.findGeckoTerminalTopPool(tokenAddress));
   }
 
   private async getEvmVaultTokenOhlc(tokenAddress: string, days: number) {
