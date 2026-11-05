@@ -9,7 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { Brackets, Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
-import { createPublicClient, defineChain, getAddress, http, isAddress, type Hex } from 'viem';
+import { createPublicClient, defineChain, getAddress, isAddress, type Hex } from 'viem';
 import { createSiweMessage, generateSiweNonce } from 'viem/siwe';
 
 import { PriceService } from '../price/price.service';
@@ -18,6 +18,7 @@ import { UsersService } from '../users/users.service';
 import { LoginReq } from './dto/login.req';
 import { LoginRes } from './dto/login.res';
 
+import { buildEvmTransport } from '@/common/evm/evm-transport';
 import { Vault } from '@/database/vault.entity';
 import { transformImageToUrl } from '@/helpers';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
@@ -108,7 +109,7 @@ export class AuthService {
         nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
         rpcUrls: { default: { http: [rpcUrl] } },
       });
-      this.evmPublicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+      this.evmPublicClient = createPublicClient({ chain, transport: buildEvmTransport(this.configService, rpcUrl) });
     }
     return this.evmPublicClient;
   }

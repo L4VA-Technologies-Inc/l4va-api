@@ -6,7 +6,7 @@ import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
-import { createPublicClient, defineChain, formatUnits, http, parseAbi, type Address } from 'viem';
+import { createPublicClient, defineChain, formatUnits, parseAbi, type Address } from 'viem';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
@@ -20,6 +20,7 @@ import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summa
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 import { TapToolsClient } from './taptools.client';
 
+import { buildEvmTransport } from '@/common/evm/evm-transport';
 import { Asset } from '@/database/asset.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -2548,7 +2549,7 @@ export class TaptoolsService {
       nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
       rpcUrls: { default: { http: [evmRpcUrl] } },
     });
-    return createPublicClient({ chain: robinhoodChain, transport: http(evmRpcUrl) });
+    return createPublicClient({ chain: robinhoodChain, transport: buildEvmTransport(this.configService, evmRpcUrl) });
   }
 
   /**

@@ -6,7 +6,6 @@ import {
   createPublicClient,
   defineChain,
   getAddress,
-  http,
   isAddress,
   isHash,
   keccak256,
@@ -15,6 +14,7 @@ import {
   type PublicClient,
 } from 'viem';
 
+import { buildEvmTransport } from '@/common/evm/evm-transport';
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { ChainType } from '@/types/vault.types';
@@ -114,7 +114,10 @@ export class EvmSwapVerifier {
         nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
         rpcUrls: { default: { http: [rpcUrl] } },
       });
-      this.client = createPublicClient({ chain, transport: http(rpcUrl) }) as PublicClient;
+      this.client = createPublicClient({
+        chain,
+        transport: buildEvmTransport(this.configService, rpcUrl),
+      }) as PublicClient;
     }
     return this.client;
   }

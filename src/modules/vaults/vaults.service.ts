@@ -11,7 +11,6 @@ import {
   parseEther,
   createPublicClient,
   defineChain,
-  http,
   parseAbi,
   type Address,
 } from 'viem';
@@ -64,6 +63,7 @@ import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 import { EvmVaultOnchainStatus, VAULT_ABI } from './processing-tx/onchain/vault.abi';
 
+import { buildEvmTransport } from '@/common/evm/evm-transport';
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -328,7 +328,7 @@ export class VaultsService {
       nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
       rpcUrls: { default: { http: [evmRpcUrl] } },
     });
-    return createPublicClient({ chain: robinhoodChain, transport: http(evmRpcUrl) });
+    return createPublicClient({ chain: robinhoodChain, transport: buildEvmTransport(this.configService, evmRpcUrl) });
   }
 
   /**
