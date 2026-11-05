@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createWalletClient, http, type Account, type Address, type Hex } from 'viem';
+import { createWalletClient, type Account, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { EvmContractReader } from '../vaults/processing-tx/onchain/evm-contract-reader.service';
@@ -22,6 +22,7 @@ import {
 } from './fee-keeper.math';
 import { assertRouteMatches, ZERO_ADDRESS } from './fee-keeper.routes';
 
+import { buildEvmWriteTransport } from '@/common/evm/evm-transport';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { ChainType } from '@/types/vault.types';
@@ -118,7 +119,10 @@ export class FeeKeeperService implements OnModuleInit {
       return;
     }
     this.account = privateKeyToAccount(this.config.privateKey);
-    this.walletClient = createWalletClient({ account: this.account, transport: http(this.config.rpcUrl) });
+    this.walletClient = createWalletClient({
+      account: this.account,
+      transport: buildEvmWriteTransport(this.config.rpcUrl),
+    });
     this.logger.log(
       `Fee keeper enabled: keeper=${this.account.address} converter=${this.config.feeConverter} ` +
         `routes=${this.config.routes.length} distribute=${this.config.distribute.enabled}`

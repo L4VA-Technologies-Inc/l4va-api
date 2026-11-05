@@ -7,7 +7,6 @@ import {
   defineChain,
   formatEther,
   getAddress,
-  http,
   type Account,
   type Address,
   type Hex,
@@ -15,6 +14,8 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { BURN_LOCK_ABI } from './burn-lock.abi';
+
+import { buildEvmTransport, buildEvmWriteTransport } from '@/common/evm/evm-transport';
 
 /** Keep the keeper topped up above this; below it every run logs a warning. */
 const LOW_BALANCE_WEI = 200_000_000_000_000n; // 0.0002 ETH ≈ 200+ burns at current gas
@@ -91,8 +92,12 @@ export class BurnLockService implements OnModuleInit {
       nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
       rpcUrls: { default: { http: [rpcUrl as string] } },
     });
-    this.publicClient = createPublicClient({ chain, transport: http(rpcUrl, { retryCount: 2 }) });
-    this.walletClient = createWalletClient({ account: this.account, chain, transport: http(rpcUrl) });
+    this.publicClient = createPublicClient({ chain, transport: buildEvmTransport(this.configService, rpcUrl) });
+    this.walletClient = createWalletClient({
+      account: this.account,
+      chain,
+      transport: buildEvmWriteTransport(rpcUrl),
+    });
   }
 
   async onModuleInit(): Promise<void> {
