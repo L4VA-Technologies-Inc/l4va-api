@@ -15,6 +15,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
+import { formatUnits } from 'viem';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
@@ -54,11 +55,15 @@ import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
+import { EvmLpStatus } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
 import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -175,7 +180,9 @@ export class GovernanceService {
     private readonly snapshotService: SnapshotService,
     private readonly evmSnapshotService: EvmSnapshotService,
     private readonly uniswapQuoteService: UniswapQuoteService,
-    private readonly indexVaultService: IndexVaultService
+    private readonly indexVaultService: IndexVaultService,
+    private readonly evmLiquidityService: EvmLiquidityService,
+    private readonly evmContractReader: EvmContractReader
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -3574,6 +3581,82 @@ export class GovernanceService {
         excludeExtraneousValues: true,
       });
 
+      // Index vaults buy their basket on-chain, so those holdings never appear as contributed
+      // rows above. Show what termination actually distributes: the live ERC-20 balances and
+      // the native ETH reserve. Ids are display-only (proposal creation does not read them).
+      if (vault.vault_archetype === VaultArchetype.index_weighted) {
+        const { portfolio } = await this.indexVaultService.getOverview(vaultId);
+        const fmt = (raw: string, decimals: number) => {
+          const value = Number(formatUnits(BigInt(raw || '0'), decimals));
+          return value >= 1
+            ? value.toLocaleString('en', { maximumFractionDigits: 4 })
+            : new Intl.NumberFormat('en', { maximumSignificantDigits: 4 }).format(value);
+        };
+        for (const a of portfolio.assets) {
+          if (BigInt(a.balance || '0') === 0n) continue;
+          assetDtos.push({
+            id: `onchain:${a.assetAddress}`,
+            name: a.symbol,
+            policy_id: a.assetAddress,
+            asset_id: a.assetAddress,
+            quantity: a.balance,
+            formattedQuantity: fmt(a.balance, a.decimals),
+            imageUrl: a.image,
+            type: AssetType.FT,
+          } as unknown as AssetBuySellDto);
+        }
+        if (BigInt(portfolio.reserve.valueNative || '0') > 0n) {
+          assetDtos.push({
+            id: 'onchain:native',
+            name: 'ETH',
+            policy_id: '',
+            asset_id: '',
+            quantity: portfolio.reserve.valueNative,
+            formattedQuantity: fmt(portfolio.reserve.valueNative, 18),
+            imageUrl: null,
+            type: AssetType.FT,
+          } as unknown as AssetBuySellDto);
+        }
+      }
+
+      let evm: GetTerminationAssetsDto['evm'];
+      if (vault.chain_type === ChainType.robinhood) {
+        // Non-index RH vaults: native ETH in custody is distributed too, but never appears
+        // as a contributed asset row (index vaults already list their reserve above).
+        if (vault.vault_archetype !== VaultArchetype.index_weighted && vault.contract_address) {
+          try {
+            const wei = await this.evmContractReader.publicClient.getBalance({
+              address: vault.contract_address as `0x${string}`,
+            });
+            if (wei > 0n) {
+              assetDtos.push({
+                id: 'onchain:native',
+                name: 'ETH',
+                policy_id: '',
+                asset_id: '',
+                quantity: wei.toString(),
+                formattedQuantity: new Intl.NumberFormat('en', { maximumSignificantDigits: 4 }).format(
+                  Number(formatUnits(wei, 18))
+                ),
+                imageUrl: null,
+                type: AssetType.FT,
+              } as unknown as AssetBuySellDto);
+            }
+          } catch (err) {
+            this.logger.warn(`Termination preview: ETH balance read failed for ${vault.id}: ${(err as Error).message}`);
+          }
+        }
+
+        const lp = await this.evmLiquidityService.getVaultLp(vault.id).catch(() => null);
+        evm = {
+          lp:
+            lp && lp.status === EvmLpStatus.provided
+              ? { protocol: lp.protocol, vaultSharePct: lp.vaultSharePct, valueNative: lp.vaultValueNative }
+              : null,
+          claimWindowDays: this.systemSettingsService.evmTerminationSweepDelayDays,
+        };
+      }
+
       // Get LP validation info
       const lpValidation = await this.validateLpForTermination(vault);
 
@@ -3590,6 +3673,7 @@ export class GovernanceService {
           warnings: lpValidation.warning ? [lpValidation.warning] : [],
           blockingReason: lpValidation.blockingReason,
         },
+        ...(evm ? { evm } : {}),
       };
     } catch (error) {
       if (error instanceof NotFoundException) {
