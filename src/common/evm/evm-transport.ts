@@ -12,19 +12,41 @@ const ALCHEMY_NETWORK_BY_CHAIN_ID: Record<number, string> = {
   46630: 'robinhood-testnet',
 };
 
+/**
+ * Keyless public RPCs, last in line (after our own + Alchemy). Rate-limited, no SLA — they only keep
+ * reads alive while every configured node is down. Probed 2026-11-05: all serve eth_call on the right
+ * chain id; publicnode/drpc reject eth_getLogs on mainnet (viem then just moves to the next node).
+ * Disable with EVM_RPC_PUBLIC_FALLBACKS=false.
+ */
+const PUBLIC_RPCS_BY_CHAIN_ID: Record<number, string[]> = {
+  4663: [
+    'https://rpc.mainnet.chain.robinhood.com',
+    'https://robinhood-rpc.publicnode.com',
+    'https://robinhood.drpc.org',
+    'https://robinhood.daybreak-rpc.network',
+  ],
+  46630: [
+    'https://rpc.testnet.chain.robinhood.com',
+    'https://robinhood-sepolia-rpc.publicnode.com',
+    'https://robinhood-testnet.drpc.org',
+  ],
+};
+
 const normalize = (url: string): string => url.trim().replace(/\/$/, '');
 
 /**
  * Ordered, de-duplicated Robinhood RPC URLs for the configured chain:
  *  1. `primary` (defaults to EVM_RPC_URL),
  *  2. EVM_RPC_FALLBACK_URLS (comma-separated, optional),
- *  3. Alchemy for the SAME chain: ROBINHOOD_ALCHEMY_RPC_URL, or derived from ALCHEMY_API_KEY + EVM_CHAIN_ID.
+ *  3. Alchemy for the SAME chain: ROBINHOOD_ALCHEMY_RPC_URL, or derived from ALCHEMY_API_KEY + EVM_CHAIN_ID,
+ *  4. keyless public RPCs for EVM_CHAIN_ID (PUBLIC_RPCS_BY_CHAIN_ID), unless EVM_RPC_PUBLIC_FALLBACKS=false.
  *
  * Alchemy is only derived from the chain id (4663 / 46630), never guessed, so a testnet deployment can't
  * silently fall back to a mainnet node. An explicit ROBINHOOD_ALCHEMY_RPC_URL is trusted as configured.
  */
 export function resolveEvmRpcUrls(config: ConfigLike, primary?: string | null): string[] {
   const urls: string[] = [];
+  const chainId = Number(config.get<string | number>('EVM_CHAIN_ID') || 0);
   const add = (url?: string | null) => {
     if (!url?.trim()) return;
     const value = normalize(url);
@@ -39,8 +61,12 @@ export function resolveEvmRpcUrls(config: ConfigLike, primary?: string | null): 
     add(explicitAlchemy);
   } else {
     const apiKey = config.get<string>('ALCHEMY_API_KEY')?.trim();
-    const network = ALCHEMY_NETWORK_BY_CHAIN_ID[Number(config.get<string | number>('EVM_CHAIN_ID') || 0)];
+    const network = ALCHEMY_NETWORK_BY_CHAIN_ID[chainId];
     if (apiKey && network) add(`https://${network}.g.alchemy.com/v2/${apiKey}`);
+  }
+
+  if (String(config.get<string>('EVM_RPC_PUBLIC_FALLBACKS') ?? 'true').toLowerCase() !== 'false') {
+    for (const url of PUBLIC_RPCS_BY_CHAIN_ID[chainId] ?? []) add(url);
   }
 
   return urls;
