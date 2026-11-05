@@ -116,31 +116,10 @@ export class EvmSnapshotService {
         `[EVM Snapshot] Vault ${vaultId}: holders API failed (${message}). Falling back to transfer replay.`
       );
 
-      const canTryAlchemy =
-        this.hasAlchemyApiKey() &&
-        canUseIncrementalBaseline &&
-        !!latestSnapshot?.addressBalances &&
-        Object.keys(latestSnapshot.addressBalances).length > 0;
-
-      if (canTryAlchemy) {
-        try {
-          balances = await this.fetchHolderBalancesFromAlchemy(vtAddress, vaultId, latestSnapshot!);
-          balanceSource = 'alchemy_token_balances';
-        } catch (alchemyError) {
-          const alchemyMessage = alchemyError instanceof Error ? alchemyError.message : String(alchemyError);
-          this.logger.warn(
-            `[EVM Snapshot] Vault ${vaultId}: Alchemy fallback failed (${alchemyMessage}). Falling back to transfer replay.`
-          );
-
-          balances = await this.buildHolderBalances(
-            vtAddress,
-            vaultId,
-            canUseIncrementalBaseline ? latestSnapshot : null,
-            pinnedBlock.number
-          );
-          balanceSource = 'transfer_replay';
-        }
-      } else {
+      // Transfer replay first: it discovers holders from Transfer events, so it picks up new
+      // holders (airdrop claimers, Uniswap buyers). The Alchemy path only re-reads balances of
+      // addresses already in the baseline, so it is a last resort when the replay itself fails.
+      try {
         balances = await this.buildHolderBalances(
           vtAddress,
           vaultId,
@@ -148,6 +127,21 @@ export class EvmSnapshotService {
           pinnedBlock.number
         );
         balanceSource = 'transfer_replay';
+      } catch (replayError) {
+        const replayMessage = replayError instanceof Error ? replayError.message : String(replayError);
+        const canTryAlchemy =
+          this.hasAlchemyApiKey() &&
+          canUseIncrementalBaseline &&
+          !!latestSnapshot?.addressBalances &&
+          Object.keys(latestSnapshot.addressBalances).length > 0;
+        if (!canTryAlchemy) throw replayError;
+
+        this.logger.warn(
+          `[EVM Snapshot] Vault ${vaultId}: transfer replay failed (${replayMessage}). ` +
+            'Falling back to Alchemy balances of baseline holders — new holders will be missed.'
+        );
+        balances = await this.fetchHolderBalancesFromAlchemy(vtAddress, vaultId, latestSnapshot!);
+        balanceSource = 'alchemy_token_balances';
       }
     }
 
@@ -574,7 +568,12 @@ export class EvmSnapshotService {
       return [testnetBase, mainnetBase];
     }
 
-    return [mainnetBase, testnetBase];
+    // The Blockscout PRO API key only works on api.blockscout.com/<chainId>; the explorer
+    // domain sits behind a Cloudflare challenge that rejects server requests (403).
+    const proBase = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim()
+      ? ['https://api.blockscout.com/4663/api/v2']
+      : [];
+    return [...proBase, mainnetBase, testnetBase];
   }
 
   private async fetchHolderBalancesFromApiBase(
@@ -621,6 +620,10 @@ export class EvmSnapshotService {
             url.searchParams.set(key, String(value));
           }
         }
+
+        // Only api.blockscout.com accepts the PRO key; the explorer domain answers 403 regardless.
+        const blockscoutApiKey = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim();
+        if (blockscoutApiKey && url.hostname === 'api.blockscout.com') url.searchParams.set('apikey', blockscoutApiKey);
 
         const response = await fetch(url.toString(), {
           method: 'GET',
