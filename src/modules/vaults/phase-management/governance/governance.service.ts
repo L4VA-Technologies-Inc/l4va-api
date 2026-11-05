@@ -2217,6 +2217,11 @@ export class GovernanceService {
         // Resolved now, not at execution: holders vote on exact assets and
         // decimals, and a basket the adapter cannot trade is rejected up front.
         const targets = await this.indexVaultService.resolveBasket(reweight.targets);
+
+        // A re-weight that would make no trade (every needed leg below the minimum trade or
+        // unfunded) only changes stored weights, and nothing re-trades later — reject it.
+        // Only "within tolerance" is a legitimate no-trade outcome.
+        await this.indexVaultService.assertReweightTrades(vaultId, reweight.targets, reweight.reserveBps);
         proposal.metadata.indexReweight = {
           targets,
           reserveBps: reweight.reserveBps,

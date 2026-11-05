@@ -365,6 +365,39 @@ export class IndexVaultService {
     };
   }
 
+  /**
+   * Reject a re-weight that would trade nothing because the legs it needs are blocked (below the
+   * minimum trade, or no native above the reserve). Such a proposal would only overwrite the stored
+   * weights, and no automatic rebalance trades to them later. "Within tolerance" stays allowed.
+   * If the live portfolio cannot be read, the proposal is not blocked (logged): an RPC outage must
+   * not stop governance.
+   */
+  async assertReweightTrades(vaultId: string, items: BasketItemInput[], reserveBps: number): Promise<void> {
+    let preview: Awaited<ReturnType<IndexVaultService['previewReweight']>>;
+    try {
+      preview = await this.previewReweight(vaultId, items, reserveBps);
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      this.logger.warn(`Re-weight trade check skipped for vault ${vaultId}: ${(err as Error).message}`);
+      return;
+    }
+    if (preview.sells.length || preview.buys.length) return;
+
+    const blocking = preview.skipped.filter(s => s.reason !== 'within_tolerance');
+    if (blocking.length === 0) return;
+
+    const eth = (wei: string) => Number(formatUnits(BigInt(wei), 18)).toPrecision(2);
+    if (blocking.every(s => s.reason === 'below_min_trade')) {
+      throw new BadRequestException(
+        `The vault is too small to trade: each trade must be at least ${eth(preview.minTradeNative)} ETH ` +
+          `(vault value ≈ ${eth(preview.navNative)} ETH), so this re-weight would not make any trade.`
+      );
+    }
+    throw new BadRequestException(
+      'This re-weight would not make any trade: the vault has no ETH above its cash reserve to buy with.'
+    );
+  }
+
   private async getPortfolio(vault: Vault): Promise<IndexPortfolio> {
     const cached = this.portfolioCache.get(vault.id);
     if (cached && Date.now() - cached.at < PORTFOLIO_CACHE_MS) return cached.data;
