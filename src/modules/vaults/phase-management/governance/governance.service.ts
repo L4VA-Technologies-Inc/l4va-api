@@ -466,7 +466,10 @@ export class GovernanceService {
                   }
 
                   activeLpSupply += holderLpBalance;
-                  realLpHolders.push({ address: holder.address, lpBalance: holderLpBalance });
+                  realLpHolders.push({
+                    address: holder.address,
+                    lpBalance: holderLpBalance,
+                  });
                 }
                 lpPage++;
               }
@@ -1321,7 +1324,11 @@ export class GovernanceService {
               }
 
               const offeredAsset = await this.assetRepository.findOne({
-                where: { id: action.assetId, vault: { id: vaultId }, deleted: false },
+                where: {
+                  id: action.assetId,
+                  vault: { id: vaultId },
+                  deleted: false,
+                },
                 select: [
                   'id',
                   'status',
@@ -1712,7 +1719,10 @@ export class GovernanceService {
           }
 
           proposal.metadata.expansion = {
-            evmAssets: expansionEvmAssets.map(a => ({ contractAddress: a.contractAddress, label: a.label })),
+            evmAssets: expansionEvmAssets.map(a => ({
+              contractAddress: a.contractAddress,
+              label: a.label,
+            })),
             duration: expansionNoLimit ? undefined : expansionDuration,
             noLimit: expansionNoLimit || false,
             assetMax: expansionNoMax ? undefined : expansionAssetMax,
@@ -2400,13 +2410,18 @@ export class GovernanceService {
     // the user's address. One query for the whole page instead of one per proposal.
     const userVotes = new Map<string, VoteType>();
     if (userId && proposals.length) {
-      const user = await this.userRepository.findOne({ where: { id: userId }, select: ['id', 'address'] });
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
       if (user?.address) {
         const rows = await this.voteRepository
           .createQueryBuilder('vote')
           .select('vote.proposalId', 'proposalId')
           .addSelect('vote.vote', 'vote')
-          .where('vote.proposalId IN (:...ids)', { ids: proposals.map(p => p.id) })
+          .where('vote.proposalId IN (:...ids)', {
+            ids: proposals.map(p => p.id),
+          })
           .andWhere('LOWER(vote.voterAddress) = :voterAddress', {
             voterAddress: this.normalizeAddress(user.address),
           })
@@ -2520,7 +2535,9 @@ export class GovernanceService {
           .createQueryBuilder('vote')
           .select('vote.vote', 'vote')
           .where('vote.proposalId = :proposalId', { proposalId })
-          .andWhere('LOWER(vote.voterAddress) = :voterAddress', { voterAddress: normalizedUserAddress })
+          .andWhere('LOWER(vote.voterAddress) = :voterAddress', {
+            voterAddress: normalizedUserAddress,
+          })
           .getRawOne<{ vote: VoteType }>();
 
         if (existingVote) {
@@ -2861,7 +2878,9 @@ export class GovernanceService {
     const existingVote = await this.voteRepository
       .createQueryBuilder('vote')
       .where('vote.proposalId = :proposalId', { proposalId })
-      .andWhere('LOWER(vote.voterAddress) = :voterAddress', { voterAddress: normalizedVoterAddress })
+      .andWhere('LOWER(vote.voterAddress) = :voterAddress', {
+        voterAddress: normalizedVoterAddress,
+      })
       .getExists();
 
     if (existingVote) {
@@ -3002,7 +3021,10 @@ export class GovernanceService {
     // The payment already succeeded on chain, so a DB hiccup here must not
     // block the vote — log it and let the row be reconciled later.
     try {
-      await this.transactionsService.updateTransactionHash(feeTx.id, txHash, { ...metadata, paymentTxHash: txHash });
+      await this.transactionsService.updateTransactionHash(feeTx.id, txHash, {
+        ...metadata,
+        paymentTxHash: txHash,
+      });
     } catch (dbError) {
       this.logger.error(
         `Voting fee paid (txHash: ${txHash}) but DB update failed for proposal ${proposal.id}: ${dbError?.message || dbError}`,
@@ -3222,7 +3244,10 @@ export class GovernanceService {
           eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
           txHash,
           units: 1,
-          metadata: { proposal_id: proposalId, proposal_type: proposal.proposalType },
+          metadata: {
+            proposal_id: proposalId,
+            proposal_type: proposal.proposalType,
+          },
           idempotencyKey: `governance_proposal:${proposal.id}`,
         });
       } catch (rewardEventError) {
@@ -3584,13 +3609,15 @@ export class GovernanceService {
       // Index vaults buy their basket on-chain, so those holdings never appear as contributed
       // rows above. Show what termination actually distributes: the live ERC-20 balances and
       // the native ETH reserve. Ids are display-only (proposal creation does not read them).
-      if (vault.vault_archetype === VaultArchetype.index_weighted) {
+      if (vault.chain_type === ChainType.robinhood && vault.vault_archetype === VaultArchetype.index_weighted) {
         const { portfolio } = await this.indexVaultService.getOverview(vaultId);
         const fmt = (raw: string, decimals: number) => {
           const value = Number(formatUnits(BigInt(raw || '0'), decimals));
           return value >= 1
             ? value.toLocaleString('en', { maximumFractionDigits: 4 })
-            : new Intl.NumberFormat('en', { maximumSignificantDigits: 4 }).format(value);
+            : new Intl.NumberFormat('en', {
+                maximumSignificantDigits: 4,
+              }).format(value);
         };
         for (const a of portfolio.assets) {
           if (BigInt(a.balance || '0') === 0n) continue;
@@ -3635,9 +3662,9 @@ export class GovernanceService {
                 policy_id: '',
                 asset_id: '',
                 quantity: wei.toString(),
-                formattedQuantity: new Intl.NumberFormat('en', { maximumSignificantDigits: 4 }).format(
-                  Number(formatUnits(wei, 18))
-                ),
+                formattedQuantity: new Intl.NumberFormat('en', {
+                  maximumSignificantDigits: 4,
+                }).format(Number(formatUnits(wei, 18))),
                 imageUrl: null,
                 type: AssetType.FT,
               } as unknown as AssetBuySellDto);
@@ -3651,7 +3678,11 @@ export class GovernanceService {
         evm = {
           lp:
             lp && lp.status === EvmLpStatus.provided
-              ? { protocol: lp.protocol, vaultSharePct: lp.vaultSharePct, valueNative: lp.vaultValueNative }
+              ? {
+                  protocol: lp.protocol,
+                  vaultSharePct: lp.vaultSharePct,
+                  valueNative: lp.vaultValueNative,
+                }
               : null,
           claimWindowDays: this.systemSettingsService.evmTerminationSweepDelayDays,
         };
@@ -3923,7 +3954,9 @@ export class GovernanceService {
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.type = :type', { type: AssetType.NFT })
         .andWhere('asset.status = :status', { status: AssetStatus.OFFERED })
-        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.OFFERED })
+        .andWhere('asset.origin_type = :originType', {
+          originType: AssetOriginType.OFFERED,
+        })
         .andWhere('asset.deleted = :deleted', { deleted: false })
         .andWhere('asset.listing_tx_hash IS NOT NULL');
 
@@ -3931,9 +3964,15 @@ export class GovernanceService {
       if (trimmedSearch) {
         query.andWhere(
           new Brackets(qb => {
-            qb.where('asset.name ILIKE :search', { search: `%${trimmedSearch}%` })
-              .orWhere('asset.policy_id ILIKE :search', { search: `%${trimmedSearch}%` })
-              .orWhere('asset.asset_id ILIKE :search', { search: `%${trimmedSearch}%` });
+            qb.where('asset.name ILIKE :search', {
+              search: `%${trimmedSearch}%`,
+            })
+              .orWhere('asset.policy_id ILIKE :search', {
+                search: `%${trimmedSearch}%`,
+              })
+              .orWhere('asset.asset_id ILIKE :search', {
+                search: `%${trimmedSearch}%`,
+              });
           })
         );
       }
@@ -4187,7 +4226,9 @@ export class GovernanceService {
       }
 
       try {
-        const wayupResponse = await this.wayUpPricingService.getCollectionAssets({ policyId: item.policyId });
+        const wayupResponse = await this.wayUpPricingService.getCollectionAssets({
+          policyId: item.policyId,
+        });
         const firstAsset = wayupResponse.results?.[0];
         const hasResults = Array.isArray(wayupResponse.results) && wayupResponse.results.length > 0;
 
