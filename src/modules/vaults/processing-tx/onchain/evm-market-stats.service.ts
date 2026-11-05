@@ -106,6 +106,8 @@ export class EvmMarketStatsService {
 
         await this.vaultRepository.update({ id: vault.id }, { vt_price: priceAda, fdv: fdvAda });
         await this.upsertMarket(vault.id, {
+          // The widget-swap reward verifier finds the vault by its token address here.
+          ...(lp.vaultToken ? { contract_address: lp.vaultToken.toLowerCase() } : {}),
           mcap: fdvAda,
           totalSupply: supply,
           circSupply: supply,

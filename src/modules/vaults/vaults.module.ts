@@ -31,6 +31,7 @@ import { TokenVerification } from '@/database/token-verification.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
@@ -57,6 +58,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
     DexHunterModule,
     ClaimsModule,
     IndexVaultModule,
+    AlertsModule,
     TypeOrmModule.forFeature([
       Vault,
       User,
