@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsOptional, IsArray, IsNumber, IsObject, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsNumber, IsObject, IsEmail, IsUrl } from 'class-validator';
 
 import { SocialLink } from '@/modules/vaults/types';
 
@@ -17,7 +17,9 @@ export class SocialLinkDto {
     description: 'URL to the social profile',
     example: 'https://twitter.com/username',
   })
-  @IsString()
+  // Reject non-http(s) schemes (e.g. `javascript:`) so a stored profile link
+  // cannot become a click-gated XSS vector when rendered as an <a href>.
+  @IsUrl({ require_protocol: true, protocols: ['http', 'https'] })
   @Expose()
   url: string;
 }
