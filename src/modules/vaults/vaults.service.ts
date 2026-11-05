@@ -1,3 +1,5 @@
+import { randomBytes } from 'crypto';
+
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -659,8 +661,14 @@ export class VaultsService {
 
       if (data.chainType === ChainType.robinhood) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
+        // The factory keeps vault IDs unique and accepts a creation approved by any wallet, so
+        // whoever knows a pending ID can register it first and block the real vault. 32 random
+        // bytes make the ID unguessable; only the creator sees it, in the prepared transaction.
         evmVaultId = keccak256(
-          encodePacked(['address', 'uint256'], [owner.address as `0x${string}`, BigInt(Date.now())])
+          encodePacked(
+            ['address', 'uint256', 'bytes32'],
+            [owner.address as `0x${string}`, BigInt(Date.now()), `0x${randomBytes(32).toString('hex')}`]
+          )
         );
         const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
         const vaultData = transformToSnakeCase({
