@@ -148,7 +148,12 @@ export class EvmVaultContributionService {
   private readonly mintingSignerPrivateKey: Hex;
   private readonly mintingSignerAddress: Address;
   /** Validity window for issued authorization signatures. */
-  private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour
+  private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour: asset contributions (approvals, NFT batches)
+  /**
+   * ETH acquires are one transaction, included within seconds on Robinhood Chain. A short life
+   * keeps acquire-expansion reservations (and the wait before an early close at the maximum) short.
+   */
+  private readonly ACQUIRE_AUTH_VALIDITY_SECONDS = 15 * 60;
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
@@ -257,7 +262,10 @@ export class EvmVaultContributionService {
     }
 
     const deadline = Math.min(
-      Math.floor(Date.now() / 1000) + this.AUTH_VALIDITY_SECONDS,
+      Math.floor(Date.now() / 1000) +
+        (transaction.type === TransactionType.acquire
+          ? this.ACQUIRE_AUTH_VALIDITY_SECONDS
+          : this.AUTH_VALIDITY_SECONDS),
       ...(expansionEndMs !== null ? [Math.floor(expansionEndMs / 1000)] : [])
     );
 
@@ -341,32 +349,51 @@ export class EvmVaultContributionService {
       order: { executionDate: 'DESC' },
     });
     const cfg = proposal?.metadata?.acquireExpansion;
-    if (cfg && !cfg.noMax && cfg.maxAda && nativeWei > 0n) {
-      // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
-      const maxWei = BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n;
-      const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
-      const reservedWei = await sumOutstandingAcquireSignatures(this.transactionRepository, vaultId, transaction.id);
-      if (nativeCollected + reservedWei + nativeWei > maxWei) {
-        const used = nativeCollected + reservedWei;
-        const left = maxWei > used ? maxWei - used : 0n;
-        throw new BadRequestException(
-          nativeCollected >= maxWei
-            ? 'This acquire expansion has reached its maximum. No more ETH can be accepted.'
-            : left === 0n
-              ? 'The rest of this acquire expansion is reserved by contributions in progress. ' +
-                'Try again in a few minutes in case some of them are not completed.'
-              : `This acquire expansion can accept only ${formatEther(left)} more ETH right now.`
-        );
-      }
-    }
+    const maxWei =
+      cfg && !cfg.noMax && cfg.maxAda && nativeWei > 0n
+        ? // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
+          BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n
+        : null;
 
-    const meta = transaction.metadata as any; // jsonb: same handling as the asset-metadata update below
-    if (meta && !Array.isArray(meta)) {
-      await this.transactionRepository.update(
-        { id: transaction.id },
-        { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
-      );
-    }
+    // Check-and-reserve must be atomic: two concurrent requests could each see room and together
+    // overfill the maximum. A transaction-scoped advisory lock per vault serialises them across
+    // every API instance; each one sees the reservation the previous one committed.
+    await this.transactionRepository.manager.transaction(async em => {
+      await em.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`acquire-expansion:${vaultId}`]);
+
+      if (maxWei !== null) {
+        const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
+        const reservedWei = await sumOutstandingAcquireSignatures(
+          em.getRepository(Transaction),
+          vaultId,
+          transaction.id
+        );
+        if (nativeCollected + reservedWei + nativeWei > maxWei) {
+          const used = nativeCollected + reservedWei;
+          const left = maxWei > used ? maxWei - used : 0n;
+          throw new BadRequestException(
+            nativeCollected >= maxWei
+              ? 'This acquire expansion has reached its maximum. No more ETH can be accepted.'
+              : left === 0n
+                ? 'The rest of this acquire expansion is reserved by contributions in progress. ' +
+                  'Try again in a few minutes in case some of them are not completed.'
+                : `This acquire expansion can accept only ${formatEther(left)} more ETH right now.`
+          );
+        }
+      }
+
+      // Re-read under the lock so the reservation is written onto the latest metadata.
+      const current = await em.getRepository(Transaction).findOne({ where: { id: transaction.id } });
+      const meta = (current?.metadata ?? transaction.metadata) as any; // jsonb, as in confirmContribution
+      if (meta && !Array.isArray(meta)) {
+        await em
+          .getRepository(Transaction)
+          .update(
+            { id: transaction.id },
+            { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
+          );
+      }
+    });
   }
 
   /**
