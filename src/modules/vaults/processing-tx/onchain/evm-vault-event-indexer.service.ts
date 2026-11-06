@@ -1,3 +1,4 @@
+import { earliestEvmDeployBlock } from './evm-protocol-versions';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -155,8 +156,10 @@ export class EvmVaultEventIndexerService {
     );
   }
 
-  /** Every vault is created after the factory, so its deploy block bounds a cold start. */
+  /** Vaults of every version are indexed, so a cold start begins at the earliest factory. */
   private factoryDeployBlock(): bigint {
+    const earliest = earliestEvmDeployBlock(Number(this.configService.get<string>('EVM_CHAIN_ID')));
+    if (earliest !== null) return earliest;
     const raw = this.configService.get<string>('EVM_FACTORY_DEPLOY_BLOCK')?.trim();
     return raw && /^\d+$/.test(raw) ? BigInt(raw) : 0n;
   }

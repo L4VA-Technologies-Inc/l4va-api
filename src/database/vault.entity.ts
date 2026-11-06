@@ -814,6 +814,11 @@ export class Vault {
   @Column({ name: 'evm_vault_id', nullable: true })
   evm_vault_id?: string;
 
+  /** Protocol version (address set) this vault is pinned to. See evm-protocol-versions.ts. Null on Cardano. */
+  @Expose({ name: 'evmProtocolVersion' })
+  @Column({ name: 'evm_protocol_version', type: 'int', nullable: true })
+  evm_protocol_version?: number | null;
+
   // ---------------------------------------------------------------------------
   // EVM cycle-close bookkeeping (Phase A of claim/refund/cycle-close work).
   // All null for Cardano rows.

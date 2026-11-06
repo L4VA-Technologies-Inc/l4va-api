@@ -27,6 +27,7 @@ import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
 import { EvmPositionService } from './evm-position.service';
 import { EvmProtocolFeeSyncService } from './evm-protocol-fee-sync.service';
+import { EvmProtocolVersionBackfillService } from './evm-protocol-version-backfill.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
 import { EvmSwapService } from './evm-swap.service';
 import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
@@ -93,6 +94,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
   ],
   controllers: [BlockchainController, EvmLiquidityController],
   providers: [
+    EvmProtocolVersionBackfillService,
     EvmAdminGasMonitorService,
     MetadataRegistryApiService,
     BlockchainService,

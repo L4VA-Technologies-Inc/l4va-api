@@ -568,7 +568,7 @@ export class EvmAllocationService {
     isExpansion: boolean,
     contributionFeeBps: number
   ): Promise<EvmLpCarveoutRecord | null> {
-    const adapter = getEvmLpAdapterAddress();
+    const adapter = getEvmLpAdapterAddress(vault);
     const lpBps = Math.round(Number(vault.liquidity_pool_contribution ?? 0) * 100);
     if (!adapter || isExpansion || lpBps <= 0) return null;
 
