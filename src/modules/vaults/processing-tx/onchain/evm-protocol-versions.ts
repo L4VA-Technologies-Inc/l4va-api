@@ -50,6 +50,18 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       feeConverter: '0x61749c3d45d43EB5Fa057c570cDa459D2bd748AC',
       feeController: '0x42DE0Fc4dA5e6Fc9Bb217538060200039F436604',
     },
+    {
+      version: 10,
+      factory: '0xceC9F4A79e3FF744aF845b6379561c570dc54CCf',
+      deployBlock: 107526764n,
+      adapterRegistry: '0x1BB699ae8A027c242dA401f59B89B2bD6c9d3629',
+      protocolFeeConfig: '0x4Be358fdb7e3BF2D2ca70e012c89257d0F3Eb734',
+      batchDeployer: '0x229401A16D551ca7520FE911B9648534480240D1',
+      swapAdapter: '0x80d16567Eb07084BCB33eF031EF28994bE2979DB',
+      lpAdapter: '0x5B9b4279E31949DD367f4733db791A69aA1335E4',
+      feeConverter: '0x29041c5BC568D0cD8b039267bD9B3427FFDbfD37',
+      feeController: '0xBD7f80a08391200263449c61f411c05Ae5a7a562',
+    },
   ],
   46630: [
     {
