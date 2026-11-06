@@ -96,6 +96,8 @@ export interface EvmVaultConfig {
 }
 
 export interface EvmCreationPayload {
+  /** The factory the admin signature was issued for. */
+  factoryAddress: Address;
   dbVaultId: string;
   transactionId: string;
   evmVaultConfig: EvmVaultConfig;
@@ -192,6 +194,7 @@ export class EvmVaultSignerService {
       adminNonce: adminNonce.toString(),
       deadline: Number(deadline),
       adminSignature,
+      factoryAddress: this.factoryAddress,
     };
   }
 

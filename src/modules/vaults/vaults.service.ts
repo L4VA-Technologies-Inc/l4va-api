@@ -412,6 +412,7 @@ export class VaultsService {
     adminNonce?: string;
     deadline?: number;
     evmVaultConfig?: Record<string, unknown>;
+    evmFactoryAddress?: string;
   }> {
     let newVault: Vault | null = null;
     try {
@@ -854,6 +855,7 @@ export class VaultsService {
           adminNonce: payload.adminNonce,
           deadline: payload.deadline,
           evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
+          evmFactoryAddress: payload.factoryAddress,
         };
       }
 
