@@ -663,9 +663,8 @@ export class VaultsService {
 
       if (data.chainType === ChainType.robinhood) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
-        // The factory keeps vault IDs unique and accepts a creation approved by any wallet, so
-        // whoever knows a pending ID can register it first and block the real vault. 32 random
-        // bytes make the ID unguessable; only the creator sees it, in the prepared transaction.
+        // V10+ factories scope IDs to the creator. Pinned V8/V9 factories keep them global, so
+        // 32 random bytes stay: the ID is unguessable until the creator's transaction is public.
         evmVaultId = keccak256(
           encodePacked(
             ['address', 'uint256', 'bytes32'],

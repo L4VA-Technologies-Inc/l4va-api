@@ -21,7 +21,7 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType, EvmReconciliationStatus } from '@/types/transaction.types';
-import { ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
+import { ChainType, ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class BlockchainWebhookService {
@@ -515,6 +515,8 @@ export class BlockchainWebhookService {
         Vault,
         | 'id'
         | 'vault_status'
+        | 'chain_type'
+        | 'contract_address'
         | 'contribution_open_window_type'
         | 'acquire_open_window_type'
         | 'is_acquire_only'
@@ -524,6 +526,8 @@ export class BlockchainWebhookService {
         select: [
           'id',
           'vault_status',
+          'chain_type',
+          'contract_address',
           'contribution_open_window_type',
           'acquire_open_window_type',
           'is_acquire_only',
@@ -533,6 +537,12 @@ export class BlockchainWebhookService {
 
       if (!vault) {
         this.logger.warn(`WH: Vault ${vaultId} not found for createVault confirmation`);
+        return;
+      }
+
+      // A successful transaction is not enough: without a verified binding nothing was created.
+      if (vault.chain_type === ChainType.robinhood && !vault.contract_address) {
+        this.logger.error(`WH: Vault ${vaultId} has no verified contract address, not starting its phases`);
         return;
       }
 

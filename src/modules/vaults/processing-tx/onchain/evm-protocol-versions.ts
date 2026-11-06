@@ -88,6 +88,18 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       feeConverter: '0x8085c6d3cd0417c5773589599AE9a3A41aB97e95',
       feeController: '0xEFa8fEdFE950ff10bED3b8e05c7eBC929d246b1C',
     },
+    {
+      version: 10,
+      factory: '0x6272107267D0d65031c0754cE7c61a10CC744771',
+      deployBlock: 149540495n,
+      adapterRegistry: '0xaEC325F84e36A696263d8c1aC10D94a3d8E13f61',
+      protocolFeeConfig: '0x16C8b77e356502399D70B0F4DdedEc28c0f07b49',
+      batchDeployer: '0x883d6D1d75d64869103384E85E06396BEDbFC1Ed',
+      swapAdapter: '0xa84A8bC0493D2b6563c95Def3c27CfA29FEdd239',
+      lpAdapter: '0xAc2F594ED483e75497D69c18b3D717C38Aae291E',
+      feeConverter: '0x8e7A854357437e8c7A312073f8260E74E7d730d8',
+      feeController: '0x646E9EffDdcAEB11248aaCE9Cec528b3eca68AdB',
+    },
   ],
 };
 
