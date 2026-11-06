@@ -2,13 +2,23 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { decodeEventLog, encodeAbiParameters, keccak256, parseAbiItem, parseEther, type Address, type Hex } from 'viem';
+import {
+  decodeEventLog,
+  encodeAbiParameters,
+  keccak256,
+  parseAbiItem,
+  parseEther,
+  toEventSelector,
+  type Address,
+  type Hex,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { EvmContractReader } from './evm-contract-reader.service';
+import { getEvmProtocolVersion } from './evm-protocol-versions';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -114,6 +124,11 @@ const VAULT_INITIALIZED_EVENT = parseAbiItem(
   'event VaultInitialized(bytes32 indexed vaultId, address indexed admin, address mintingKey, address indexed vaultToken)'
 );
 
+const VAULT_CREATED_TOPIC = toEventSelector(
+  'VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)'
+);
+const CREATION_APPROVER_ABI = [parseAbiItem('function creationApprover() view returns (address)')];
+
 /** A form date arrives as epoch ms (number or numeric string) or an ISO string. */
 function toEpochMs(value: string | number): number {
   const numeric = Number(value);
@@ -205,6 +220,7 @@ export class EvmVaultSignerService {
     });
     if (!vault) throw new BadRequestException('Vault not found');
     if (vault.owner.id !== userId) throw new BadRequestException('Not the vault owner');
+    await this.assertCreationTransaction(userId, dbVaultId, transactionId, txHash, vault);
 
     try {
       // Update transaction record with the tx hash
@@ -233,6 +249,39 @@ export class EvmVaultSignerService {
   }
 
   /**
+   * The caller supplies both IDs, and a confirmed hash drives domain logic (asset locks, rewards,
+   * phase transitions), so the record must be this vault's creation and the hash must be unclaimed.
+   */
+  private async assertCreationTransaction(
+    userId: string,
+    dbVaultId: string,
+    transactionId: string,
+    txHash: string,
+    vault: Vault
+  ): Promise<void> {
+    const transaction = await this.transactionsService.getTransactionById(transactionId);
+    if (
+      !transaction ||
+      transaction.vault_id !== dbVaultId ||
+      transaction.user_id !== userId ||
+      transaction.type !== TransactionType.createVault
+    ) {
+      throw new BadRequestException('Transaction does not belong to this vault creation');
+    }
+
+    if (transaction.tx_hash === txHash) return; // retry of the same publish
+
+    // A pending hash may still change (the wallet can speed up or replace the transaction).
+    if (transaction.status === TransactionStatus.confirmed || vault.contract_address) {
+      throw new BadRequestException('Vault creation is already confirmed');
+    }
+    const hashOwner = await this.transactionsService.getTransaction(txHash);
+    if (hashOwner && hashOwner.id !== transactionId) {
+      throw new BadRequestException('Transaction hash is already used');
+    }
+  }
+
+  /**
    * Update vault contract address from VaultCreated event (called by webhook handler).
    * VaultCreated(bytes32 indexed vaultId, address indexed vault, address indexed creator, address admin, address vaultToken)
    * topics[0] = event signature, topics[1] = vaultId, topics[2] = vault address, topics[3] = creator
@@ -256,20 +305,18 @@ export class EvmVaultSignerService {
       return;
     }
 
-    // The factory does not check who approved the config, so anyone could create a vault under
-    // our vaultId first. Bind it only if its creator, authority and minting key are the ones we signed for.
+    // The first valid binding is final: contributions are signed for this address.
+    if (vault.contract_address) {
+      if (vault.contract_address.toLowerCase() === vaultAddress.toLowerCase()) return;
+      this.refuseBinding(evmVaultId, vaultAddress, txHash, `vault is already bound to ${vault.contract_address}`);
+      return;
+    }
+
+    // Log topics prove nothing on their own, and the factory accepts any approver while IDs are
+    // per creator. Bind only a vault our factory created from a config we signed.
     const mismatch = await this.findCreatedVaultMismatch(txHash, vaultAddress as Address, topics, vault);
     if (mismatch) {
-      this.logger.error(
-        `Refusing to bind VaultCreated for evmVaultId=${evmVaultId} vault=${vaultAddress} tx=${txHash}: ${mismatch}`
-      );
-      void this.alerts.sendAlert('evm_vault_bind_refused', {
-        chain: 'robinhood',
-        evmVaultId,
-        vaultAddress,
-        txHash,
-        mismatch,
-      });
+      this.refuseBinding(evmVaultId, vaultAddress, txHash, mismatch);
       return;
     }
 
@@ -281,6 +328,19 @@ export class EvmVaultSignerService {
       `Vault contract address updated from VaultCreated event — ` +
         `dbId=${vault.id} evmVaultId=${evmVaultId} vaultAddr=${vaultAddress} txHash=${txHash}`
     );
+  }
+
+  private refuseBinding(evmVaultId: string, vaultAddress: string, txHash: string, mismatch: string): void {
+    this.logger.error(
+      `Refusing to bind VaultCreated for evmVaultId=${evmVaultId} vault=${vaultAddress} tx=${txHash}: ${mismatch}`
+    );
+    void this.alerts.sendAlert('evm_vault_bind_refused', {
+      chain: 'robinhood',
+      evmVaultId,
+      vaultAddress,
+      txHash,
+      mismatch,
+    });
   }
 
   /** Why a created vault does not match the config we authorized, or null when it does. */
@@ -305,6 +365,27 @@ export class EvmVaultSignerService {
     const receipt = await this.contractReader.publicClient.getTransactionReceipt({
       hash: txHash as Hex,
     });
+
+    const factory = (
+      getEvmProtocolVersion(Number(vault.chain_id), vault.evm_protocol_version)?.factory ?? this.factoryAddress
+    ).toLowerCase();
+    const emittedByFactory = receipt.logs.some(
+      log =>
+        log.address.toLowerCase() === factory &&
+        log.topics[0]?.toLowerCase() === VAULT_CREATED_TOPIC &&
+        [1, 2, 3].every(i => log.topics[i]?.toLowerCase() === topics[i]?.toLowerCase())
+    );
+    if (!emittedByFactory) return `VaultCreated was not emitted by factory ${factory}`;
+
+    // The factory verified this approver's signature over the whole config, so an approver of ours
+    // also proves the treasury, windows and every other field are what we signed.
+    const approver: Address = await this.contractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: CREATION_APPROVER_ABI,
+      functionName: 'creationApprover',
+    });
+    if (approver.toLowerCase() !== this.adminAddress.toLowerCase()) return `creation approver ${approver} is not ours`;
+
     const initialized = receipt.logs
       .filter(log => log.address.toLowerCase() === vaultAddress.toLowerCase())
       .map(log => {

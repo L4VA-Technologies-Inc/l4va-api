@@ -303,6 +303,10 @@ export class TransactionsService {
     });
   }
 
+  async getTransactionById(id: string): Promise<Transaction | null> {
+    return this.transactionRepository.findOne({ where: { id } });
+  }
+
   async getContributionTransactions(vaultId?: string): Promise<Transaction[]> {
     const where: any = { type: TransactionType.contribute };
     if (vaultId) {
