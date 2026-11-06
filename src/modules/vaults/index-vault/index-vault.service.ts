@@ -664,7 +664,7 @@ export class IndexVaultService {
     if (!config?.targets?.length) throw new Error(`Vault ${vaultId} has no index basket configured`);
     if (!vault.contract_address) throw new Error(`Vault ${vaultId} has no contract address`);
     const vaultAddress = vault.contract_address as Address;
-    const adapter = this.routeService.requireAdapter();
+    const adapter = this.routeService.requireAdapterFor(vault);
 
     const lockKey = `${vaultId}`;
     if (this.running.has(lockKey)) throw new Error(`A rebalance is already running for vault ${vaultId}`);

@@ -1,3 +1,5 @@
+import { randomBytes } from 'crypto';
+
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -57,6 +59,7 @@ import { EvmContributionBackfillService } from './processing-tx/onchain/evm-cont
 import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
 import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
 import { buildOperationId } from './processing-tx/onchain/evm-position.service';
+import { findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
@@ -409,6 +412,7 @@ export class VaultsService {
     adminNonce?: string;
     deadline?: number;
     evmVaultConfig?: Record<string, unknown>;
+    evmFactoryAddress?: string;
   }> {
     let newVault: Vault | null = null;
     try {
@@ -659,8 +663,14 @@ export class VaultsService {
 
       if (data.chainType === ChainType.robinhood) {
         const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
+        // The factory keeps vault IDs unique and accepts a creation approved by any wallet, so
+        // whoever knows a pending ID can register it first and block the real vault. 32 random
+        // bytes make the ID unguessable; only the creator sees it, in the prepared transaction.
         evmVaultId = keccak256(
-          encodePacked(['address', 'uint256'], [owner.address as `0x${string}`, BigInt(Date.now())])
+          encodePacked(
+            ['address', 'uint256', 'bytes32'],
+            [owner.address as `0x${string}`, BigInt(Date.now()), `0x${randomBytes(32).toString('hex')}`]
+          )
         );
         const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
         const vaultData = transformToSnakeCase({
@@ -678,6 +688,10 @@ export class VaultsService {
           chainType: ChainType.robinhood,
           chainId,
           evmVaultId,
+          // Pinned at creation: the vault keeps this address set for life.
+          evmProtocolVersion:
+            findEvmProtocolVersionByFactory(Number(chainId), this.configService.get<string>('EVM_FACTORY_ADDRESS'))
+              ?.version ?? null,
           vaultImage: vaultImg,
           ftTokenImg,
         });
@@ -841,6 +855,7 @@ export class VaultsService {
           adminNonce: payload.adminNonce,
           deadline: payload.deadline,
           evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
+          evmFactoryAddress: payload.factoryAddress,
         };
       }
 

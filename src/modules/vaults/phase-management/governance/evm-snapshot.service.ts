@@ -12,6 +12,7 @@ import { EvmLpVotingService } from './evm-lp-voting.service';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { resolveVaultDeployBlock } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
@@ -359,7 +360,7 @@ export class EvmSnapshotService {
     atBlock: bigint
   ): Promise<Record<string, string> | null> {
     try {
-      const fromBlock = (await this.vaultCreationBlock(vaultId)) ?? this.factoryDeployBlock();
+      const fromBlock = (await this.vaultCreationBlock(vaultId)) ?? (await this.factoryDeployBlock(vaultId));
       const lp = await this.lpVoting.attributeLpVt(vaultId, vaultAddress, vtAddress, fromBlock, atBlock);
       if (lp.size === 0) return null;
       return Object.fromEntries([...lp.entries()].map(([address, vt]) => [address, String(vt)]));
@@ -415,14 +416,14 @@ export class EvmSnapshotService {
       );
     } else {
       try {
-        fromBlock = await this.findContractDeploymentBlock(vtAddress, latestBlock);
+        fromBlock = await this.findContractDeploymentBlock(vaultId, vtAddress, latestBlock);
       } catch (error) {
         if (this.isMissingTrieNodeError(error)) {
           // Non-archive RPCs may fail historical eth_getCode lookups. The VT is
           // created in the vault's createVault tx, whose receipt any RPC serves;
           // replaying from the factory deploy block instead blows the chunk limit.
           const creationBlock = await this.vaultCreationBlock(vaultId);
-          fromBlock = creationBlock ?? this.factoryDeployBlock();
+          fromBlock = creationBlock ?? (await this.factoryDeployBlock(vaultId));
           this.logger.warn(
             `[EVM Snapshot] Vault ${vaultId}: deployment block lookup failed on non-archive RPC; falling back to replay from ${creationBlock !== null ? 'createVault' : 'factory deploy'} block ${fromBlock.toString()}`
           );
@@ -955,7 +956,11 @@ export class EvmSnapshotService {
    * Find the earliest block where bytecode exists at token address.
    * This avoids scanning from genesis for first-time snapshots.
    */
-  private async findContractDeploymentBlock(tokenAddress: Address, latestBlock: bigint): Promise<bigint> {
+  private async findContractDeploymentBlock(
+    vaultId: string,
+    tokenAddress: Address,
+    latestBlock: bigint
+  ): Promise<bigint> {
     const latestCode = await this.contractReader.publicClient.getBytecode({
       address: tokenAddress,
       blockNumber: latestBlock,
@@ -965,7 +970,7 @@ export class EvmSnapshotService {
       return 0n;
     }
 
-    let low = this.factoryDeployBlock();
+    let low = await this.factoryDeployBlock(vaultId);
     let high = latestBlock;
     let earliest = latestBlock;
 
@@ -1019,9 +1024,14 @@ export class EvmSnapshotService {
     }
   }
 
-  /** Lower bound for VT history: `EVM_FACTORY_DEPLOY_BLOCK` (every vault is created after it), else 0. */
-  private factoryDeployBlock(): bigint {
+  /** Lower bound for VT history: the deploy block of the vault's factory, else `EVM_FACTORY_DEPLOY_BLOCK`, else 0. */
+  private async factoryDeployBlock(vaultId: string): Promise<bigint> {
     const raw = this.configService.get<string>('EVM_FACTORY_DEPLOY_BLOCK')?.trim();
-    return raw && /^\d+$/.test(raw) ? BigInt(raw) : 0n;
+    const fallback = raw && /^\d+$/.test(raw) ? BigInt(raw) : 0n;
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'chain_id', 'evm_protocol_version'],
+    });
+    return vault ? resolveVaultDeployBlock(vault, fallback) : fallback;
   }
 }

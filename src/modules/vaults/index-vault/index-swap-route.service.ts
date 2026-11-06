@@ -1,3 +1,4 @@
+import { resolveVaultSwapAdapter } from '../processing-tx/onchain/evm-protocol-versions';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { encodeAbiParameters, encodePacked, keccak256, type Address, type Hex } from 'viem';
@@ -152,6 +153,13 @@ export class IndexSwapRouteService {
       throw new Error('EVM_SWAP_ADAPTER_ADDRESS is not configured — index vault trades are disabled');
     }
     return this.adapter;
+  }
+
+  /** The adapter this vault must trade through (its protocol version's). */
+  requireAdapterFor(vault: { chain_id?: number | string | null; evm_protocol_version?: number | null }): Address {
+    const adapter = resolveVaultSwapAdapter(vault, this.adapter);
+    if (!adapter) throw new Error('No swap adapter for this vault — trades are disabled');
+    return adapter.toLowerCase() as Address;
   }
 
   async quote(assetIn: Address, assetOut: Address, amountIn: bigint): Promise<SwapQuote> {

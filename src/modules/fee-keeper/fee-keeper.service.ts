@@ -6,6 +6,7 @@ import { createWalletClient, type Account, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { EvmContractReader } from '../vaults/processing-tx/onchain/evm-contract-reader.service';
+import { findEvmProtocolVersionByFeeConverter } from '../vaults/processing-tx/onchain/evm-protocol-versions';
 import { VAULT_ABI } from '../vaults/processing-tx/onchain/vault.abi';
 
 import { ERC20_BALANCE_ABI, FEE_CONTROLLER_ABI, FEE_CONVERTER_ABI, L4VA_BURN_ABI } from './fee-keeper.abis';
@@ -264,8 +265,14 @@ export class FeeKeeperService implements OnModuleInit {
 
   private async collectStage(cfg: FeeKeeperConfig, feeToken: Address, report: FeeKeeperRunReport): Promise<void> {
     const client = this.contractReader.publicClient;
+    // FeeConverter.collect reverts the whole batch on a vault of another factory, so this keeper only
+    // serves its converter's protocol version. Other versions need their own converter run.
+    const version = findEvmProtocolVersionByFeeConverter(Number(process.env.EVM_CHAIN_ID), cfg.feeConverter);
     const vaults = await this.vaultsRepository.find({
-      where: { chain_type: ChainType.robinhood },
+      where: {
+        chain_type: ChainType.robinhood,
+        ...(version ? { evm_protocol_version: version.version } : {}),
+      },
       select: ['id', 'contract_address'],
     });
     const addresses = vaults.map(v => v.contract_address).filter((a): a is string => !!a) as Address[];
