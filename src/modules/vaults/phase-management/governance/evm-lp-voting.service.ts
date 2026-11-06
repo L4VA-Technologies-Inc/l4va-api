@@ -1,3 +1,4 @@
+import { resolveVaultLpAdapter } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -144,7 +145,13 @@ export class EvmLpVotingService {
         WHERE vault_id = $1 AND lp_carveout->>'adapter' IS NOT NULL`,
       [vaultId]
     );
-    const configured = this.configService.get<string>('EVM_LP_ADAPTER_ADDRESS')?.trim();
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'chain_id', 'evm_protocol_version'],
+    });
+    const raw = this.configService.get<string>('EVM_LP_ADAPTER_ADDRESS')?.trim();
+    const env = raw && /^0x[0-9a-fA-F]{40}$/.test(raw) ? (raw as Address) : null;
+    const configured = vault ? resolveVaultLpAdapter(vault, env) : env;
     const all = [...rows.map(r => r.adapter), configured].filter(
       (a): a is string => !!a && /^0x[0-9a-fA-F]{40}$/.test(a)
     );

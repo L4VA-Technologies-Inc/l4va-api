@@ -1,5 +1,7 @@
 import { encodePacked, isAddress, keccak256, type Address, type Hex } from 'viem';
 
+import { resolveVaultLpAdapter } from './evm-protocol-versions';
+
 /**
  * Post-close LP seeding for EVM vaults.
  *
@@ -16,10 +18,15 @@ import { encodePacked, isAddress, keccak256, type Address, type Hex } from 'viem
  *
  * Everything else (V2 factory/WETH, v4 PoolManager/PositionManager) is read from the adapter.
  */
-export function getEvmLpAdapterAddress(): Address | null {
+export function getEvmLpAdapterAddress(vault?: {
+  chain_id?: number | string | null;
+  evm_protocol_version?: number | null;
+}): Address | null {
   if ((process.env.EVM_LP_ENABLED ?? '').trim().toLowerCase() !== 'true') return null;
   const raw = (process.env.EVM_LP_ADAPTER_ADDRESS ?? '').trim();
-  return isAddress(raw) ? (raw as Address) : null;
+  const configured = isAddress(raw) ? (raw as Address) : null;
+  // A vault only accepts adapters approved in its own version's registry.
+  return vault ? resolveVaultLpAdapter(vault, configured) : configured;
 }
 
 export function getEvmLpMinUsd(): number {

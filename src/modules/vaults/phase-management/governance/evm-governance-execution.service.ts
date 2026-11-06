@@ -383,21 +383,21 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     vault: EvmGovernanceVaultRef,
     actions: any[]
   ): Promise<boolean> {
-    const adapter = this.swapRouteService.adapter;
-    if (!adapter) {
-      this.logger.error(
-        `EVM_SWAP_ADAPTER_ADDRESS is not configured — cannot execute mainnet market proposal ${proposal.id}`
-      );
+    const vaultRow = await this.vaultRepository.findOne({
+      where: { id: vault.id },
+      select: ['id', 'contract_address', 'chain_id', 'evm_protocol_version'],
+    });
+    const vaultAddress = vaultRow?.contract_address as Address | undefined;
+    if (!vaultRow || !vaultAddress) {
+      this.logger.error(`Proposal ${proposal.id}: vault ${vault.id} has no contract address`);
       return false;
     }
 
-    const vaultRow = await this.vaultRepository.findOne({
-      where: { id: vault.id },
-      select: ['id', 'contract_address'],
-    });
-    const vaultAddress = vaultRow?.contract_address as Address | undefined;
-    if (!vaultAddress) {
-      this.logger.error(`Proposal ${proposal.id}: vault ${vault.id} has no contract address`);
+    let adapter: Address;
+    try {
+      adapter = this.swapRouteService.requireAdapterFor(vaultRow);
+    } catch (err) {
+      this.logger.error(`Cannot execute market proposal ${proposal.id}: ${(err as Error).message}`);
       return false;
     }
 

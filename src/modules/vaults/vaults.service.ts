@@ -59,6 +59,7 @@ import { EvmContributionBackfillService } from './processing-tx/onchain/evm-cont
 import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
 import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
 import { buildOperationId } from './processing-tx/onchain/evm-position.service';
+import { findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
@@ -686,6 +687,10 @@ export class VaultsService {
           chainType: ChainType.robinhood,
           chainId,
           evmVaultId,
+          // Pinned at creation: the vault keeps this address set for life.
+          evmProtocolVersion:
+            findEvmProtocolVersionByFactory(Number(chainId), this.configService.get<string>('EVM_FACTORY_ADDRESS'))
+              ?.version ?? null,
           vaultImage: vaultImg,
           ftTokenImg,
         });
