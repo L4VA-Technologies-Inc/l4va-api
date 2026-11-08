@@ -208,7 +208,9 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       step: 3,
       description:
         'Tokens an index-weighted vault buys when the acquire window locks, with their target weights. ' +
-        'Picked by the user from real tokens — never generated.',
+        'Picked by the user from real tokens — never generated. Auto-rebalance (trading back to target ' +
+        'weights by USD value) is on by default every 30 days; the user can turn it off or change the ' +
+        'number of days in the basket editor, and holders can change it later through governance.',
       aiEditable: false,
     },
 

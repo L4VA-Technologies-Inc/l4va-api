@@ -52,11 +52,23 @@ export interface IndexConfig {
   version: number;
   updatedAt: string;
   updatedByProposalId?: string | null;
+  /** Backend keeper trades the basket back to target weights every `rebalanceCadenceDays`. */
+  autoRebalance?: boolean;
+  rebalanceCadenceDays?: number | null;
+  /** ISO time of the next scheduled run (cadence + random jitter). null until the first buy completes. */
+  nextRebalanceAt?: string | null;
+}
+
+/** Auto-rebalance fields a creator or a re-weight proposal may set. Omitted fields keep their value. */
+export interface IndexScheduleInput {
+  autoRebalance?: boolean;
+  rebalanceCadenceDays?: number | null;
 }
 
 export enum IndexRebalanceTrigger {
   initial_buy = 'initial_buy',
   governance_reweight = 'governance_reweight',
+  scheduled = 'scheduled',
 }
 
 export enum IndexRebalanceStatus {

@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEthereumAddress,
   IsInt,
   IsOptional,
@@ -69,4 +70,25 @@ export class IndexBasketReq {
   @Max(5000)
   @Expose()
   reserveBps: number;
+
+  @ApiProperty({
+    description: 'Automatically trade back to target weights on a cadence (default on)',
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  autoRebalance?: boolean;
+
+  @ApiProperty({
+    description: 'Days between automatic rebalances; must be at least the admin minimum',
+    required: false,
+    example: 30,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  @Expose()
+  rebalanceCadenceDays?: number;
 }

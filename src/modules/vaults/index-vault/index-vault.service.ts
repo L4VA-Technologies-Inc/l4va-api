@@ -18,11 +18,18 @@ import {
   type SkipReason,
   type WeightTarget,
 } from './index-rebalance.planner';
+import {
+  computeNextRebalanceAt,
+  nextRunAfterConfigChange,
+  resolveSchedule,
+  type ResolvedSchedule,
+} from './index-rebalance.schedule';
 import { IndexSwapRouteService, NATIVE } from './index-swap-route.service';
 
 import { EvmIndexRebalance, IndexRebalancePhase } from '@/database/evm-index-rebalance.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
@@ -40,6 +47,7 @@ import {
   IndexRebalanceLeg,
   IndexRebalanceStatus,
   IndexRebalanceTrigger,
+  IndexScheduleInput,
   IndexTarget,
   VaultArchetype,
 } from '@/types/index-vault.types';
@@ -86,6 +94,8 @@ export interface IndexSupportedAssets {
   /** When true, baskets may only hold `assets`; otherwise any adapter-quotable ERC-20 is accepted. */
   restricted: boolean;
   assets: IndexSupportedAsset[];
+  /** Auto-rebalance bounds the create form and re-weight form apply. */
+  rebalance: { minCadenceDays: number; defaultCadenceDays: number };
 }
 
 export interface IndexPortfolioAsset {
@@ -147,6 +157,7 @@ export class IndexVaultService {
     private readonly routeService: IndexSwapRouteService,
     private readonly liquidityService: EvmLiquidityService,
     private readonly priceService: PriceService,
+    private readonly systemSettings: SystemSettingsService,
     configService: ConfigService
   ) {
     this.allowedAssets = (configService.get<string>('INDEX_BASKET_ALLOWED_ASSETS') ?? '')
@@ -161,7 +172,11 @@ export class IndexVaultService {
 
   /** Tokens a basket may hold, read from chain once and cached for the process lifetime. */
   async getSupportedAssets(): Promise<IndexSupportedAssets> {
-    if (!this.allowedAssets.length) return { restricted: false, assets: [] };
+    const rebalance = {
+      minCadenceDays: this.systemSettings.indexRebalanceMinCadenceDays,
+      defaultCadenceDays: this.systemSettings.indexRebalanceDefaultCadenceDays,
+    };
+    if (!this.allowedAssets.length) return { restricted: false, assets: [], rebalance };
     this.supportedAssetsCache ??= Promise.all(
       this.allowedAssets.map(async address => {
         const read = (functionName: 'decimals' | 'symbol' | 'name'): Promise<unknown> =>
@@ -179,7 +194,7 @@ export class IndexVaultService {
       this.supportedAssetsCache = null;
       throw err;
     });
-    return { restricted: true, assets: await this.supportedAssetsCache };
+    return { restricted: true, assets: await this.supportedAssetsCache, rebalance };
   }
 
   /**
@@ -268,11 +283,15 @@ export class IndexVaultService {
     targets: IndexTarget[],
     reserveBps: number,
     previous?: IndexConfig | null,
-    proposalId?: string
+    proposalId?: string,
+    schedule?: IndexScheduleInput
   ): IndexConfig {
     if (!Number.isInteger(reserveBps) || reserveBps < 0 || reserveBps > 5000) {
       throw new BadRequestException('The cash reserve must be between 0% and 50%');
     }
+    const resolved = this.resolveSchedule(schedule, previous);
+    const { autoRebalance, rebalanceCadenceDays } = resolved;
+    const nextRebalanceAt = nextRunAfterConfigChange(resolved, previous, c => this.computeNextRebalanceAt(c));
     return {
       targets,
       reserveBps,
@@ -281,7 +300,24 @@ export class IndexVaultService {
       version: (previous?.version ?? 0) + 1,
       updatedAt: new Date().toISOString(),
       updatedByProposalId: proposalId ?? null,
+      autoRebalance,
+      rebalanceCadenceDays,
+      nextRebalanceAt,
     };
+  }
+
+  /** Auto-rebalance fields with the admin limits applied; see index-rebalance.schedule. */
+  resolveSchedule(input: IndexScheduleInput | undefined, previous?: IndexConfig | null): ResolvedSchedule {
+    const result = resolveSchedule(input, previous, {
+      minCadenceDays: this.systemSettings.indexRebalanceMinCadenceDays,
+      defaultCadenceDays: this.systemSettings.indexRebalanceDefaultCadenceDays,
+    });
+    if ('error' in result) throw new BadRequestException(result.error);
+    return result;
+  }
+
+  computeNextRebalanceAt(cadenceDays: number | null, from = Date.now()): string | null {
+    return computeNextRebalanceAt(cadenceDays, this.systemSettings.indexRebalanceJitterHours, from);
   }
 
   // ---------------------------------------------------------------------------
@@ -609,6 +645,73 @@ export class IndexVaultService {
   }
 
   /**
+   * Cron entry point for auto-rebalancing: trade every opted-in index vault back
+   * to its target weights once its cadence (plus random jitter) has elapsed.
+   *
+   * At most one run per period: the idempotency key carries the scheduled time,
+   * and the next time is set before trading, so a crash mid-run cannot cause a
+   * second run in the same period. A run inside drift tolerance makes no trades
+   * and simply completes.
+   */
+  async runScheduledRebalances(): Promise<void> {
+    const vaults = await this.vaultRepository
+      .createQueryBuilder('v')
+      .select(['v.id', 'v.evm_current_cycle_id', 'v.index_config'])
+      .where('v.chain_type = :chain', { chain: ChainType.robinhood })
+      .andWhere('v.vault_archetype = :arch', { arch: VaultArchetype.index_weighted })
+      .andWhere('v.vault_status = :status', { status: VaultStatus.locked })
+      .andWhere('v.contract_address IS NOT NULL')
+      .andWhere('v.deleted = false')
+      .andWhere(`(v.index_config->>'autoRebalance')::boolean = true`)
+      .getMany();
+
+    const now = Date.now();
+    for (const vault of vaults) {
+      const config = vault.index_config;
+      if (!config?.autoRebalance || !vault.evm_current_cycle_id) continue;
+
+      // Never trade before the basket exists or while the pool waits for its native.
+      const initial = await this.rebalanceRepository.findOne({
+        where: { vault_id: vault.id, idempotency_key: `initial:cycle:${vault.evm_current_cycle_id}` },
+      });
+      if (initial?.status !== IndexRebalanceStatus.completed) continue;
+      if (await this.liquidityService.isLpPending(vault.id, vault.evm_current_cycle_id)) continue;
+
+      // First time (or re-enabled): start the clock from now, trade next period.
+      if (!config.nextRebalanceAt) {
+        await this.setNextRebalanceAt(vault.id, this.computeNextRebalanceAt(config.rebalanceCadenceDays ?? null, now));
+        continue;
+      }
+
+      const dueAt = new Date(config.nextRebalanceAt).getTime();
+      const key = `scheduled:${config.nextRebalanceAt}`;
+      const existing = await this.rebalanceRepository.findOne({ where: { vault_id: vault.id, idempotency_key: key } });
+      if (existing || dueAt > now) continue;
+
+      // Move the clock first: whatever happens to this run, the next one is a new period.
+      // A failed run is not retried automatically; the next period trades the drift anyway,
+      // and an operator can still retry it from the admin endpoint.
+      await this.setNextRebalanceAt(vault.id, this.computeNextRebalanceAt(config.rebalanceCadenceDays ?? null, now));
+      try {
+        await this.runRebalance(vault.id, IndexRebalanceTrigger.scheduled, key);
+      } catch (err) {
+        this.logger.error(`Index auto-rebalance failed for vault ${vault.id}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Writes only `nextRebalanceAt` inside the JSONB config, so a concurrent re-weight is not overwritten. */
+  private async setNextRebalanceAt(vaultId: string, at: string | null): Promise<void> {
+    await this.vaultRepository
+      .createQueryBuilder()
+      .update(Vault)
+      .set({ index_config: () => `jsonb_set(index_config, '{nextRebalanceAt}', :next::jsonb)` })
+      .setParameter('next', JSON.stringify(at))
+      .where('id = :id', { id: vaultId })
+      .execute();
+  }
+
+  /**
    * Execute a passed INDEX_REWEIGHT proposal: adopt the new basket, then trade
    * to it. Safe to call again after a failure — the config bump is keyed to the
    * proposal and the trades resume from their persisted legs.
@@ -622,10 +725,16 @@ export class IndexVaultService {
 
     const vault = await this.requireIndexVault(proposal.vaultId);
     if (vault.index_config?.updatedByProposalId !== proposal.id) {
-      const config = this.buildConfig(payload.targets, payload.reserveBps, vault.index_config, proposal.id);
+      const config = this.buildConfig(payload.targets, payload.reserveBps, vault.index_config, proposal.id, {
+        autoRebalance: payload.autoRebalance,
+        rebalanceCadenceDays: payload.rebalanceCadenceDays,
+      });
       await this.vaultRepository.update({ id: vault.id }, { index_config: config });
       this.portfolioCache.delete(vault.id);
     }
+
+    // A schedule-only proposal changes when the keeper trades, not what it targets.
+    if (payload.scheduleOnly) return true;
 
     try {
       const run = await this.runRebalance(
