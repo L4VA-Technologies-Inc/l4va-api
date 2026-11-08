@@ -658,7 +658,10 @@ export class VaultsService {
           throw new BadRequestException('Index-weighted vaults need a target basket');
         }
         const targets = await this.indexVaultService.resolveBasket(data.indexBasket.targets);
-        indexConfig = this.indexVaultService.buildConfig(targets, data.indexBasket.reserveBps);
+        indexConfig = this.indexVaultService.buildConfig(targets, data.indexBasket.reserveBps, null, undefined, {
+          autoRebalance: data.indexBasket.autoRebalance,
+          rebalanceCadenceDays: data.indexBasket.rebalanceCadenceDays,
+        });
       }
 
       if (data.chainType === ChainType.robinhood) {
