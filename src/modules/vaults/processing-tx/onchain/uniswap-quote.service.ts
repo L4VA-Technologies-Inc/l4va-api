@@ -105,10 +105,13 @@ export class UniswapQuoteService {
     if (this.apiKey && this.swapper) {
       try {
         return await this.quoteViaApi(tokenIn, tokenOut, amountIn, slippageBps, feeTier);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (err) {
-        this.logger.warn(
-          `Uniswap Trading API quote failed, falling back to QuoterV2: ${(err as any)?.response?.data?.detail ?? (err as Error).message}`
-        );
+        // Expected for illiquid pairs (e.g. vault tokens with only a v4 pool); the
+        // QuoterV2 fallback handles it, so keep this out of the default log level.
+        // this.logger.debug(
+        //   `Uniswap Trading API quote failed for ${tokenIn}->${tokenOut}, falling back to QuoterV2: ${(err as any)?.response?.data?.detail ?? (err as Error).message}`
+        // );
       }
     }
     return this.quoteViaChain(tokenIn, tokenOut, amountIn, slippageBps, feeTier);
