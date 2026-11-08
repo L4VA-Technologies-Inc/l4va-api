@@ -2242,15 +2242,44 @@ export class GovernanceService {
         // decimals, and a basket the adapter cannot trade is rejected up front.
         const targets = await this.indexVaultService.resolveBasket(reweight.targets);
 
+        const current = indexVault.index_config;
+        const schedule = this.indexVaultService.resolveSchedule(
+          { autoRebalance: reweight.autoRebalance, rebalanceCadenceDays: reweight.rebalanceCadenceDays },
+          current
+        );
+        const weightsKey = (list: { assetAddress: string; weightBps: number }[]): string =>
+          list
+            .map(t => `${t.assetAddress.toLowerCase()}:${t.weightBps}`)
+            .sort()
+            .join(',');
+        const weightsUnchanged =
+          !!current &&
+          current.reserveBps === reweight.reserveBps &&
+          weightsKey(current.targets) === weightsKey(targets);
+        const scheduleUnchanged =
+          schedule.autoRebalance === (current?.autoRebalance ?? false) &&
+          schedule.rebalanceCadenceDays === (current?.rebalanceCadenceDays ?? null);
+        if (weightsUnchanged && scheduleUnchanged) {
+          throw new BadRequestException('This proposal does not change the basket or the rebalance schedule');
+        }
+
         // A re-weight that would make no trade (every needed leg below the minimum trade or
         // unfunded) only changes stored weights, and nothing re-trades later — reject it.
-        // Only "within tolerance" is a legitimate no-trade outcome.
-        await this.indexVaultService.assertReweightTrades(vaultId, reweight.targets, reweight.reserveBps);
+        // Only "within tolerance" is a legitimate no-trade outcome. A schedule-only
+        // proposal trades nothing by design, so it skips the check.
+        if (!weightsUnchanged) {
+          await this.indexVaultService.assertReweightTrades(vaultId, reweight.targets, reweight.reserveBps);
+        }
         proposal.metadata.indexReweight = {
           targets,
           reserveBps: reweight.reserveBps,
-          previousTargets: indexVault.index_config?.targets ?? [],
-          previousReserveBps: indexVault.index_config?.reserveBps ?? null,
+          previousTargets: current?.targets ?? [],
+          previousReserveBps: current?.reserveBps ?? null,
+          autoRebalance: schedule.autoRebalance,
+          rebalanceCadenceDays: schedule.rebalanceCadenceDays,
+          previousAutoRebalance: current?.autoRebalance ?? false,
+          previousRebalanceCadenceDays: current?.rebalanceCadenceDays ?? null,
+          scheduleOnly: weightsUnchanged,
         };
         break;
       }

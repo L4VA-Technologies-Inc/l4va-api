@@ -135,6 +135,7 @@ export class LifecycleService {
       await this.handleEvmFeeWithdraw(); // EVM: sweep accrued protocol fees to treasury
       await this.handleEvmFinalizeTerminating(); // EVM: call finalizeTermination when all VT has been redeemed
       await this.handleEvmIndexInitialBuys(); // EVM: buy the target basket for index vaults whose cycle just locked
+      await this.handleEvmIndexScheduledRebalances(); // EVM: auto-rebalance index vaults whose cadence has elapsed
     } finally {
       this.isRunning = false;
     }
@@ -3336,6 +3337,16 @@ export class LifecycleService {
       await this.indexVaultService.runPendingInitialBuys();
     } catch (err) {
       this.logger.error(`EVM index initial-buy sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** Index vaults with auto-rebalance on: trade back to target weights once per cadence. */
+  private async handleEvmIndexScheduledRebalances(): Promise<void> {
+    if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      await this.indexVaultService.runScheduledRebalances();
+    } catch (err) {
+      this.logger.error(`EVM index auto-rebalance sweep failed: ${(err as Error).message}`);
     }
   }
 

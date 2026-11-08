@@ -106,6 +106,15 @@ export interface SystemSettingsData {
    * the VALUE, so this stays off until a dust/approval policy is defined.
    */
   evm_termination_allow_waivers: boolean;
+  /**
+   * Index-vault auto-rebalancing (backend keeper, no contract involvement).
+   * The minimum guards small vaults from paying more in gas than they gain;
+   * the default applies when a creator does not pick a cadence. Each run is
+   * delayed by a random 0..jitter hours so the time cannot be front-run.
+   */
+  index_rebalance_min_cadence_days: number;
+  index_rebalance_default_cadence_days: number;
+  index_rebalance_jitter_hours: number;
 }
 
 /** Emitted after settings are (re)loaded from the database. */
@@ -173,6 +182,9 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   evm_termination_pool_data_max_age_seconds: 300,
   // Mirrors the contract's MIN_SWEEP_DELAY floor; the contract rejects less.
   evm_termination_sweep_delay_days: 90,
+  index_rebalance_min_cadence_days: 7,
+  index_rebalance_default_cadence_days: 30,
+  index_rebalance_jitter_hours: 6,
   evm_termination_allow_waivers: false,
   hidden_mainnet_vault_ids: ['00000000-0000-0000-0000-000000000000'],
   vault_creator_whitelist: [
@@ -304,6 +316,22 @@ export class SystemSettingsService implements OnModuleInit {
 
   get evmTerminationAllowWaivers(): boolean {
     return this.settings.evm_termination_allow_waivers;
+  }
+
+  get indexRebalanceMinCadenceDays(): number {
+    const value = Number(this.settings.index_rebalance_min_cadence_days);
+    return Number.isInteger(value) && value >= 1 ? value : DEFAULT_SETTINGS.index_rebalance_min_cadence_days;
+  }
+
+  get indexRebalanceDefaultCadenceDays(): number {
+    const value = Number(this.settings.index_rebalance_default_cadence_days);
+    const fallback = DEFAULT_SETTINGS.index_rebalance_default_cadence_days;
+    return Math.max(Number.isInteger(value) && value >= 1 ? value : fallback, this.indexRebalanceMinCadenceDays);
+  }
+
+  get indexRebalanceJitterHours(): number {
+    const value = Number(this.settings.index_rebalance_jitter_hours);
+    return Number.isFinite(value) && value >= 0 ? value : DEFAULT_SETTINGS.index_rebalance_jitter_hours;
   }
 
   get lpRecommendedMinLiquidity(): number {

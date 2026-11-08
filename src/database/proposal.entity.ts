@@ -151,6 +151,13 @@ export class Proposal {
       reserveBps: number;
       previousTargets: IndexTarget[];
       previousReserveBps: number | null;
+      /** Auto-rebalance schedule after the proposal; absent on proposals created before the feature. */
+      autoRebalance?: boolean;
+      rebalanceCadenceDays?: number | null;
+      previousAutoRebalance?: boolean;
+      previousRebalanceCadenceDays?: number | null;
+      /** Weights and reserve unchanged: execution only updates the schedule and makes no trades. */
+      scheduleOnly?: boolean;
     };
 
     // Acquire Expansion data (ADA → VT minting)
