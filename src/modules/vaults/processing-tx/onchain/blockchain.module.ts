@@ -19,6 +19,7 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
+import { EvmKmsSigners } from './evm-kms-signers.service';
 import { EvmLiquidityController } from './evm-liquidity.controller';
 import { EvmLiquidityService } from './evm-liquidity.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
@@ -101,6 +102,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     VaultContributionService,
     BlockchainWebhookService,
     EvmContractReader,
+    EvmKmsSigners,
     EvmAdminSigner,
     EvmAllocationService,
     EvmLockTimePricingService,
@@ -139,6 +141,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     MetadataRegistryApiService,
     TransactionHealthService,
     EvmContractReader,
+    EvmKmsSigners,
     EvmAdminSigner,
     EvmAllocationService,
     EvmLockTimePricingService,

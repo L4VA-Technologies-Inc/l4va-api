@@ -4,15 +4,14 @@ import {
   createWalletClient,
   decodeEventLog,
   type Abi,
-  type Account,
   type Address,
   type Hex,
   type Log,
   type TransactionReceipt,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 
 import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmKmsSigners } from './evm-kms-signers.service';
 
 import { buildEvmWriteTransport } from '@/common/evm/evm-transport';
 
@@ -72,7 +71,6 @@ export interface AdminTxResult {
 export class EvmAdminSigner {
   private readonly logger = new Logger(EvmAdminSigner.name);
 
-  private readonly account: Account;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly walletClient: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,33 +80,22 @@ export class EvmAdminSigner {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly contractReader: EvmContractReader
+    private readonly contractReader: EvmContractReader,
+    private readonly signers: EvmKmsSigners
   ) {
-    const privateKey = this.configService.get<string>('EVM_ADMIN_PRIVATE_KEY');
-    if (!privateKey) {
-      throw new Error(
-        'EVM_ADMIN_PRIVATE_KEY is not configured. Required for closeCycle / cancelCurrentCycle / claim / refund flows.'
-      );
-    }
-    const explicitAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS');
     const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
     if (!rpcUrl) throw new Error('EVM_RPC_URL is not configured.');
-
-    this.account = privateKeyToAccount(privateKey as Hex);
-    this.address = (explicitAddress as Address) ?? this.account.address;
-
-    if (explicitAddress && explicitAddress.toLowerCase() !== this.account.address.toLowerCase()) {
+    if (!this.signers.adminAddress) {
       throw new Error(
-        `EVM_ADMIN_ADDRESS (${explicitAddress}) does not match derived address (${this.account.address}) for the configured private key.`
+        'EVM_ADMIN_ADDRESS is not configured. Required for closeCycle / cancelCurrentCycle / claim / refund flows.'
       );
     }
 
+    // The key is in KMS; the KMS signer checks it resolves to this address before signing anything.
+    this.address = this.signers.adminAddress;
     this.chainId = this.contractReader.chainId;
     this.publicClient = this.contractReader.publicClient;
-    this.walletClient = createWalletClient({
-      account: this.account,
-      transport: buildEvmWriteTransport(rpcUrl),
-    });
+    this.walletClient = createWalletClient({ transport: buildEvmWriteTransport(rpcUrl) });
   }
 
   /**
@@ -127,11 +114,12 @@ export class EvmAdminSigner {
     onBroadcast?: (hash: Hex) => Promise<void>
   ): Promise<AdminTxResult> {
     const { address, abi, functionName, args, value, timeoutMs = 120_000 } = opts;
+    const account = await this.signers.admin();
 
     // 1. Simulate — catches revert before we pay gas.
     try {
       await this.publicClient.simulateContract({
-        account: this.account,
+        account,
         address,
         abi,
         functionName,
@@ -146,7 +134,7 @@ export class EvmAdminSigner {
 
     // 2. Broadcast.
     const hash = (await this.walletClient.writeContract({
-      account: this.account,
+      account,
       chain: null,
       address,
       abi,
@@ -204,7 +192,7 @@ export class EvmAdminSigner {
     const timeoutMs = opts?.timeoutMs ?? 120_000;
 
     const hash = (await this.walletClient.sendTransaction({
-      account: this.account,
+      account: await this.signers.admin(),
       chain: null,
       to,
       value,
