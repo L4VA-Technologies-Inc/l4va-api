@@ -63,9 +63,10 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       adapterRegistry: '0x1BB699ae8A027c242dA401f59B89B2bD6c9d3629',
       protocolFeeConfig: '0x4Be358fdb7e3BF2D2ca70e012c89257d0F3Eb734',
       batchDeployer: '0x229401A16D551ca7520FE911B9648534480240D1',
-      // Pre-multi-path adapter: index and market swaps report "no route" until this is replaced by
-      // the address from script/DeployMultiPathSwapAdapter.s.sol with `swapAdapterMultiPath: true`.
-      swapAdapter: '0x80d16567Eb07084BCB33eF031EF28994bE2979DB',
+      // MULTI_PATH_EXACT_IN adapter, deployed and approved in this registry 2026-11-09
+      // (tx 0x4e56…5a5c / 0xd981…c82). The previous adapter 0x80d16567…79DB stays approved.
+      swapAdapter: '0x558C2F0060f5888daD42c79C87b99008ef45C7bB',
+      swapAdapterMultiPath: true,
       lpAdapter: '0x5B9b4279E31949DD367f4733db791A69aA1335E4',
       feeConverter: '0x29041c5BC568D0cD8b039267bD9B3427FFDbfD37',
       feeController: '0xBD7f80a08391200263449c61f411c05Ae5a7a562',
