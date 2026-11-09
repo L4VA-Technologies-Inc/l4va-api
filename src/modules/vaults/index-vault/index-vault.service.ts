@@ -15,7 +15,6 @@ import {
   type PlanOptions,
   type PortfolioState,
   type SkippedLeg,
-  type SkipReason,
   type WeightTarget,
 } from './index-rebalance.planner';
 import {
@@ -45,6 +44,8 @@ import {
   IndexLegSide,
   IndexLegStatus,
   IndexRebalanceLeg,
+  IndexRebalanceSkippedLeg,
+  IndexRebalanceSkipReason,
   IndexRebalanceStatus,
   IndexRebalanceTrigger,
   IndexScheduleInput,
@@ -150,8 +151,10 @@ export class IndexVaultService {
   private supportedAssetsCache: Promise<IndexSupportedAsset[]> | null = null;
 
   constructor(
-    @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(EvmIndexRebalance) private readonly rebalanceRepository: Repository<EvmIndexRebalance>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(EvmIndexRebalance)
+    private readonly rebalanceRepository: Repository<EvmIndexRebalance>,
     private readonly contractReader: EvmContractReader,
     private readonly swapService: EvmSwapService,
     private readonly routeService: IndexSwapRouteService,
@@ -180,7 +183,11 @@ export class IndexVaultService {
     this.supportedAssetsCache ??= Promise.all(
       this.allowedAssets.map(async address => {
         const read = (functionName: 'decimals' | 'symbol' | 'name'): Promise<unknown> =>
-          this.contractReader.publicClient.readContract({ address, abi: ERC20_METADATA_ABI, functionName });
+          this.contractReader.publicClient.readContract({
+            address,
+            abi: ERC20_METADATA_ABI,
+            functionName,
+          });
         const [decimals, symbol, name] = await Promise.all([read('decimals'), read('symbol'), read('name')]);
         return {
           assetAddress: address,
@@ -194,7 +201,11 @@ export class IndexVaultService {
       this.supportedAssetsCache = null;
       throw err;
     });
-    return { restricted: true, assets: await this.supportedAssetsCache, rebalance };
+    return {
+      restricted: true,
+      assets: await this.supportedAssetsCache,
+      rebalance,
+    };
   }
 
   /**
@@ -249,13 +260,21 @@ export class IndexVaultService {
         const symbol =
           item.symbol ||
           ((await this.contractReader.publicClient
-            .readContract({ address, abi: ERC20_METADATA_ABI, functionName: 'symbol' })
+            .readContract({
+              address,
+              abi: ERC20_METADATA_ABI,
+              functionName: 'symbol',
+            })
             .catch(() => null)) as string | null) ||
           address.slice(0, 8);
         const name =
           item.name ||
           ((await this.contractReader.publicClient
-            .readContract({ address, abi: ERC20_METADATA_ABI, functionName: 'name' })
+            .readContract({
+              address,
+              abi: ERC20_METADATA_ABI,
+              functionName: 'name',
+            })
             .catch(() => null)) as string | null);
 
         try {
@@ -335,7 +354,11 @@ export class IndexVaultService {
 
     const [portfolio, rebalances] = await Promise.all([
       hasHoldings ? this.getPortfolio(vault) : Promise.resolve(null),
-      this.rebalanceRepository.find({ where: { vault_id: vaultId }, order: { created_at: 'DESC' }, take: 10 }),
+      this.rebalanceRepository.find({
+        where: { vault_id: vaultId },
+        order: { created_at: 'DESC' },
+        take: 10,
+      }),
     ]);
 
     return {
@@ -355,10 +378,20 @@ export class IndexVaultService {
     items: BasketItemInput[],
     reserveBps: number
   ): Promise<{
-    sells: { asset: string; amountIn: string; valueNative: string; exit: boolean }[];
+    sells: {
+      asset: string;
+      amountIn: string;
+      valueNative: string;
+      exit: boolean;
+    }[];
     buys: { asset: string; nativeIn: string }[];
     /** Needed legs that were not planned, with why — so an empty plan is never mistaken for "on target". */
-    skipped: { asset: string; side: 'sell' | 'buy'; reason: SkipReason; valueNative: string }[];
+    skipped: {
+      asset: string;
+      side: 'sell' | 'buy';
+      reason: IndexRebalanceSkipReason;
+      valueNative: string;
+    }[];
     minTradeNative: string;
     navNative: string;
   }> {
@@ -368,7 +401,10 @@ export class IndexVaultService {
     // Resolved exactly as a re-weight proposal would resolve it, so a basket
     // that previews cleanly is a basket that can actually be submitted.
     const resolved = await this.resolveBasket(items);
-    const targets: WeightTarget[] = resolved.map(t => ({ asset: t.assetAddress, weightBps: t.weightBps }));
+    const targets: WeightTarget[] = resolved.map(t => ({
+      asset: t.assetAddress,
+      weightBps: t.weightBps,
+    }));
     const opts = this.planOptions(vault.index_config, reserveBps);
     const state = await this.readState(
       vault,
@@ -382,13 +418,20 @@ export class IndexVaultService {
       holdings: state.holdings.map(h => {
         const sold = sells.find(s => s.asset === h.asset);
         if (!sold) return h;
-        return { asset: h.asset, balance: h.balance - sold.amountIn, valueNative: h.valueNative - sold.valueNative };
+        return {
+          asset: h.asset,
+          balance: h.balance - sold.amountIn,
+          valueNative: h.valueNative - sold.valueNative,
+        };
       }),
     };
     const buys = planBuys(afterSells, targets, opts, skipped);
 
     return {
-      skipped: skipped.map(s => ({ ...s, valueNative: s.valueNative.toString() })),
+      skipped: skipped.map(s => ({
+        ...s,
+        valueNative: s.valueNative.toString(),
+      })),
       minTradeNative: opts.minTradeNative.toString(),
       navNative: computeNav(state).toString(),
       sells: sells.map(s => ({
@@ -397,7 +440,10 @@ export class IndexVaultService {
         valueNative: s.valueNative.toString(),
         exit: s.exit,
       })),
-      buys: buys.map(b => ({ asset: b.asset, nativeIn: b.nativeIn.toString() })),
+      buys: buys.map(b => ({
+        asset: b.asset,
+        nativeIn: b.nativeIn.toString(),
+      })),
     };
   }
 
@@ -495,7 +541,13 @@ export class IndexVaultService {
       this.logger.warn(`Index portfolio read failed for vault ${vault.id}: ${(err as Error).message}`);
       return {
         navNative: '0',
-        reserve: { targetBps: reserveBps, actualBps: 0, valueNative: '0', valueUsd: 0, valueAda: 0 },
+        reserve: {
+          targetBps: reserveBps,
+          actualBps: 0,
+          valueNative: '0',
+          valueUsd: 0,
+          valueAda: 0,
+        },
         assets: [],
         lp: null,
         total: { valueNative: '0', valueUsd: 0, valueAda: 0 },
@@ -520,9 +572,21 @@ export class IndexVaultService {
     const vaultAddress = vault.contract_address as Address;
     const lpToken = (await this.liquidityService.getVaultLp(vault.id))?.lpToken?.toLowerCase();
     const [nativeAvailable, custody, vaultToken] = (await Promise.all([
-      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'availableNativeForOperations' }),
-      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'custodyTokens' }),
-      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'vaultToken' }),
+      client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'availableNativeForOperations',
+      }),
+      client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'custodyTokens',
+      }),
+      client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'vaultToken',
+      }),
     ])) as [bigint, Address[], Address];
 
     const basket = new Set(basketAssets.map(a => a.toLowerCase()));
@@ -543,7 +607,11 @@ export class IndexVaultService {
         continue;
       }
       try {
-        holdings.push({ asset: token, balance, valueNative: await this.routeService.valueInNative(token, balance) });
+        holdings.push({
+          asset: token,
+          balance,
+          valueNative: await this.routeService.valueInNative(token, balance),
+        });
       } catch (err) {
         if (basket.has(token)) {
           throw new Error(`Cannot price basket asset ${token}: ${(err as Error).message}`);
@@ -562,7 +630,11 @@ export class IndexVaultService {
 
   private priced(wei: bigint, prices: { ethUsd: number; adaUsd: number }): IndexValue {
     const valueUsd = Number(formatUnits(wei, 18)) * prices.ethUsd;
-    return { valueNative: wei.toString(), valueUsd, valueAda: prices.adaUsd > 0 ? valueUsd / prices.adaUsd : 0 };
+    return {
+      valueNative: wei.toString(),
+      valueUsd,
+      valueAda: prices.adaUsd > 0 ? valueUsd / prices.adaUsd : 0,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -629,7 +701,9 @@ export class IndexVaultService {
       // The pool gets its native first; buying the basket now would spend it.
       if (await this.liquidityService.isLpPending(vault.id, vault.evm_current_cycle_id)) continue;
       const key = `initial:cycle:${vault.evm_current_cycle_id}`;
-      const existing = await this.rebalanceRepository.findOne({ where: { vault_id: vault.id, idempotency_key: key } });
+      const existing = await this.rebalanceRepository.findOne({
+        where: { vault_id: vault.id, idempotency_key: key },
+      });
       if (existing?.status === IndexRebalanceStatus.completed) continue;
       if (existing?.status === IndexRebalanceStatus.failed) {
         const cooledDown = Date.now() - existing.updated_at.getTime() > AUTO_RETRY_BACKOFF_MS;
@@ -658,7 +732,9 @@ export class IndexVaultService {
       .createQueryBuilder('v')
       .select(['v.id', 'v.evm_current_cycle_id', 'v.index_config'])
       .where('v.chain_type = :chain', { chain: ChainType.robinhood })
-      .andWhere('v.vault_archetype = :arch', { arch: VaultArchetype.index_weighted })
+      .andWhere('v.vault_archetype = :arch', {
+        arch: VaultArchetype.index_weighted,
+      })
       .andWhere('v.vault_status = :status', { status: VaultStatus.locked })
       .andWhere('v.contract_address IS NOT NULL')
       .andWhere('v.deleted = false')
@@ -672,7 +748,10 @@ export class IndexVaultService {
 
       // Never trade before the basket exists or while the pool waits for its native.
       const initial = await this.rebalanceRepository.findOne({
-        where: { vault_id: vault.id, idempotency_key: `initial:cycle:${vault.evm_current_cycle_id}` },
+        where: {
+          vault_id: vault.id,
+          idempotency_key: `initial:cycle:${vault.evm_current_cycle_id}`,
+        },
       });
       if (initial?.status !== IndexRebalanceStatus.completed) continue;
       if (await this.liquidityService.isLpPending(vault.id, vault.evm_current_cycle_id)) continue;
@@ -685,7 +764,9 @@ export class IndexVaultService {
 
       const dueAt = new Date(config.nextRebalanceAt).getTime();
       const key = `scheduled:${config.nextRebalanceAt}`;
-      const existing = await this.rebalanceRepository.findOne({ where: { vault_id: vault.id, idempotency_key: key } });
+      const existing = await this.rebalanceRepository.findOne({
+        where: { vault_id: vault.id, idempotency_key: key },
+      });
       if (existing || dueAt > now) continue;
 
       // Move the clock first: whatever happens to this run, the next one is a new period.
@@ -705,7 +786,9 @@ export class IndexVaultService {
     await this.vaultRepository
       .createQueryBuilder()
       .update(Vault)
-      .set({ index_config: () => `jsonb_set(index_config, '{nextRebalanceAt}', :next::jsonb)` })
+      .set({
+        index_config: () => `jsonb_set(index_config, '{nextRebalanceAt}', :next::jsonb)`,
+      })
       .setParameter('next', JSON.stringify(at))
       .where('id = :id', { id: vaultId })
       .execute();
@@ -755,7 +838,9 @@ export class IndexVaultService {
     vaultId: string,
     rebalanceId: string
   ): Promise<ReturnType<IndexVaultService['serializeRebalance']>> {
-    const run = await this.rebalanceRepository.findOne({ where: { id: rebalanceId, vault_id: vaultId } });
+    const run = await this.rebalanceRepository.findOne({
+      where: { id: rebalanceId, vault_id: vaultId },
+    });
     if (!run) throw new NotFoundException('Rebalance not found');
     if (run.status === IndexRebalanceStatus.completed) return this.serializeRebalance(run);
     const result = await this.runRebalance(vaultId, run.trigger, run.idempotency_key, run.proposal_id ?? undefined);
@@ -795,6 +880,7 @@ export class IndexVaultService {
             targets: config.targets,
             reserve_bps: config.reserveBps,
             legs: [],
+            skipped_legs: [],
           })
         );
       }
@@ -818,7 +904,10 @@ export class IndexVaultService {
           );
         });
 
-        const targets = run.targets.map(t => ({ asset: t.assetAddress, weightBps: t.weightBps }));
+        const targets = run.targets.map(t => ({
+          asset: t.assetAddress,
+          weightBps: t.weightBps,
+        }));
         const opts = this.planOptions(config, run.reserve_bps);
         const tradeFeeBps = await this.swapService.tradeFeeBps(vaultAddress);
 
@@ -836,18 +925,29 @@ export class IndexVaultService {
             run.nav_native = state.holdings.reduce((s, h) => s + h.valueNative, state.nativeAvailable).toString();
           }
 
+          const skipped: SkippedLeg[] = [];
           const planned =
             side === IndexLegSide.sell
-              ? planSells(state, targets, opts).map(s => ({
+              ? planSells(state, targets, opts, skipped).map(s => ({
                   assetIn: s.asset,
                   assetOut: NATIVE as string,
                   amountIn: s.amountIn,
                 }))
-              : planBuys(state, targets, opts).map(b => ({
+              : planBuys(state, targets, opts, skipped).map(b => ({
                   assetIn: NATIVE as string,
                   assetOut: b.asset,
                   amountIn: b.nativeIn,
                 }));
+
+          run.skipped_legs = [
+            ...(run.skipped_legs ?? []).filter(item => item.side !== side),
+            ...skipped.map(item => this.serializePlanningSkip(item, run.targets, opts.minTradeNative)),
+          ];
+          this.logPlanningSkips(
+            run.id,
+            vaultId,
+            run.skipped_legs.filter(item => item.side === side)
+          );
 
           for (const p of planned) {
             const index = run.legs.length;
@@ -861,7 +961,14 @@ export class IndexVaultService {
               status: IndexLegStatus.pending,
             });
           }
-          await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs, nav_native: run.nav_native });
+          await this.rebalanceRepository.update(
+            { id: run.id },
+            {
+              legs: run.legs,
+              skipped_legs: run.skipped_legs,
+              nav_native: run.nav_native,
+            }
+          );
 
           for (const leg of run.legs.filter(l => l.side === side && l.status === IndexLegStatus.pending)) {
             await this.executeLeg(run, leg, vaultId, vaultAddress, adapter, config.slippageBps, tradeFeeBps);
@@ -875,11 +982,17 @@ export class IndexVaultService {
         run.completed_at = new Date();
         await this.rebalanceRepository.update(
           { id: run.id },
-          { status: run.status, completed_at: run.completed_at, legs: run.legs }
+          {
+            status: run.status,
+            completed_at: run.completed_at,
+            legs: run.legs,
+            skipped_legs: run.skipped_legs,
+          }
         );
         this.logger.log(
           `Index rebalance ${run.id} (${idempotencyKey}) completed for vault ${vaultId}: ` +
-            `${run.legs.filter(l => l.status === IndexLegStatus.confirmed).length} leg(s) traded`
+            `${run.legs.filter(l => l.status === IndexLegStatus.confirmed).length} leg(s) traded, ` +
+            `${run.skipped_legs.filter(l => l.reason !== 'within_tolerance').length} blocked adjustment(s)`
         );
         return run;
       } catch (err) {
@@ -926,7 +1039,10 @@ export class IndexVaultService {
       await queryRunner.manager
         .createQueryBuilder()
         .update(EvmIndexRebalance)
-        .set({ status: IndexRebalanceStatus.failed, last_error: 'abandoned: worker stopped mid-run' })
+        .set({
+          status: IndexRebalanceStatus.failed,
+          last_error: 'abandoned: worker stopped mid-run',
+        })
         .where('vault_id = :vaultId AND status = :executing AND updated_at < :staleBefore', {
           vaultId,
           executing: IndexRebalanceStatus.executing,
@@ -950,7 +1066,11 @@ export class IndexVaultService {
       const claimed = await queryRunner.manager
         .createQueryBuilder()
         .update(EvmIndexRebalance)
-        .set({ status: IndexRebalanceStatus.executing, attempts: () => '"attempts" + 1', last_error: null })
+        .set({
+          status: IndexRebalanceStatus.executing,
+          attempts: () => '"attempts" + 1',
+          last_error: null,
+        })
         .where('id = :id AND status IN (:...open)', {
           id: run.id,
           open: [IndexRebalanceStatus.pending, IndexRebalanceStatus.failed],
@@ -1062,7 +1182,11 @@ export class IndexVaultService {
    */
   async requireIndexVault(vaultId: string): Promise<Vault> {
     const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId, deleted: false, vault_status: Not(VaultStatus.draft) },
+      where: {
+        id: vaultId,
+        deleted: false,
+        vault_status: Not(VaultStatus.draft),
+      },
     });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
     if (vault.vault_archetype !== VaultArchetype.index_weighted) {
@@ -1088,6 +1212,37 @@ export class IndexVaultService {
     );
   }
 
+  private serializePlanningSkip(
+    skipped: SkippedLeg,
+    targets: IndexTarget[],
+    minTradeNative: bigint
+  ): IndexRebalanceSkippedLeg {
+    const target = targets.find(item => item.assetAddress.toLowerCase() === skipped.asset.toLowerCase());
+    return {
+      asset: skipped.asset.toLowerCase(),
+      symbol: target?.symbol ?? `${skipped.asset.slice(0, 6)}…${skipped.asset.slice(-4)}`,
+      side: skipped.side === 'sell' ? IndexLegSide.sell : IndexLegSide.buy,
+      reason: skipped.reason,
+      valueNative: skipped.valueNative.toString(),
+      minTradeNative: minTradeNative.toString(),
+    };
+  }
+
+  private logPlanningSkips(runId: string, vaultId: string, skipped: IndexRebalanceSkippedLeg[]): void {
+    for (const item of skipped) {
+      const value = formatUnits(BigInt(item.valueNative), 18);
+      const minimum = formatUnits(BigInt(item.minTradeNative), 18);
+      const prefix = `Index rebalance ${runId} for vault ${vaultId}: ${item.symbol} ${item.side} skipped`;
+      if (item.reason === 'within_tolerance') {
+        this.logger.debug(`${prefix} — within_tolerance (drift=${value} ETH)`);
+      } else if (item.reason === 'below_min_trade') {
+        this.logger.warn(`${prefix} — below_min_trade (value=${value} ETH, minimum=${minimum} ETH)`);
+      } else {
+        this.logger.warn(`${prefix} — no_free_native (required=${value} ETH above cash reserve)`);
+      }
+    }
+  }
+
   serializeRebalance(run: EvmIndexRebalance): {
     id: string;
     trigger: IndexRebalanceTrigger;
@@ -1096,6 +1251,7 @@ export class IndexVaultService {
     phase: IndexRebalancePhase;
     navNative: string | null;
     legs: IndexRebalanceLeg[];
+    skipped: IndexRebalanceSkippedLeg[];
     attempts: number;
     lastError: string | null;
     createdAt: Date;
@@ -1109,6 +1265,7 @@ export class IndexVaultService {
       phase: run.phase,
       navNative: run.nav_native ?? null,
       legs: run.legs,
+      skipped: run.skipped_legs ?? [],
       attempts: run.attempts,
       lastError: run.last_error ?? null,
       createdAt: run.created_at,

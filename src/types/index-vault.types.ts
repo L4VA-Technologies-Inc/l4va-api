@@ -108,3 +108,20 @@ export interface IndexRebalanceLeg {
   status: IndexLegStatus;
   error?: string | null;
 }
+
+/** Why a portfolio adjustment was intentionally not turned into a swap. */
+export type IndexRebalanceSkipReason = 'within_tolerance' | 'below_min_trade' | 'no_free_native';
+
+/** A needed adjustment omitted by the planner, persisted for history and diagnostics. */
+export interface IndexRebalanceSkippedLeg {
+  /** Lowercase ERC-20 address. */
+  asset: string;
+  /** Symbol snapshot, so old history stays readable after the basket changes. */
+  symbol: string;
+  side: IndexLegSide;
+  reason: IndexRebalanceSkipReason;
+  /** Native value the leg wanted to trade, in wei. */
+  valueNative: string;
+  /** Minimum native trade size at planning time, in wei. */
+  minTradeNative: string;
+}
