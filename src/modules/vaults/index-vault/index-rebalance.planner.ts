@@ -1,5 +1,5 @@
 // Relative on purpose: jest in this repo has no `@/` module mapper.
-import { BPS } from '../../../types/index-vault.types';
+import { BPS, type IndexRebalanceSkipReason } from '../../../types/index-vault.types';
 
 /**
  * Pure basket math for index-weighted vaults. No I/O: callers read balances and
@@ -51,19 +51,10 @@ export interface PlannedBuy {
   nativeIn: bigint;
 }
 
-/** Why a needed leg was not planned. Reported by previews; execution ignores it. */
-export type SkipReason =
-  /** Off target, but by no more than the drift tolerance. */
-  | 'within_tolerance'
-  /** Over the tolerance, but the trade is below `minTradeNative` (dust). */
-  | 'below_min_trade'
-  /** A buy is needed but there is no native above the cash reserve to fund it. */
-  | 'no_free_native';
-
 export interface SkippedLeg {
   asset: string;
   side: 'sell' | 'buy';
-  reason: SkipReason;
+  reason: IndexRebalanceSkipReason;
   /** Native value the leg would have traded (the unfunded deficit for `no_free_native`). */
   valueNative: bigint;
 }
@@ -123,7 +114,14 @@ export function computeAllocation(
     // Target bps are expressed against NAV so rows and reserve sum to 100%.
     const targetBps = Math.round((weightBps * (BPS - reserveBps)) / BPS);
     const actualBps = bpsOf(valueNative, nav);
-    rows.push({ asset, targetBps, actualBps, valueNative, targetValueNative: target, driftBps: actualBps - targetBps });
+    rows.push({
+      asset,
+      targetBps,
+      actualBps,
+      valueNative,
+      targetValueNative: target,
+      driftBps: actualBps - targetBps,
+    });
   }
 
   return { nav, rows, reserveActualBps: bpsOf(state.nativeAvailable, nav) };
@@ -152,21 +150,41 @@ export function planSells(
 
     if (weightBps === undefined) {
       if (h.valueNative < opts.minTradeNative) {
-        skipped?.push({ asset, side: 'sell', reason: 'below_min_trade', valueNative: h.valueNative });
+        skipped?.push({
+          asset,
+          side: 'sell',
+          reason: 'below_min_trade',
+          valueNative: h.valueNative,
+        });
         continue;
       }
-      sells.push({ asset, amountIn: h.balance, valueNative: h.valueNative, exit: true });
+      sells.push({
+        asset,
+        amountIn: h.balance,
+        valueNative: h.valueNative,
+        exit: true,
+      });
       continue;
     }
 
     const excess = h.valueNative - targetValue(nav, opts.reserveBps, weightBps);
     if (excess <= 0n) continue;
     if (excess <= tolerance) {
-      skipped?.push({ asset, side: 'sell', reason: 'within_tolerance', valueNative: excess });
+      skipped?.push({
+        asset,
+        side: 'sell',
+        reason: 'within_tolerance',
+        valueNative: excess,
+      });
       continue;
     }
     if (excess < opts.minTradeNative) {
-      skipped?.push({ asset, side: 'sell', reason: 'below_min_trade', valueNative: excess });
+      skipped?.push({
+        asset,
+        side: 'sell',
+        reason: 'below_min_trade',
+        valueNative: excess,
+      });
       continue;
     }
     const amountIn = (h.balance * excess) / h.valueNative;
@@ -199,7 +217,12 @@ export function planBuys(
     const deficit = targetValue(nav, opts.reserveBps, t.weightBps) - (held.get(asset) ?? 0n);
     if (deficit <= 0n) continue;
     if (deficit <= tolerance) {
-      skipped?.push({ asset, side: 'buy', reason: 'within_tolerance', valueNative: deficit });
+      skipped?.push({
+        asset,
+        side: 'buy',
+        reason: 'within_tolerance',
+        valueNative: deficit,
+      });
       continue;
     }
     wants.push({ asset, nativeIn: deficit });
@@ -207,13 +230,23 @@ export function planBuys(
 
   if (spendable <= 0n) {
     for (const w of wants)
-      skipped?.push({ asset: w.asset, side: 'buy', reason: 'no_free_native', valueNative: w.nativeIn });
+      skipped?.push({
+        asset: w.asset,
+        side: 'buy',
+        reason: 'no_free_native',
+        valueNative: w.nativeIn,
+      });
     return [];
   }
 
   const totalWanted = wants.reduce((sum, w) => sum + w.nativeIn, 0n);
   const underfunded = totalWanted > spendable;
-  const scaled = underfunded ? wants.map(w => ({ ...w, nativeIn: (w.nativeIn * spendable) / totalWanted })) : wants;
+  const scaled = underfunded
+    ? wants.map(w => ({
+        ...w,
+        nativeIn: (w.nativeIn * spendable) / totalWanted,
+      }))
+    : wants;
 
   const buys: PlannedBuy[] = [];
   scaled.forEach((w, i) => {
@@ -222,9 +255,14 @@ export function planBuys(
       return;
     }
     // A leg that was big enough before pro-rata scaling failed for lack of free native, not size.
-    const reason: SkipReason =
+    const reason: IndexRebalanceSkipReason =
       underfunded && wants[i].nativeIn >= opts.minTradeNative ? 'no_free_native' : 'below_min_trade';
-    skipped?.push({ asset: w.asset, side: 'buy', reason, valueNative: wants[i].nativeIn });
+    skipped?.push({
+      asset: w.asset,
+      side: 'buy',
+      reason,
+      valueNative: wants[i].nativeIn,
+    });
   });
   return buys;
 }

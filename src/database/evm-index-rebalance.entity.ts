@@ -11,6 +11,7 @@ import {
 
 import {
   IndexRebalanceLeg,
+  IndexRebalanceSkippedLeg,
   IndexRebalanceStatus,
   IndexRebalanceTrigger,
   IndexTarget,
@@ -57,10 +58,18 @@ export class EvmIndexRebalance {
   @Column({ name: 'proposal_id', type: 'uuid', nullable: true })
   proposal_id?: string | null;
 
-  @Column({ name: 'status', type: 'varchar', default: IndexRebalanceStatus.pending })
+  @Column({
+    name: 'status',
+    type: 'varchar',
+    default: IndexRebalanceStatus.pending,
+  })
   status: IndexRebalanceStatus;
 
-  @Column({ name: 'phase', type: 'varchar', default: IndexRebalancePhase.sells })
+  @Column({
+    name: 'phase',
+    type: 'varchar',
+    default: IndexRebalancePhase.sells,
+  })
   phase: IndexRebalancePhase;
 
   /** Basket the run trades toward, frozen at creation. */
@@ -71,11 +80,21 @@ export class EvmIndexRebalance {
   reserve_bps: number;
 
   /** NAV in wei when the run was first planned. Informational. */
-  @Column({ name: 'nav_native', type: 'numeric', precision: 78, scale: 0, nullable: true })
+  @Column({
+    name: 'nav_native',
+    type: 'numeric',
+    precision: 78,
+    scale: 0,
+    nullable: true,
+  })
   nav_native?: string | null;
 
   @Column({ name: 'legs', type: 'jsonb', default: () => "'[]'" })
   legs: IndexRebalanceLeg[];
+
+  /** Adjustments intentionally omitted by the planner (dust, tolerance, or unavailable native). */
+  @Column({ name: 'skipped_legs', type: 'jsonb', default: () => "'[]'" })
+  skipped_legs: IndexRebalanceSkippedLeg[];
 
   @Column({ name: 'attempts', type: 'integer', default: 0 })
   attempts: number;
