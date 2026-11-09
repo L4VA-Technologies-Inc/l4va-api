@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { formatEther, parseEther, type Address, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
@@ -11,6 +10,7 @@ import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { sumOutstandingAcquireSignatures } from './evm-acquire-signatures';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { deriveContributionNonce } from './evm-contribution-nonce';
+import { EvmKmsSigners } from './evm-kms-signers.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { VAULT_ABI } from './vault.abi';
 
@@ -145,7 +145,6 @@ export class EvmVaultContributionService {
   private readonly logger = new Logger(EvmVaultContributionService.name);
 
   private readonly chainId: number;
-  private readonly mintingSignerPrivateKey: Hex;
   private readonly mintingSignerAddress: Address;
   /** Validity window for issued authorization signatures. */
   private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour: asset contributions (approvals, NFT batches)
@@ -165,23 +164,16 @@ export class EvmVaultContributionService {
     private readonly vaultEventReconciler: EvmVaultEventReconciler,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly evmFeeService: EvmGovernanceFeeService,
-    private readonly alerts: AlertsService
+    private readonly alerts: AlertsService,
+    private readonly signers: EvmKmsSigners
   ) {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
-    const privateKey = this.configService.get<string>('EVM_MINTING_SIGNER_PRIVATE_KEY');
-    if (!privateKey) {
-      throw new Error(
-        'EVM_MINTING_SIGNER_PRIVATE_KEY is not configured. Add it to .env to enable EVM contribution signing.'
-      );
-    }
-    this.mintingSignerPrivateKey = privateKey as Hex;
-
-    const signerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS');
-    if (!signerAddress) {
+    // The key itself is in KMS (EVM_MINTING_SIGNER_KMS_KEY), checked against this address on load.
+    if (!this.signers.mintingAddress) {
       throw new Error('EVM_MINTING_SIGNER_ADDRESS is not configured.');
     }
-    this.mintingSignerAddress = signerAddress as Address;
+    this.mintingSignerAddress = this.signers.mintingAddress;
   }
 
   // --------------------------------------------------------------------------
@@ -594,7 +586,7 @@ export class EvmVaultContributionService {
   }
 
   private async signAuthorization(vaultAddress: Address, auth: EvmContributionAuthorization): Promise<Hex> {
-    const account = privateKeyToAccount(this.mintingSignerPrivateKey);
+    const account = await this.signers.minting();
     return account.signTypedData({
       domain: {
         name: DOMAIN_NAME,

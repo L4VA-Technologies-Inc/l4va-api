@@ -12,12 +12,12 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 
 import { CreateVaultReq } from '../../dto/createVault.req';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmKmsSigners } from './evm-kms-signers.service';
 import { getEvmProtocolVersion } from './evm-protocol-versions';
 
 import { User } from '@/database/user.entity';
@@ -144,7 +144,6 @@ export class EvmVaultSignerService {
   private readonly mintingSignerAddress: Address;
   private readonly treasuryAddress: Address;
   private readonly chainId: number;
-  private readonly adminPrivateKey: Hex;
 
   constructor(
     @InjectRepository(Vault)
@@ -154,14 +153,14 @@ export class EvmVaultSignerService {
     private readonly configService: ConfigService,
     private readonly transactionsService: TransactionsService,
     private readonly contractReader: EvmContractReader,
-    private readonly alerts: AlertsService
+    private readonly alerts: AlertsService,
+    private readonly signers: EvmKmsSigners
   ) {
     this.factoryAddress = this.configService.get<string>('EVM_FACTORY_ADDRESS') as Address;
     this.adminAddress = this.configService.get<string>('EVM_ADMIN_ADDRESS') as Address;
     this.mintingSignerAddress = this.configService.get<string>('EVM_MINTING_SIGNER_ADDRESS') as Address;
     this.treasuryAddress = this.configService.get<string>('EVM_TREASURY_ADDRESS') as Address;
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
-    this.adminPrivateKey = this.configService.get<string>('EVM_ADMIN_PRIVATE_KEY') as Hex;
   }
 
   // --------------------------------------------------------------------------
@@ -420,7 +419,7 @@ export class EvmVaultSignerService {
   private async signCreationAuthorization(cfg: EvmVaultConfig, adminNonce: bigint, deadline: bigint): Promise<Hex> {
     const configHash = this.computeConfigHash(cfg);
 
-    const account = privateKeyToAccount(this.adminPrivateKey);
+    const account = await this.signers.admin();
 
     const signature = await account.signTypedData({
       domain: {

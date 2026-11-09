@@ -96,7 +96,16 @@ describe('EvmVaultSignerService binding', () => {
         readContract: jest.fn<any>().mockImplementation(async () => approver),
       },
     };
-    service = new EvmVaultSignerService(vaults, {} as any, config, transactions, reader, { sendAlert } as any);
+    // Binding never signs, so the KMS signers are not needed.
+    service = new EvmVaultSignerService(
+      vaults,
+      {} as any,
+      config,
+      transactions,
+      reader,
+      { sendAlert } as any,
+      {} as any
+    );
   });
 
   describe('updateVaultFromCreatedEvent', () => {
