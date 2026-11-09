@@ -305,7 +305,9 @@ export class VaultAssistantService {
       archetype === VaultArchetype.index_weighted
         ? await this.indexVaultService
             .getSupportedAssets()
-            .then(supported => supported.assets)
+            // Only tokens that pass the Uniswap route check: the assistant must never suggest a
+            // basket the vault could not trade.
+            .then(supported => supported.assets.filter(a => !a.routing || a.routing.status === 'ok'))
             .catch(() => [])
         : [];
     const presetContext: PresetContext[] = presets.map(preset => ({
