@@ -1,0 +1,107 @@
+{
+ "routing": "CLASSIC",
+ "quote": {
+  "output": {
+   "amount": "34961642824809288237",
+   "token": "0x0000000000000000000000000000000000000000",
+   "recipient": "0x80d16567Eb07084BCB33eF031EF28994bE2979DB",
+   "minimumAmount": "34612026396561195354"
+  },
+  "txFailureReasons": [],
+  "route": [
+   [
+    {
+     "type": "v3-pool",
+     "address": "0x934e60D1C6C34242b92159A5Bcc710FAFa50AD87",
+     "tokenIn": {
+      "address": "0xCEC185eB182c47d1bA1EFc84e6959e18cd620Be4",
+      "chainId": 4663,
+      "symbol": "cbBTC",
+      "decimals": "8"
+     },
+     "tokenOut": {
+      "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      "chainId": 4663,
+      "symbol": "WETH",
+      "decimals": "18"
+     },
+     "sqrtRatioX96": "133474538683707222707998",
+     "liquidity": "6664659016454471",
+     "tickCurrent": "-265892",
+     "fee": "500",
+     "amountIn": "40000000",
+     "amountOut": "14025077599955384701"
+    }
+   ],
+   [
+    {
+     "type": "v3-pool",
+     "address": "0x9664D869540E9D0a76f12C6623946C6D5d201e09",
+     "tokenIn": {
+      "address": "0xCEC185eB182c47d1bA1EFc84e6959e18cd620Be4",
+      "chainId": 4663,
+      "symbol": "cbBTC",
+      "decimals": "8"
+     },
+     "tokenOut": {
+      "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "chainId": 4663,
+      "symbol": "USDG",
+      "decimals": "6"
+     },
+     "sqrtRatioX96": "2889374023984532191013148499",
+     "liquidity": "47462669521",
+     "tickCurrent": "-66230",
+     "fee": "500",
+     "amountIn": "10000000"
+    },
+    {
+     "type": "v3-pool",
+     "address": "0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca",
+     "tokenIn": {
+      "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "chainId": 4663,
+      "symbol": "USDG",
+      "decimals": "6"
+     },
+     "tokenOut": {
+      "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      "chainId": 4663,
+      "symbol": "WETH",
+      "decimals": "18"
+     },
+     "sqrtRatioX96": "3659847631613567451529216",
+     "liquidity": "2607511588260017717",
+     "tickCurrent": "-199664",
+     "fee": "100",
+     "amountOut": "3501038175640275563"
+    }
+   ],
+   [
+    {
+     "type": "v3-pool",
+     "address": "0xD30e44aaE604B42a63f6F9A8109FD0408F35b9fb",
+     "tokenIn": {
+      "address": "0xCEC185eB182c47d1bA1EFc84e6959e18cd620Be4",
+      "chainId": 4663,
+      "symbol": "cbBTC",
+      "decimals": "8"
+     },
+     "tokenOut": {
+      "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      "chainId": 4663,
+      "symbol": "WETH",
+      "decimals": "18"
+     },
+     "sqrtRatioX96": "133584713991111548395454",
+     "liquidity": "1612291079065107",
+     "tickCurrent": "-265876",
+     "fee": "3000",
+     "amountIn": "50000000",
+     "amountOut": "17435527049213627973"
+    }
+   ]
+  ],
+  "routeString": "[v3] 40.00% = [0.05%] 0x934e60D1C6C34242b92159A5Bcc710FAFa50AD87, [v3] 10.00% = [0.05%] 0x9664D869540E9D0a76f12C6623946C6D5d201e09 -> [0.01%] 0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca, [v3] 50.00% = [0.3%] 0xD30e44aaE604B42a63f6F9A8109FD0408F35b9fb"
+ }
+}

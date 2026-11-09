@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { IndexSwapRouteService } from './index-swap-route.service';
 import { IndexVaultController } from './index-vault.controller';
 import { IndexVaultService } from './index-vault.service';
+import { UniswapTradingApiClient } from './swap-route/uniswap-trading-api.client';
 
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { Vault } from '@/database/vault.entity';
@@ -12,7 +13,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
 @Module({
   imports: [TypeOrmModule.forFeature([Vault, EvmIndexRebalance]), BlockchainModule],
   controllers: [IndexVaultController],
-  providers: [IndexVaultService, IndexSwapRouteService],
+  providers: [IndexVaultService, IndexSwapRouteService, UniswapTradingApiClient],
   exports: [IndexVaultService, IndexSwapRouteService],
 })
 export class IndexVaultModule {}

@@ -33,6 +33,17 @@ export interface SwapResult {
   fee: bigint;
 }
 
+/**
+ * The swap failed before a transaction existed (simulation revert, nonce or RPC
+ * error). Nothing can land on-chain, so the caller may re-plan immediately.
+ */
+export class SwapNotBroadcastError extends Error {
+  constructor(readonly cause: unknown) {
+    super((cause as Error)?.message ?? String(cause));
+    this.name = 'SwapNotBroadcastError';
+  }
+}
+
 /** Decoded `Vault.Swapped` payload. */
 interface SwappedArgs {
   operationId: Hex;
@@ -75,8 +86,31 @@ export class EvmSwapService {
     private readonly adminSigner: EvmAdminSigner
   ) {}
 
-  /** `proposalId` ties a governance swap to its proposal in the vault activity feed. */
-  async swap(vaultId: string, params: SwapParams, context: { proposalId?: string } = {}): Promise<SwapResult> {
+  /**
+   * What the vault would keep from `params` right now: an `eth_call` of
+   * `Vault.swap` from the admin, returning `netOut`. Reverts propagate.
+   */
+  async simulateSwap(vaultAddress: Address, params: SwapParams): Promise<bigint> {
+    const { result } = await this.contractReader.publicClient.simulateContract({
+      account: this.adminSigner.address,
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'swap',
+      args: [params],
+    });
+    return result as bigint;
+  }
+
+  /**
+   * `proposalId` ties a governance swap to its proposal in the vault activity feed.
+   * `onBroadcast` fires with the hash as soon as the transaction exists.
+   * @throws SwapNotBroadcastError when the swap failed before a transaction existed.
+   */
+  async swap(
+    vaultId: string,
+    params: SwapParams,
+    context: { proposalId?: string; onBroadcast?: (hash: Hex) => Promise<void> } = {}
+  ): Promise<SwapResult> {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
 
@@ -117,10 +151,12 @@ export class EvmSwapService {
             { id: adminTx.id },
             { tx_hash: hash, status: TransactionStatus.submitted }
           );
+          if (context.onBroadcast) await context.onBroadcast(hash);
         }
       );
     } catch (err) {
       await this.handleBroadcastError(adminTx.id, err, broadcast.hash);
+      if (!broadcast.hash && !(err instanceof TxRevertedError)) throw new SwapNotBroadcastError(err);
       throw err;
     }
 

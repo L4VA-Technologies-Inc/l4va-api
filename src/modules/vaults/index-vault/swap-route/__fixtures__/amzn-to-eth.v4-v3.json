@@ -1,0 +1,61 @@
+{
+ "routing": "CLASSIC",
+ "quote": {
+  "output": {
+   "amount": "126356264578902172",
+   "token": "0x0000000000000000000000000000000000000000",
+   "recipient": "0x80d16567Eb07084BCB33eF031EF28994bE2979DB",
+   "minimumAmount": "125092701933113150"
+  },
+  "txFailureReasons": [],
+  "route": [
+   [
+    {
+     "type": "v4-pool",
+     "address": "0x68beff3b4270ffbbb78a48d7670648909b9de6736456b0f450fee242e1d10a8b",
+     "tokenIn": {
+      "address": "0x12f190a9F9d7D37a250758b26824B97CE941bF54",
+      "chainId": 4663,
+      "symbol": "AMZN",
+      "decimals": "18"
+     },
+     "tokenOut": {
+      "address": "0x117cc2133c37B721F49dE2A7a74833232B3B4C0C",
+      "chainId": 4663,
+      "symbol": "SPY",
+      "decimals": "18"
+     },
+     "sqrtRatioX96": "132104326417560666861767356081",
+     "liquidity": "6979096022602908034332",
+     "tickCurrent": "10225",
+     "fee": "500",
+     "tickSpacing": "5",
+     "hooks": "0x0000000000000000000000000000000000000000",
+     "amountIn": "1000000000000000000"
+    },
+    {
+     "type": "v3-pool",
+     "address": "0xDDCBBa3666f578E3F09516f21Ff85BFee859AB5e",
+     "tokenIn": {
+      "address": "0x117cc2133c37B721F49dE2A7a74833232B3B4C0C",
+      "chainId": 4663,
+      "symbol": "SPY",
+      "decimals": "18"
+     },
+     "tokenOut": {
+      "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      "chainId": 4663,
+      "symbol": "WETH",
+      "decimals": "18"
+     },
+     "sqrtRatioX96": "133586375893021046231052891300",
+     "liquidity": "2478641038569644435819",
+     "tickCurrent": "10448",
+     "fee": "500",
+     "amountOut": "126356264578902172"
+    }
+   ]
+  ],
+  "routeString": "[mixed] 100.00% = [0.05%] [5] [0x0000000000000000000000000000000000000000] 0x68beff3b4270ffbbb78a48d7670648909b9de6736456b0f450fee242e1d10a8b -> [0.05%] 0xDDCBBa3666f578E3F09516f21Ff85BFee859AB5e"
+ }
+}

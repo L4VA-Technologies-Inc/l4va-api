@@ -590,6 +590,8 @@ export class GovernanceService {
       | 'assets_whitelist'
       | 'is_expandable_asset_whitelist'
       | 'chain_type'
+      | 'chain_id'
+      | 'evm_protocol_version'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -601,6 +603,8 @@ export class GovernanceService {
         'assets_whitelist',
         'is_expandable_asset_whitelist',
         'chain_type',
+        'chain_id',
+        'evm_protocol_version',
       ],
       relations: ['assets_whitelist'],
     });
@@ -1094,6 +1098,11 @@ export class GovernanceService {
 
         // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
         if (vault.chain_type === ChainType.robinhood) {
+          // Mainnet token trades run through the Uniswap swap adapter; refuse
+          // any that cannot be routed now rather than after the vote.
+          if (Number(vault.chain_id) === 4663) {
+            await this.indexVaultService.assertMarketSwapsRoutable(vault, actions as Array<Record<string, any>>);
+          }
           proposal.metadata.marketplaceActions = actions;
           break;
         }
@@ -2240,7 +2249,7 @@ export class GovernanceService {
 
         // Resolved now, not at execution: holders vote on exact assets and
         // decimals, and a basket the adapter cannot trade is rejected up front.
-        const targets = await this.indexVaultService.resolveBasket(reweight.targets);
+        const targets = await this.indexVaultService.resolveBasket(reweight.targets, indexVault);
 
         const current = indexVault.index_config;
         const schedule = this.indexVaultService.resolveSchedule(

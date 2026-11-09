@@ -105,12 +105,23 @@ export interface IndexRebalanceLeg {
   grossOut?: string | null;
   fee?: string | null;
   txHash?: string | null;
+  /**
+   * False once the leg is known never to have reached the chain (it failed in
+   * simulation), so it can be re-planned before its deadline. Unset on legs
+   * from before this field existed: those are treated as possibly broadcast.
+   */
+  broadcast?: boolean | null;
+  /** Human-readable route the leg was sent with. */
+  route?: string | null;
   status: IndexLegStatus;
   error?: string | null;
 }
 
-/** Why a portfolio adjustment was intentionally not turned into a swap. */
-export type IndexRebalanceSkipReason = 'within_tolerance' | 'below_min_trade' | 'no_free_native';
+/**
+ * Why a portfolio adjustment was intentionally not turned into a swap.
+ * `no_route`: Uniswap has no route the vault's swap adapter can execute for the trade.
+ */
+export type IndexRebalanceSkipReason = 'within_tolerance' | 'below_min_trade' | 'no_free_native' | 'no_route';
 
 /** A needed adjustment omitted by the planner, persisted for history and diagnostics. */
 export interface IndexRebalanceSkippedLeg {
@@ -124,4 +135,6 @@ export interface IndexRebalanceSkippedLeg {
   valueNative: string;
   /** Minimum native trade size at planning time, in wei. */
   minTradeNative: string;
+  /** Why no route was found (`no_route` only). */
+  detail?: string | null;
 }
