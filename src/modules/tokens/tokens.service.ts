@@ -4,7 +4,7 @@ import * as path from 'path';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BaseError, ContractFunctionRevertedError } from 'viem';
+import { BaseError, ContractFunctionRevertedError, parseAbi, type Address } from 'viem';
 
 import {
   TOKEN_CHART_INTERVALS,
@@ -21,6 +21,7 @@ import { MarketService } from '@/modules/market/market.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { getEvmLpAdapterAddress } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
 import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import { MarketTokenKind } from '@/types/market.types';
 import { ChainType } from '@/types/vault.types';
@@ -756,26 +757,193 @@ export class TokensService {
     return this.getVaultTokenOhlcUsd(id, interval);
   }
 
-  /** Vault token trades from its Uniswap pool (GeckoTerminal). `id` = vault id or token address. */
+  /**
+   * Vault token trades. GeckoTerminal's pool trades only cover the last 24 hours, so older trades
+   * come from the token's transfer history on Blockscout (VT moving into or out of the pool).
+   * `id` = vault id or token address.
+   */
   private async getVaultTrades(id: string, limit: number) {
     const evmToken = await this.findEvmVaultTokenAddress(id);
     if (!evmToken) return { id, trades: [] as Array<Record<string, unknown>> };
     const pairAddress = await this.findEvmPairAddress(evmToken);
     if (!pairAddress) return { id, trades: [] as Array<Record<string, unknown>> };
+
+    let recent: Array<Record<string, any>> = [];
     try {
-      const trades = await this.priceService.getGeckoTerminalTrades(pairAddress, evmToken, limit);
-      return {
-        id,
-        pair_address: pairAddress,
-        trades: trades.map(trade => ({
-          ...trade,
-          tx_url: trade.tx_hash ? `https://robinhoodchain.blockscout.com/tx/${trade.tx_hash}` : null,
-        })),
-      };
+      recent = await this.priceService.getGeckoTerminalTrades(pairAddress, evmToken, limit);
     } catch (error) {
       this.logger.error(`GeckoTerminal trades failed for vault token ${evmToken}: ${error.message}`);
-      return { id, pair_address: pairAddress, trades: [] };
     }
+
+    let history: Array<Record<string, any>> = [];
+    if (recent.length < limit) {
+      try {
+        history = await this.getPoolTransferTrades(evmToken, pairAddress, limit);
+      } catch (error) {
+        this.logger.warn(`Trade history unavailable for vault token ${evmToken}: ${error.message}`);
+      }
+    }
+
+    // GeckoTerminal rows carry exact prices, so they win over the history row for the same tx.
+    const byTx = new Map<string, Record<string, any>>();
+    for (const trade of [...history, ...recent]) byTx.set(trade.tx_hash, trade);
+    const trades = [...byTx.values()]
+      .sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0))
+      .slice(0, limit);
+
+    return {
+      id,
+      pair_address: pairAddress,
+      trades: trades.map(trade => ({
+        ...trade,
+        tx_url: trade.tx_hash ? `https://robinhoodchain.blockscout.com/tx/${trade.tx_hash}` : null,
+      })),
+    };
+  }
+
+  /**
+   * Swaps reconstructed from VT transfers to/from the pool: from the pool = buy, into it = sell.
+   * The pool is the V2 pair itself, or the v4 PoolManager when `pairAddress` is a v4 pool id.
+   * Transfers with the LP adapter / PositionManager are liquidity moves, not trades. The price is the pool candle
+   * close at the trade time (hourly for the last week, daily before that).
+   */
+  private async getPoolTransferTrades(token: string, pairAddress: string, limit: number) {
+    const adapter = getEvmLpAdapterAddress()?.toLowerCase() ?? null;
+    const pool = await this.resolvePoolHolder(pairAddress, adapter);
+    if (!pool) return [];
+
+    const liquidityMovers = new Set<string>(adapter ? [adapter] : []);
+    if (adapter && pool !== pairAddress.toLowerCase()) {
+      // v4 liquidity is settled through the PositionManager, not the adapter itself.
+      try {
+        const positionManager = (await this.evmContractReader.publicClient.readContract({
+          address: adapter as Address,
+          abi: parseAbi(['function positionManager() view returns (address)']),
+          functionName: 'positionManager',
+        })) as string;
+        liquidityMovers.add(positionManager.toLowerCase());
+      } catch {
+        // Without it LP moves may show as trades; trades themselves are unaffected.
+      }
+    }
+    const transfers = await this.fetchTokenTransfers(token, pool, liquidityMovers, limit);
+    if (!transfers.length) return [];
+
+    const [hourly, daily] = await Promise.all([
+      this.getEvmVaultTokenOhlc(token, 7).then(r => r.ohlcv),
+      this.getEvmVaultTokenOhlc(token, 365).then(r => r.ohlcv),
+    ]);
+    const weekAgo = Date.now() / 1000 - 7 * 86_400;
+    const closeAt = (candles: TokenOhlcvPoint[], time: number): number | null => {
+      let close: number | null = null;
+      for (const candle of candles) {
+        if (candle.time > time) break;
+        close = Number(candle.close);
+      }
+      return close;
+    };
+
+    return transfers.map(transfer => {
+      const time = (Date.parse(transfer.timestamp) || 0) / 1000;
+      const priceUsd = closeAt(time >= weekAgo ? hourly : daily, time) ?? closeAt(daily, time);
+      return {
+        tx_hash: transfer.tx_hash,
+        kind: transfer.kind,
+        price_usd: priceUsd,
+        amount_token: transfer.amount,
+        volume_usd: priceUsd != null ? priceUsd * transfer.amount : null,
+        timestamp: transfer.timestamp,
+        trader: transfer.trader,
+        block_number: transfer.block_number,
+      };
+    });
+  }
+
+  private readonly poolHolderByPair = new Map<string, string>();
+
+  private async resolvePoolHolder(pairAddress: string, adapter: string | null): Promise<string | null> {
+    const key = pairAddress.toLowerCase();
+    if (/^0x[0-9a-f]{40}$/.test(key)) return key;
+    const cached = this.poolHolderByPair.get(key);
+    if (cached) return cached;
+    if (!adapter) return null;
+    const poolManager = (await this.evmContractReader.publicClient.readContract({
+      address: adapter as Address,
+      abi: parseAbi(['function poolManager() view returns (address)']),
+      functionName: 'poolManager',
+    })) as string;
+    const normalized = poolManager.toLowerCase();
+    this.poolHolderByPair.set(key, normalized);
+    return normalized;
+  }
+
+  private blockscoutBases(): string[] {
+    const testnet = 'https://explorer.testnet.chain.robinhood.com/api/v2';
+    const mainnet = 'https://robinhoodchain.blockscout.com/api/v2';
+    if (this.configService.get<string>('ROBINHOOD_RPC_URL', '').toLowerCase().includes('testnet')) return [testnet];
+    // The explorer domain can sit behind a Cloudflare challenge; the PRO API does not.
+    const pro = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim()
+      ? ['https://api.blockscout.com/4663/api/v2']
+      : [];
+    return [...pro, mainnet];
+  }
+
+  private async fetchTokenTransfers(token: string, pool: string, liquidityMovers: Set<string>, limit: number) {
+    const MAX_PAGES = 10;
+    const apiKey = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim();
+    const errors: string[] = [];
+
+    for (const base of this.blockscoutBases()) {
+      try {
+        const trades: Array<{
+          tx_hash: string;
+          kind: 'buy' | 'sell';
+          amount: number;
+          timestamp: string;
+          trader: string | null;
+          block_number: number | null;
+        }> = [];
+        let next: Record<string, unknown> | null = null;
+        for (let page = 0; page < MAX_PAGES && trades.length < limit; page += 1) {
+          const url = new URL(`${base}/tokens/${token}/transfers`);
+          if (next) Object.entries(next).forEach(([k, v]) => url.searchParams.set(k, String(v)));
+          if (apiKey && url.hostname === 'api.blockscout.com') url.searchParams.set('apikey', apiKey);
+          const response = await fetch(url.toString(), {
+            headers: { accept: 'application/json' },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const body = (await response.json()) as { items?: any[]; next_page_params?: Record<string, unknown> | null };
+
+          for (const item of body.items ?? []) {
+            const from = String(item.from?.hash ?? '').toLowerCase();
+            const to = String(item.to?.hash ?? '').toLowerCase();
+            const isBuy = from === pool;
+            if (!isBuy && to !== pool) continue;
+            const counterparty = isBuy ? to : from;
+            if (liquidityMovers.has(counterparty)) continue;
+            const decimals = Number(item.total?.decimals ?? 18);
+            const amount = Number(item.total?.value ?? 0) / 10 ** decimals;
+            if (!(amount > 0)) continue;
+            trades.push({
+              tx_hash: item.transaction_hash ?? item.tx_hash ?? '',
+              kind: isBuy ? 'buy' : 'sell',
+              amount,
+              timestamp: item.timestamp ?? null,
+              trader: counterparty || null,
+              block_number: item.block_number != null ? Number(item.block_number) : null,
+            });
+          }
+
+          next = body.next_page_params ?? null;
+          if (!next) break;
+        }
+        return trades.slice(0, limit);
+      } catch (error) {
+        errors.push(`${base}: ${(error as Error).message}`);
+      }
+    }
+    throw new Error(`Blockscout transfers failed: ${errors.join(' | ')}`);
   }
 
   /** Vault market row with the EVM vault-token address resolved (the market row only stores the vault address). */
@@ -909,7 +1077,7 @@ export class TokensService {
       low_24h: row.low_24h ?? null,
       low_24h_eth: row.low_24h_eth ?? null,
       low_24h_ada: row.low_24h_ada ?? null,
-      holders_count: null,
+      holders_count: row.holders_count ?? null,
       chain_type: row.chain_type ?? null,
       vault_id: row.vault_id ?? row.id,
       contract_address: row.contract_address ?? null,
@@ -917,7 +1085,7 @@ export class TokensService {
       explorer_url: isEvmToken ? this.buildExplorerUrl('robinhood', copyValue) : null,
       has_live_trades: isEvmToken,
       chart_kind: isEvmToken ? 'usd' : 'nav',
-      overview_fields: ['fdv', 'liquidity', 'mcap'],
+      overview_fields: isEvmToken ? ['fdv', 'liquidity', 'mcap', 'holders'] : ['fdv', 'liquidity', 'mcap'],
       swap,
     };
   }

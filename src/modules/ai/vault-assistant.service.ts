@@ -14,6 +14,7 @@ import { resolveVaultCreationSpec } from './spec/resolve-spec';
 import { sanitizeVaultDraft } from './spec/sanitize-draft';
 import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork } from './spec/spec.types';
 import { buildVaultDraftJsonSchema } from './spec/vault-draft.schema';
+import { TickerAvailabilityService } from './ticker-availability.service';
 import { VaultAiToolRegistry } from './tools/vault-ai-tool.registry';
 import { VaultAiToolContext } from './tools/vault-ai-tool.types';
 
@@ -42,6 +43,8 @@ interface AssistantTurnContext {
   toolContext: VaultAiToolContext;
   /** Tokens an index basket may hold; empty when the chain has no fixed list or the vault is not an index. */
   basketAssets: IndexSupportedAsset[];
+  /** The client's draft before this turn, sanitized against the spec. */
+  currentDraft: Record<string, unknown>;
 }
 
 export type VaultAssistantStreamEvent =
@@ -89,7 +92,8 @@ export class VaultAssistantService {
     private readonly storageService: GoogleCloudStorageService,
     private readonly toolRegistry: VaultAiToolRegistry,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly indexVaultService: IndexVaultService
+    private readonly indexVaultService: IndexVaultService,
+    private readonly tickerAvailability: TickerAvailabilityService
   ) {}
 
   async respond(userId: string, request: VaultAssistantMessageReq): Promise<VaultAssistantMessageRes> {
@@ -107,7 +111,7 @@ export class VaultAssistantService {
           continue;
         }
 
-        return this.toResponse(this.parseCompletion(turn.content), context, action);
+        return await this.toResponse(this.parseCompletion(turn.content), context, action);
       }
     } catch (error) {
       this.logger.error(`Vault assistant completion failed: ${(error as Error).message}`);
@@ -194,7 +198,7 @@ export class VaultAssistantService {
         return;
       }
 
-      const response = this.toResponse(completion, context, action);
+      const response = await this.toResponse(completion, context, action);
       if (response.message.startsWith(streamedMessage) && response.message.length > streamedMessage.length) {
         yield { type: 'delta', text: response.message.slice(streamedMessage.length) };
       } else if (!streamedMessage && response.message) {
@@ -315,13 +319,24 @@ export class VaultAssistantService {
     // arbitrary content into the prompt.
     const { draft: currentDraft } = sanitizeVaultDraft(request.currentDraft ?? {}, spec);
 
+    // Computed from the untouched client draft: the assistant has to know about the image and the
+    // collections it cannot set itself, which the sanitized draft above deliberately drops.
+    const completion = buildVaultCompletionContext(request.currentDraft ?? {}, spec);
+    const currentTicker = typeof currentDraft.vaultTokenTicker === 'string' ? currentDraft.vaultTokenTicker : '';
+    if (currentTicker && (await this.tickerAvailability.isTaken(currentTicker))) {
+      // Launch would fail on it (createVault rejects a ticker held by an active vault).
+      completion.invalidValues = [
+        ...completion.invalidValues,
+        `vaultTokenTicker: "${currentTicker}" is already used by another vault — choose a different ticker`,
+      ];
+      completion.isLaunchable = false;
+    }
+
     const systemPrompt = buildVaultAssistantPrompt({
       spec,
       presets: presetContext,
       currentDraft,
-      // Computed from the untouched client draft: the assistant has to know about the image and the
-      // collections it cannot set itself, which the sanitized draft above deliberately drops.
-      completion: buildVaultCompletionContext(request.currentDraft ?? {}, spec),
+      completion,
       validationErrors: request.validationErrors,
       basketSymbols: basketAssets.map(asset => asset.symbol),
     });
@@ -337,6 +352,7 @@ export class VaultAssistantService {
         basketSymbols: basketAssets.map(asset => asset.symbol),
       }),
       basketAssets,
+      currentDraft,
       toolContext: {
         userId,
         chain: request.chain as SpecChain,
@@ -391,23 +407,68 @@ export class VaultAssistantService {
     };
   }
 
-  private toResponse(
+  /**
+   * The model cannot see which tickers other vaults hold, so a proposed ticker that is taken is swapped
+   * for the first free numbered variant here (createVault would reject it at launch). Returns a sentence
+   * to append to the reply, since the model's own text still names the original ticker.
+   */
+  private async replaceTakenTicker(draft: Record<string, unknown>): Promise<string | null> {
+    const proposed = typeof draft.vaultTokenTicker === 'string' ? draft.vaultTokenTicker : '';
+    if (!proposed) return null;
+    try {
+      if (!(await this.tickerAvailability.isTaken(proposed))) return null;
+      const free = await this.tickerAvailability.firstFreeVariant(proposed);
+      if (free) {
+        draft.vaultTokenTicker = free;
+        return `The ticker ${proposed} is already used by another vault, so I set ${free} instead.`;
+      }
+      delete draft.vaultTokenTicker;
+      return `The ticker ${proposed} is already used by another vault — please choose another one.`;
+    } catch (error) {
+      // An availability lookup must not fail the turn; launch still enforces uniqueness.
+      this.logger.warn(`Ticker availability check failed: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * The model tends to re-apply a field's spec default while filling other fields, silently
+   * reverting a value the user chose (e.g. a 5-minute window back to the 5-day default). A value
+   * already in the draft is only replaced by something other than the default; going back to the
+   * default is left to the user in the form.
+   */
+  private keepEstablishedValues(draft: Record<string, unknown>, context: AssistantTurnContext): void {
+    for (const [key, next] of Object.entries(draft)) {
+      const current = context.currentDraft[key];
+      const fallback = context.spec.fields[key]?.default;
+      if (fallback === undefined || current === undefined || current === null || current === '') continue;
+      if (next === fallback && current !== fallback) {
+        this.logger.debug(`Kept established ${key}=${JSON.stringify(current)} over re-applied default`);
+        delete draft[key];
+      }
+    }
+  }
+
+  private async toResponse(
     completion: AssistantCompletion,
     context: AssistantTurnContext,
     action?: VaultAssistantAction
-  ): VaultAssistantMessageRes {
+  ): Promise<VaultAssistantMessageRes> {
     const { spec } = context;
     const { draft, rejected } = sanitizeVaultDraft(completion.vaultDraft, spec);
     if (rejected.length) {
       this.logger.warn(`Vault assistant produced rejected values: ${rejected.join('; ')}`);
     }
+    if (completion.resetDraft !== true) this.keepEstablishedValues(draft, context);
+    const tickerNote = await this.replaceTakenTicker(draft);
 
     const missingFields = Array.isArray(completion.missingFields)
       ? completion.missingFields.filter((field): field is string => typeof field === 'string')
       : [];
 
+    const message = typeof completion.message === 'string' ? completion.message : '';
     return {
-      message: typeof completion.message === 'string' ? completion.message : '',
+      message: tickerNote ? `${message}${message ? ' ' : ''}${tickerNote}` : message,
       // A rejected value means the draft is not complete, whatever the model claims.
       status: completion.status === 'ready' && !rejected.length ? 'ready' : 'gathering',
       vaultDraft: draft,

@@ -5,9 +5,11 @@ import { Response } from 'express';
 
 import { GenerateVaultImageReq, GenerateVaultImageRes } from './dto/generate-vault-image.dto';
 import { GetVaultCreationSpecDto } from './dto/get-vault-creation-spec.dto';
+import { TickerAvailabilityQuery, TickerAvailabilityRes } from './dto/ticker-availability.dto';
 import { VaultAssistantMessageReq } from './dto/vault-assistant-message.req';
 import { VaultAssistantMessageRes } from './dto/vault-assistant-message.res';
 import { ResolvedVaultCreationSpec, SpecChain } from './spec/spec.types';
+import { TickerAvailabilityService } from './ticker-availability.service';
 import { VaultAssistantService } from './vault-assistant.service';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
@@ -17,7 +19,10 @@ import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 @ApiTags('ai')
 @Controller('ai')
 export class VaultAssistantController {
-  constructor(private readonly vaultAssistantService: VaultAssistantService) {}
+  constructor(
+    private readonly vaultAssistantService: VaultAssistantService,
+    private readonly tickerAvailability: TickerAvailabilityService
+  ) {}
 
   @ApiDoc({
     summary: 'Get the vault creation spec',
@@ -27,6 +32,20 @@ export class VaultAssistantController {
   @Get('vault-creation-spec')
   getVaultCreationSpec(@Query() query: GetVaultCreationSpecDto): ResolvedVaultCreationSpec {
     return this.vaultAssistantService.resolveSpec(query.chain as SpecChain, query.network);
+  }
+
+  @ApiDoc({
+    summary: 'Check whether a vault token ticker is free',
+    description: 'Same rule createVault enforces; a taken ticker comes with the first free numbered variant',
+    status: 200,
+  })
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('ticker-availability')
+  async getTickerAvailability(@Query() query: TickerAvailabilityQuery): Promise<TickerAvailabilityRes> {
+    if (!(await this.tickerAvailability.isTaken(query.ticker))) {
+      return { available: true, suggestion: null };
+    }
+    return { available: false, suggestion: await this.tickerAvailability.firstFreeVariant(query.ticker) };
   }
 
   @ApiDoc({

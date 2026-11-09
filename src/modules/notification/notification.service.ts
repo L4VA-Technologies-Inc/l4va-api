@@ -11,6 +11,8 @@ export interface INotificationBody {
   title: string;
   description: string;
   vaultId?: string;
+  /** Lets the in-app notification open the proposal itself instead of the vault page. */
+  proposalId?: string;
   vaultName?: string;
   contributorIds?: string[];
   tokenHolderIds?: string[];

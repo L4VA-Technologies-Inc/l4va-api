@@ -296,6 +296,7 @@ export class NotificationEventsListener {
     address: string;
     vaultId: string;
     vaultName: string;
+    proposalId?: string;
     proposalName: string;
     creatorId: string;
   }) {
@@ -303,6 +304,7 @@ export class NotificationEventsListener {
       title: 'Governance Proposal Created',
       description: `Your "${event.proposalName}" Governance Proposal for vault ${event.vaultName} has been created!`,
       vaultId: event.vaultId,
+      proposalId: event.proposalId,
       vaultName: event.vaultName,
       address: event.address,
     });
@@ -323,6 +325,7 @@ export class NotificationEventsListener {
         title: `New vote available for vault "${event.vaultName}"`,
         description: `You have a new governance proposal, ${event.proposalName}, for vault ${event.vaultName}`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
         address: event.address,
       },
@@ -381,6 +384,7 @@ export class NotificationEventsListener {
         title: `The proposal ${event.proposalName} has been executed`,
         description: `The proposal ${event.proposalName} for vault ${event.vaultName} has been executed`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
         address: event.address,
       },
@@ -418,6 +422,7 @@ export class NotificationEventsListener {
         title: `The proposal ${event.proposalName} has been rejected`,
         description: `The proposal ${event.proposalName} for vault ${event.vaultName} has been rejected`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
         address: event.address,
       },
@@ -492,6 +497,7 @@ export class NotificationEventsListener {
         title: `Time running out on Proposal ${event.proposalName}`,
         description: `Time is running out on Proposal "${event.proposalName}" in vault ${event.vaultName}. Cast your vote now!`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
       },
       event.nonVoterIds
