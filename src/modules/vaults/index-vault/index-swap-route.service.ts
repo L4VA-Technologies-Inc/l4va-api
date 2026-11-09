@@ -352,10 +352,16 @@ export class IndexSwapRouteService {
     try {
       plan = await this.planViaTradingApi(assetIn, assetOut, amountIn, swapper ?? this.adapter ?? NATIVE);
     } catch (err) {
-      if (!(err instanceof TradingApiUnavailableError)) throw err;
+      // Also fall back when the Trading API finds no route: it gives up on sizes deeper than its
+      // liquidity threshold (e.g. a vault's whole L4VA balance), while a direct pool still quotes —
+      // and that quote is the honest exit value. The on-chain route passes the same validation.
+      if (!(err instanceof TradingApiUnavailableError) && !(err instanceof NoSupportedRouteError)) throw err;
       const fallback = await this.planViaChain(assetIn, assetOut, amountIn);
       if (!fallback) throw err;
-      this.logger.warn(`Trading API down; using on-chain single-pool route for ${assetIn}→${assetOut}`);
+      this.logger.warn(
+        `${err instanceof TradingApiUnavailableError ? 'Trading API down' : 'Trading API has no route'}; ` +
+          `using on-chain single-pool route for ${assetIn}→${assetOut}`
+      );
       plan = fallback;
     }
     return { amountOut: plan.amountOut, route: encodeMultiPathRoute(plan, this.weth), plan };
