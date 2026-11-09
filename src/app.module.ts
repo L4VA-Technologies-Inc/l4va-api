@@ -40,6 +40,7 @@ import { WayUpModule } from './modules/wayup/wayup.module';
 import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { BurnLockModule } from '@/modules/burn-lock/burn-lock.module';
+import { CardanoAdminMonitorModule } from '@/modules/cardano-admin-monitor/cardano-admin-monitor.module';
 import { CardanoBuybackModule } from '@/modules/cardano-buyback/cardano-buyback.module';
 import { FeeKeeperModule } from '@/modules/fee-keeper/fee-keeper.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
@@ -128,6 +129,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     EventEmitterModule.forRoot(),
     PresetsModule,
     BurnLockModule,
+    CardanoAdminMonitorModule,
     CardanoBuybackModule,
     OgModule,
     RewardsModule,

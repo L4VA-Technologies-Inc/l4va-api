@@ -21,6 +21,7 @@ import {
   WayUpTransactionBuildResponse,
 } from './types/transaction-status.enum';
 
+import { CardanoAdminTxRegistry } from '@/modules/cardano-admin-monitor/cardano-admin-tx.registry';
 import { WayUpTransactionInput } from '@/modules/wayup/wayup.types';
 
 interface EnvVarCheck {
@@ -44,7 +45,8 @@ export class BlockchainService {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly httpService: HttpService
+    private readonly httpService: HttpService,
+    private readonly adminTxRegistry: CardanoAdminTxRegistry
   ) {
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
@@ -278,6 +280,8 @@ export class BlockchainService {
       }
 
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
+      // Every backend-submitted tx is known to the admin-address monitor; anything else alerts.
+      await this.adminTxRegistry.record(response.data.txHash);
       return { txHash: response.data.txHash };
     } catch (error) {
       if (error.response?.status === 422) {

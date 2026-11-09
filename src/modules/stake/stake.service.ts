@@ -31,6 +31,7 @@ import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
+import { CardanoAdminTxRegistry } from '@/modules/cardano-admin-monitor/cardano-admin-tx.registry';
 import { UtxoRefDto } from '@/modules/stake/dto/unstake-tokens.dto';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -109,7 +110,8 @@ export class StakeService {
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(TokenStakingPosition)
-    private readonly tokenStakingPositionRepository: Repository<TokenStakingPosition>
+    private readonly tokenStakingPositionRepository: Repository<TokenStakingPosition>,
+    private readonly adminTxRegistry: CardanoAdminTxRegistry
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.network = lucidNetworkFromCardanoEnv(this.isMainnet);
@@ -1116,6 +1118,7 @@ export class StakeService {
         : await signBuilder.complete();
 
       const txHash = await signedTx.submit();
+      if (isAdminSigned) await this.adminTxRegistry.record(txHash);
 
       await this.transactionRepository.update(
         { id: transactionId },

@@ -17,6 +17,7 @@ import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onc
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { CardanoAdminTxRegistry } from '@/modules/cardano-admin-monitor/cardano-admin-tx.registry';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -103,7 +104,8 @@ export class VyfiService {
     private vaultRepository: Repository<Vault>,
     private readonly httpService: HttpService,
     private readonly blockchainService: BlockchainService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly adminTxRegistry: CardanoAdminTxRegistry
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -475,6 +477,7 @@ export class VyfiService {
 
     // Submit the transaction
     const txHash = await signedTx.submit();
+    await this.adminTxRegistry.record(txHash);
 
     this.logger.log(`Remove liquidity transaction submitted successfully: ${txHash}`);
 
@@ -761,6 +764,7 @@ export class VyfiService {
 
     // Submit the transaction
     const txHash = await signedTx.submit();
+    await this.adminTxRegistry.record(txHash);
 
     this.logger.log(`ZapA transaction submitted successfully: ${txHash}`);
 
@@ -850,6 +854,7 @@ export class VyfiService {
 
     // Submit the transaction
     const txHash = await signedTx.submit();
+    await this.adminTxRegistry.record(txHash);
 
     this.logger.log(`ZapB transaction submitted successfully: ${txHash}`);
 
@@ -1313,6 +1318,7 @@ export class VyfiService {
 
         // Submit the transaction
         const txHash = await signedTx.submit();
+        await this.adminTxRegistry.record(txHash);
 
         this.logger.log(`LP creation transaction submitted successfully: ${txHash}`);
 

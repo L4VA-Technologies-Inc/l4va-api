@@ -11,6 +11,7 @@ import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.ser
 import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { CardanoAdminTxRegistry } from '@/modules/cardano-admin-monitor/cardano-admin-tx.registry';
 import { ProposalStatus } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
@@ -31,7 +32,8 @@ export class GovernanceRefundService {
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     private readonly transactionsService: TransactionsService,
-    private readonly evmAdminSigner: EvmAdminSigner
+    private readonly evmAdminSigner: EvmAdminSigner,
+    private readonly adminTxRegistry: CardanoAdminTxRegistry
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -278,7 +280,9 @@ export class GovernanceRefundService {
       .complete({ changeAddress: this.adminAddress });
 
     const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
-    return await signedTx.submit();
+    const txHash = await signedTx.submit();
+    await this.adminTxRegistry.record(txHash);
+    return txHash;
   }
 
   private formatRefundMetadataMessage(proposalId: string, proposalTitle?: string): { msg: string[] } {
