@@ -2393,6 +2393,7 @@ export class GovernanceService {
     this.eventEmitter.emit('governance.proposal_created', {
       address: user.address,
       vaultId: vault.id,
+      proposalId: proposal.id,
       vaultName: vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
@@ -3310,6 +3311,7 @@ export class GovernanceService {
     this.eventEmitter.emit('governance.proposal_created', {
       address: proposal.creator.address,
       vaultId: proposal.vault.id,
+      proposalId: proposal.id,
       vaultName: proposal.vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
