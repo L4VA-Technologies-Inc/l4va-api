@@ -77,7 +77,34 @@ export class MarketService implements OnModuleInit {
     }
 
     const items = await queryBuilder.getMany();
-    return items.map(item => this.mapVaultMarketToTokenRow(item, adaPrice, ethPrice));
+    const holders = await this.holderCountsByVault(items.map(item => item.vault_id));
+    return items.map(item => this.mapVaultMarketToTokenRow(item, adaPrice, ethPrice, holders.get(item.vault_id)));
+  }
+
+  /**
+   * Holders per vault from its latest snapshot — the same count the vault page shows
+   * (`tokenHolders`): addresses with a positive VT balance. EVM snapshots exclude the vault and
+   * pool, so LP-held VT is not counted as a holder. Vaults without a snapshot are left out.
+   */
+  private async holderCountsByVault(vaultIds: string[]): Promise<Map<string, number>> {
+    const ids = [...new Set(vaultIds.filter(Boolean))];
+    if (!ids.length) return new Map();
+    try {
+      const rows: Array<{ vault_id: string; holders: string }> = await this.marketRepository.query(
+        `SELECT DISTINCT ON (s.vault_id) s.vault_id,
+                (SELECT COUNT(*) FROM jsonb_each_text(s.address_balances) b
+                  WHERE b.value ~ '^[0-9]+(\\.[0-9]+)?$' AND b.value::numeric > 0) AS holders
+           FROM snapshot s
+          WHERE s.vault_id = ANY($1::uuid[])
+          ORDER BY s.vault_id, s.created_at DESC`,
+        [ids]
+      );
+      return new Map(rows.map(row => [row.vault_id, Number(row.holders)]));
+    } catch (error) {
+      // Holders are a display stat; the token list must still load without them.
+      this.logger.warn(`Holder counts unavailable: ${(error as Error).message}`);
+      return new Map();
+    }
   }
 
   /** Preprod has no DexHunter/TapTools index for VT — list locked vaults with NAV from our TVL. */
@@ -99,6 +126,7 @@ export class MarketService implements OnModuleInit {
       where: { vault_id: In(vaults.map(vault => vault.id)) },
     });
     const marketByVaultId = new Map(markets.map(market => [market.vault_id, market]));
+    const holders = await this.holderCountsByVault(vaults.map(vault => vault.id));
 
     return vaults.map(vault => {
       const existing = marketByVaultId.get(vault.id);
@@ -110,15 +138,19 @@ export class MarketService implements OnModuleInit {
             type: MarketType.vault_token,
             vault,
           });
-      return this.mapVaultMarketToTokenRow(item, adaPrice, ethPrice);
+      return this.mapVaultMarketToTokenRow(item, adaPrice, ethPrice, holders.get(vault.id));
     });
   }
 
   /** Single vault token in the same shape as the Tokens table, including swap/copy identity. */
   async getVaultTokenById(id: string) {
     const rawItem = await this.getRawMarketByVaultIdWithRelations(id);
-    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
-    return this.mapVaultMarketToTokenRow(rawItem, adaPrice, ethPrice);
+    const [adaPrice, ethPrice, holders] = await Promise.all([
+      this.priceService.getAdaPrice(),
+      this.priceService.getEthPrice(),
+      this.holderCountsByVault([rawItem.vault_id]),
+    ]);
+    return this.mapVaultMarketToTokenRow(rawItem, adaPrice, ethPrice, holders.get(rawItem.vault_id));
   }
 
   async getMarkets(query: GetMarketsDto): Promise<GetMarketsResponse> {
@@ -489,7 +521,7 @@ export class MarketService implements OnModuleInit {
     });
   }
 
-  private mapVaultMarketToTokenRow(item: Market, adaPrice: number, ethPrice: number) {
+  private mapVaultMarketToTokenRow(item: Market, adaPrice: number, ethPrice: number, holdersCount?: number) {
     const mapped = this.mapMarketToItem(item, adaPrice);
     const priceUsd = mapped.price_usd;
     const fdvUsd = mapped.fdv_usd;
@@ -531,6 +563,7 @@ export class MarketService implements OnModuleInit {
       low_24h_ada: null,
       low_24h_eth: null,
       sparkline: [] as number[],
+      holders_count: holdersCount ?? null,
       source: 'vault' as const,
       asset_class: 'vault_token' as const,
       chain_type: mapped.chain_type,
