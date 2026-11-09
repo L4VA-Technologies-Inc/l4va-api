@@ -370,7 +370,23 @@ export class IndexSwapRouteService {
   /** Native value of `amount` of `asset`, via an exact-input quote into native. */
   async valueInNative(asset: Address, amount: bigint): Promise<bigint> {
     if (amount === 0n) return 0n;
-    return (await this.quote(asset, NATIVE, amount)).amountOut;
+    try {
+      return (await this.quote(asset, NATIVE, amount)).amountOut;
+    } catch (err) {
+      // Dust (e.g. 1 wei left after a sale) quotes to zero everywhere and reads as "no route".
+      // Value an amount below one whole token from the price of one whole token instead, so a
+      // speck of dust can never block pricing a whole portfolio. Real missing routes still throw.
+      if (!(err instanceof NoSupportedRouteError)) throw err;
+      const decimals = Number(
+        await this.contractReader.publicClient
+          .readContract({ address: asset, abi: ERC20_META_ABI, functionName: 'decimals' })
+          .catch(() => 18)
+      );
+      const oneToken = 10n ** BigInt(decimals);
+      if (amount >= oneToken) throw err;
+      const unitValue = (await this.quote(asset, NATIVE, oneToken)).amountOut;
+      return (amount * unitValue) / oneToken;
+    }
   }
 
   /**
