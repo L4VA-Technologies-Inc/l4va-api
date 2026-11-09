@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { isUUID } from 'class-validator';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { encodeAbiParameters, formatUnits, isAddress, keccak256, parseAbi, type Address, type Hex } from 'viem';
 
@@ -23,7 +24,14 @@ import {
   resolveSchedule,
   type ResolvedSchedule,
 } from './index-rebalance.schedule';
-import { IndexSwapRouteService, NATIVE } from './index-swap-route.service';
+import {
+  IndexSwapRouteService,
+  NATIVE,
+  NoSupportedRouteError,
+  SwapAdapterOutdatedError,
+  type AssetRouteCheck,
+  type VaultRouteRef,
+} from './index-swap-route.service';
 
 import { EvmIndexRebalance, IndexRebalancePhase } from '@/database/evm-index-rebalance.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -32,10 +40,10 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
 import { PriceService } from '@/modules/price/price.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
-import { EvmSwapService } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
+import { EvmAssetKind } from '@/modules/vaults/processing-tx/onchain/evm-position.service';
+import { EvmSwapService, SwapNotBroadcastError } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
 import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import {
-  BPS,
   INDEX_DEFAULT_DRIFT_TOLERANCE_BPS,
   INDEX_DEFAULT_SLIPPAGE_BPS,
   INDEX_MAX_ASSETS,
@@ -52,6 +60,7 @@ import {
   IndexTarget,
   VaultArchetype,
 } from '@/types/index-vault.types';
+import { MarketplaceAction } from '@/types/proposal.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
 const ERC20_METADATA_ABI = parseAbi([
@@ -89,6 +98,11 @@ export interface IndexSupportedAsset {
   name: string | null;
   decimals: number;
   image: string | null;
+  /**
+   * Whether a new vault could buy this token with ETH and sell it back right
+   * now, checked with the same routing as execution. A basket needs both.
+   */
+  routing?: AssetRouteCheck;
 }
 
 export interface IndexSupportedAssets {
@@ -138,7 +152,7 @@ export interface IndexPortfolio {
 }
 
 @Injectable()
-export class IndexVaultService {
+export class IndexVaultService implements OnApplicationBootstrap {
   private readonly logger = new Logger(IndexVaultService.name);
   private readonly portfolioCache = new Map<string, { at: number; data: IndexPortfolio }>();
   private readonly running = new Set<string>();
@@ -201,11 +215,84 @@ export class IndexVaultService {
       this.supportedAssetsCache = null;
       throw err;
     });
+    const assets = await this.supportedAssetsCache;
+    const routing = await Promise.all(assets.map(a => this.routeService.checkAsset(a.assetAddress as Address)));
     return {
       restricted: true,
-      assets: await this.supportedAssetsCache,
+      assets: assets.map((a, i) => ({ ...a, routing: routing[i] })),
       rebalance,
     };
+  }
+
+  /**
+   * Route check for one token (buy with ETH, sell back to ETH), for tokens a
+   * user adds by address and for re-checking a token in a vault's basket.
+   */
+  async checkAssetRoutes(assetAddress: string, vaultId?: string): Promise<AssetRouteCheck> {
+    const address = assetAddress?.toLowerCase();
+    if (!address || !isAddress(address) || address === NATIVE) {
+      throw new BadRequestException(`Invalid token address: ${assetAddress}`);
+    }
+    if (vaultId && !isUUID(vaultId)) throw new BadRequestException(`Invalid vault id: ${vaultId}`);
+    const vault = vaultId ? await this.requireIndexVault(vaultId) : null;
+    return this.routeService.checkAsset(address as Address, vault);
+  }
+
+  /**
+   * Reject a market-swap proposal whose token trades Uniswap cannot route for
+   * this vault right now, using the same routing as execution. NFT sales and
+   * position closes are not swaps and are left to their own checks.
+   */
+  async assertMarketSwapsRoutable(
+    vault: Pick<Vault, 'id' | 'chain_id' | 'evm_protocol_version'>,
+    actions: Array<Record<string, any>>
+  ): Promise<void> {
+    const swaps = actions.filter(a => {
+      if (a?.exec === 'CLOSE_POSITION') return false;
+      const isSell = a?.exec === MarketplaceAction.SELL || a?.action === MarketplaceAction.SELL;
+      const kind = Number(a?.assetKind ?? a?.kind);
+      return !(isSell && (kind === EvmAssetKind.ERC721 || kind === EvmAssetKind.ERC1155));
+    });
+    if (!swaps.length) return;
+
+    let adapter: Address;
+    try {
+      adapter = this.routeService.tradingAdapterFor(vault);
+    } catch (err) {
+      throw new BadRequestException((err as Error).message);
+    }
+    for (const a of swaps) {
+      const assetIn = (a.inputAsset ?? a.policyId ?? NATIVE) as Address;
+      const assetOut = (a.expectedOutputAsset ?? a.outputAsset ?? NATIVE) as Address;
+      const amountIn = BigInt(a.amount ?? a.quantity ?? 0);
+      if (amountIn === 0n || assetIn.toLowerCase() === assetOut.toLowerCase()) continue;
+      try {
+        await this.routeService.quote(assetIn, assetOut, amountIn, adapter);
+      } catch (err) {
+        if (err instanceof NoSupportedRouteError) {
+          throw new BadRequestException(`Uniswap cannot route this trade right now (${err.reason}).`);
+        }
+        throw new BadRequestException(
+          'Could not check the trade route: Uniswap did not answer. Please try again shortly.'
+        );
+      }
+    }
+  }
+
+  /** Keeps the token picker's route checks warm so the asset list answers from cache. */
+  onApplicationBootstrap(): void {
+    // Warm the token picker's route checks in the background; never block startup on Uniswap.
+    void this.refreshAssetRouteChecks();
+  }
+
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async refreshAssetRouteChecks(): Promise<void> {
+    if (!this.allowedAssets.length || !this.routeService.adapter) return;
+    for (const asset of this.allowedAssets) {
+      await this.routeService.checkAsset(asset, null, true).catch(err => {
+        this.logger.warn(`Route check for ${asset} failed: ${(err as Error).message}`);
+      });
+    }
   }
 
   /**
@@ -216,7 +303,7 @@ export class IndexVaultService {
    * adapter — a basket the vault cannot buy would lock contributors' ETH in a
    * vault that never becomes an index.
    */
-  async resolveBasket(items: BasketItemInput[]): Promise<IndexTarget[]> {
+  async resolveBasket(items: BasketItemInput[], vault: VaultRouteRef = null): Promise<IndexTarget[]> {
     const error = validateWeights({
       weightsBps: items.map(i => Number(i.weightBps)),
       maxAssets: INDEX_MAX_ASSETS,
@@ -239,6 +326,12 @@ export class IndexVaultService {
 
     if (!this.routeService.adapter) {
       throw new BadRequestException('Index vaults are not enabled: no swap adapter is configured');
+    }
+    try {
+      this.routeService.tradingAdapterFor(vault);
+    } catch (err) {
+      if (err instanceof SwapAdapterOutdatedError) throw new BadRequestException(err.message);
+      throw err;
     }
 
     return Promise.all(
@@ -277,14 +370,9 @@ export class IndexVaultService {
             })
             .catch(() => null)) as string | null);
 
-        try {
-          const probe = await this.routeService.quote(NATIVE, address, MIN_TRADE_NATIVE);
-          if (probe.amountOut === 0n) throw new Error('zero output');
-        } catch (err) {
-          throw new BadRequestException(
-            `${symbol} (${address}) cannot be bought through the vault swap adapter: ${(err as Error).message}`
-          );
-        }
+        // Both directions, with the routing execution uses: a token the vault
+        // can buy but never sell could not be rebalanced or wound down.
+        assertTradable(symbol, await this.routeService.checkAsset(address, vault, true));
 
         return {
           assetAddress: address,
@@ -391,6 +479,7 @@ export class IndexVaultService {
       side: 'sell' | 'buy';
       reason: IndexRebalanceSkipReason;
       valueNative: string;
+      detail?: string;
     }[];
     minTradeNative: string;
     navNative: string;
@@ -400,7 +489,7 @@ export class IndexVaultService {
 
     // Resolved exactly as a re-weight proposal would resolve it, so a basket
     // that previews cleanly is a basket that can actually be submitted.
-    const resolved = await this.resolveBasket(items);
+    const resolved = await this.resolveBasket(items, vault);
     const targets: WeightTarget[] = resolved.map(t => ({
       asset: t.assetAddress,
       weightBps: t.weightBps,
@@ -425,7 +514,33 @@ export class IndexVaultService {
         };
       }),
     };
-    const buys = planBuys(afterSells, targets, opts, skipped);
+    const plannedBuys = planBuys(afterSells, targets, opts, skipped);
+
+    // Route every planned trade at its real size, as execution will. A trade
+    // Uniswap cannot route is reported, never shown as if it will happen.
+    const adapter = this.routeService.tradingAdapterFor(vault);
+    const routable = async (assetIn: Address, assetOut: Address, amountIn: bigint): Promise<string | null> => {
+      try {
+        await this.routeService.quote(assetIn, assetOut, amountIn, adapter);
+        return null;
+      } catch (err) {
+        if (err instanceof NoSupportedRouteError) return err.reason;
+        throw err;
+      }
+    };
+    const sellsRouted = await Promise.all(sells.map(s => routable(s.asset as Address, NATIVE, s.amountIn)));
+    const buysRouted = await Promise.all(plannedBuys.map(b => routable(NATIVE, b.asset as Address, b.nativeIn)));
+    sells.forEach((s, i) => {
+      const detail = sellsRouted[i];
+      if (detail)
+        skipped.push({ asset: s.asset, side: 'sell', reason: 'no_route', valueNative: s.valueNative, detail });
+    });
+    plannedBuys.forEach((b, i) => {
+      const detail = buysRouted[i];
+      if (detail) skipped.push({ asset: b.asset, side: 'buy', reason: 'no_route', valueNative: b.nativeIn, detail });
+    });
+    const routedSells = sells.filter((_, i) => !sellsRouted[i]);
+    const buys = plannedBuys.filter((_, i) => !buysRouted[i]);
 
     return {
       skipped: skipped.map(s => ({
@@ -434,7 +549,7 @@ export class IndexVaultService {
       })),
       minTradeNative: opts.minTradeNative.toString(),
       navNative: computeNav(state).toString(),
-      sells: sells.map(s => ({
+      sells: routedSells.map(s => ({
         asset: s.asset,
         amountIn: s.amountIn.toString(),
         valueNative: s.valueNative.toString(),
@@ -463,6 +578,21 @@ export class IndexVaultService {
       this.logger.warn(`Re-weight trade check skipped for vault ${vaultId}: ${(err as Error).message}`);
       return;
     }
+
+    // A re-weight that needs a trade Uniswap cannot route would pass the vote
+    // and then stall; refuse it while the proposer can still change the basket.
+    const unroutable = preview.skipped.filter(s => s.reason === 'no_route');
+    if (unroutable.length) {
+      const symbolOf = (a: string): string =>
+        items.find(t => t.assetAddress?.toLowerCase() === a.toLowerCase())?.symbol || `${a.slice(0, 8)}…`;
+      const list = unroutable
+        .map(s => `${symbolOf(s.asset)} (${s.side === 'buy' ? 'buy' : 'sell'}: ${s.detail ?? 'no route'})`)
+        .join('; ');
+      throw new BadRequestException(
+        `This re-weight needs trades Uniswap cannot route right now: ${list}. Adjust the basket and try again.`
+      );
+    }
+
     if (preview.sells.length || preview.buys.length) return;
 
     const blocking = preview.skipped.filter(s => s.reason !== 'within_tolerance');
@@ -858,7 +988,7 @@ export class IndexVaultService {
     if (!config?.targets?.length) throw new Error(`Vault ${vaultId} has no index basket configured`);
     if (!vault.contract_address) throw new Error(`Vault ${vaultId} has no contract address`);
     const vaultAddress = vault.contract_address as Address;
-    const adapter = this.routeService.requireAdapterFor(vault);
+    const adapter = this.routeService.tradingAdapterFor(vault);
 
     const lockKey = `${vaultId}`;
     if (this.running.has(lockKey)) throw new Error(`A rebalance is already running for vault ${vaultId}`);
@@ -1106,8 +1236,9 @@ export class IndexVaultService {
       }
       // A leg that was broadcast may still be in the mempool. Replacing it
       // before its deadline could fill both; after the deadline the vault
-      // rejects the old transaction, so re-planning is safe.
-      if (leg.deadline && BigInt(leg.deadline) >= nowSec) {
+      // rejects the old transaction, so re-planning is safe. A leg known never
+      // to have been sent (`broadcast === false`) has nothing to wait for.
+      if (leg.broadcast !== false && leg.deadline && BigInt(leg.deadline) >= nowSec) {
         await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs });
         throw new Error(`Leg ${leg.index} may still land until ${leg.deadline}; retry after its deadline`);
       }
@@ -1127,37 +1258,71 @@ export class IndexVaultService {
     tradeFeeBps: number
   ): Promise<void> {
     const amountIn = BigInt(leg.amountIn);
-    const quote = await this.routeService.quote(leg.assetIn as Address, leg.assetOut as Address, amountIn);
-    // The vault's floor binds the NET output, after its own trade fee.
-    const minAmountOut =
-      (((quote.amountOut * BigInt(BPS - slippageBps)) / BigInt(BPS)) * BigInt(BPS - tradeFeeBps)) / BigInt(BPS);
-
     const deadline = BigInt(Math.floor(Date.now() / 1000)) + SWAP_DEADLINE_SECONDS;
-    leg.quotedOut = quote.amountOut.toString();
-    leg.minAmountOut = minAmountOut.toString();
 
-    if (minAmountOut === 0n) {
-      leg.status = IndexLegStatus.skipped;
-      leg.error = 'quote rounds to zero output';
+    // Route, then price that exact route by simulating Vault.swap; the floor
+    // comes from the simulation. Nothing is sent if either step fails.
+    let prepared: Awaited<ReturnType<IndexSwapRouteService['prepareSwap']>>;
+    try {
+      prepared = await this.routeService.prepareSwap({
+        vaultAddress,
+        adapter,
+        operationId: leg.operationId as Hex,
+        assetIn: leg.assetIn as Address,
+        assetOut: leg.assetOut as Address,
+        amountIn,
+        deadline,
+        slippageBps,
+        tradeFeeBps,
+      });
+    } catch (err) {
+      leg.broadcast = false;
+      leg.deadline = null;
+      leg.error = (err as Error).message.slice(0, 500);
+      if (err instanceof NoSupportedRouteError) {
+        // Not tradable right now: skip this leg and keep trading the others.
+        leg.status = IndexLegStatus.skipped;
+        const asset = leg.side === IndexLegSide.sell ? leg.assetIn : leg.assetOut;
+        const target = run.targets.find(t => t.assetAddress.toLowerCase() === asset.toLowerCase());
+        run.skipped_legs = [
+          ...(run.skipped_legs ?? []),
+          {
+            asset: asset.toLowerCase(),
+            symbol: target?.symbol ?? `${asset.slice(0, 6)}…${asset.slice(-4)}`,
+            side: leg.side,
+            reason: 'no_route',
+            valueNative: leg.side === IndexLegSide.buy ? leg.amountIn : (leg.quotedOut ?? '0'),
+            minTradeNative: MIN_TRADE_NATIVE.toString(),
+            detail: err.reason,
+          },
+        ];
+        this.logger.warn(`Index rebalance ${run.id}: leg ${leg.index} skipped — ${err.message}`);
+        await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs, skipped_legs: run.skipped_legs });
+        return;
+      }
+      leg.status = IndexLegStatus.failed;
       await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs });
-      return;
+      throw err;
     }
 
+    const { params, quote } = prepared;
+    leg.quotedOut = quote.amountOut.toString();
+    leg.minAmountOut = params.minAmountOut.toString();
+    leg.route = quote.plan ? await this.routeService.describe(quote.plan).catch(() => null) : null;
     leg.deadline = deadline.toString();
+    leg.broadcast = null;
     await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs });
 
     try {
-      const result = await this.swapService.swap(vaultId, {
-        operationId: leg.operationId as Hex,
-        adapter,
-        assetIn: leg.assetIn as Address,
-        amountIn,
-        assetOut: leg.assetOut as Address,
-        minAmountOut,
-        deadline,
-        route: quote.route,
+      const result = await this.swapService.swap(vaultId, params, {
+        onBroadcast: async hash => {
+          leg.broadcast = true;
+          leg.txHash = hash;
+          await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs });
+        },
       });
       leg.status = IndexLegStatus.confirmed;
+      leg.broadcast = true;
       leg.txHash = result.txHash;
       leg.grossOut = result.grossOut.toString();
       leg.fee = result.fee.toString();
@@ -1165,6 +1330,11 @@ export class IndexVaultService {
     } catch (err) {
       leg.status = IndexLegStatus.failed;
       leg.error = (err as Error).message.slice(0, 500);
+      if (err instanceof SwapNotBroadcastError) {
+        // Never reached the chain: the next attempt may re-plan at once.
+        leg.broadcast = false;
+        leg.deadline = null;
+      }
       throw err;
     } finally {
       await this.rebalanceRepository.update({ id: run.id }, { legs: run.legs });
@@ -1272,4 +1442,15 @@ export class IndexVaultService {
       completedAt: run.completed_at ?? null,
     };
   }
+}
+
+/** Reject a basket token whose route check did not pass, with a reason users can act on. */
+function assertTradable(symbol: string, check: AssetRouteCheck): void {
+  if (check.status === 'ok') return;
+  if (check.status === 'unavailable') {
+    throw new BadRequestException(
+      `Could not check whether ${symbol} can be traded: ${check.reason ?? 'Uniswap did not answer'}. Please try again shortly.`
+    );
+  }
+  throw new BadRequestException(`${symbol} cannot be held in an index vault: ${check.reason ?? 'no Uniswap route'}.`);
 }

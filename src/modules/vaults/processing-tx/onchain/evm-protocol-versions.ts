@@ -19,6 +19,12 @@ export interface EvmProtocolVersion {
   batchDeployer: Address;
   /** Null when the deployment file does not record it (testnet adapters are configured by env). */
   swapAdapter: Address | null;
+  /**
+   * True when `swapAdapter` implements `MULTI_PATH_EXACT_IN` (mixed v3/v4 routes). The API only
+   * builds that route format, so a vault whose adapter lacks it cannot trade on Uniswap and every
+   * route check reports it as unsupported rather than failing at execution.
+   */
+  swapAdapterMultiPath?: boolean;
   lpAdapter: Address | null;
   feeConverter: Address;
   feeController: Address;
@@ -57,6 +63,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       adapterRegistry: '0x1BB699ae8A027c242dA401f59B89B2bD6c9d3629',
       protocolFeeConfig: '0x4Be358fdb7e3BF2D2ca70e012c89257d0F3Eb734',
       batchDeployer: '0x229401A16D551ca7520FE911B9648534480240D1',
+      // Pre-multi-path adapter: index and market swaps report "no route" until this is replaced by
+      // the address from script/DeployMultiPathSwapAdapter.s.sol with `swapAdapterMultiPath: true`.
       swapAdapter: '0x80d16567Eb07084BCB33eF031EF28994bE2979DB',
       lpAdapter: '0x5B9b4279E31949DD367f4733db791A69aA1335E4',
       feeConverter: '0x29041c5BC568D0cD8b039267bD9B3427FFDbfD37',
@@ -132,6 +140,16 @@ const versionOf = (vault: VaultVersionRef): EvmProtocolVersion | null =>
  */
 export function resolveVaultSwapAdapter(vault: VaultVersionRef, fallback: Address | null): Address | null {
   return versionOf(vault)?.swapAdapter ?? fallback;
+}
+
+/**
+ * Whether the vault's swap adapter accepts `MULTI_PATH_EXACT_IN`. A versioned adapter answers from
+ * {@link EvmProtocolVersion.swapAdapterMultiPath}; the env fallback adapter from `fallbackMultiPath`.
+ */
+export function vaultSwapAdapterIsMultiPath(vault: VaultVersionRef, fallbackMultiPath: boolean): boolean {
+  const version = versionOf(vault);
+  if (version?.swapAdapter) return version.swapAdapterMultiPath === true;
+  return fallbackMultiPath;
 }
 
 /** The LP adapter of a vault's version. Same fallback rule as the swap adapter. */

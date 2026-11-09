@@ -57,6 +57,8 @@ export interface SkippedLeg {
   reason: IndexRebalanceSkipReason;
   /** Native value the leg would have traded (the unfunded deficit for `no_free_native`). */
   valueNative: bigint;
+  /** Why no route was found (`no_route` only). */
+  detail?: string;
 }
 
 export interface AllocationRow {

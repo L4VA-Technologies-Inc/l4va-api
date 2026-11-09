@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 import { IndexBasketReq } from './dto/index-basket.dto';
 import { IndexVaultService } from './index-vault.service';
@@ -19,6 +19,23 @@ export class IndexVaultController {
   })
   getSupportedAssets(): ReturnType<IndexVaultService['getSupportedAssets']> {
     return this.indexVaultService.getSupportedAssets();
+  }
+
+  @Get('index/assets/:address/routes')
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Whether a token can be bought with ETH and sold back to ETH through Uniswap',
+    description:
+      "Uses the same routing as trade execution. Pass `vaultId` to check with that vault's swap adapter; " +
+      'without it the check is for a new vault. `status` is ok, no_route or unavailable (Uniswap did not answer).',
+  })
+  @ApiQuery({ name: 'vaultId', required: false })
+  checkAssetRoutes(
+    @Param('address') address: string,
+    @Query('vaultId') vaultId?: string
+  ): ReturnType<IndexVaultService['checkAssetRoutes']> {
+    return this.indexVaultService.checkAssetRoutes(address, vaultId || undefined);
   }
 
   @Get(':id/index')

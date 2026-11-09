@@ -395,7 +395,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
     let adapter: Address;
     try {
-      adapter = this.swapRouteService.requireAdapterFor(vaultRow);
+      adapter = this.swapRouteService.tradingAdapterFor(vaultRow);
     } catch (err) {
       this.logger.error(`Cannot execute market proposal ${proposal.id}: ${(err as Error).message}`);
       return false;
@@ -435,30 +435,20 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
           continue;
         }
 
-        const quote = await this.swapRouteService.quote(assetIn, assetOut, amountIn);
-        // Floor on what the vault keeps: quote less slippage, less the trade fee.
-        const minAmountOut =
-          (((quote.amountOut * BigInt(10_000 - this.swapSlippageBps)) / 10_000n) * BigInt(10_000 - tradeFeeBps)) /
-          10_000n;
-        if (minAmountOut === 0n) {
-          this.logger.error(`Proposal ${proposal.id} action[${i}]: quote rounds to zero output`);
-          return false;
-        }
+        // Same routing as index rebalances: the floor comes from simulating this exact swap.
+        const { params } = await this.swapRouteService.prepareSwap({
+          vaultAddress,
+          adapter,
+          operationId,
+          assetIn,
+          assetOut,
+          amountIn,
+          deadline: txDeadline(),
+          slippageBps: this.swapSlippageBps,
+          tradeFeeBps,
+        });
 
-        const res = await this.swapService.swap(
-          vault.id,
-          {
-            operationId,
-            adapter,
-            assetIn,
-            amountIn,
-            assetOut,
-            minAmountOut,
-            deadline: txDeadline(),
-            route: quote.route,
-          },
-          { proposalId: proposal.id }
-        );
+        const res = await this.swapService.swap(vault.id, params, { proposalId: proposal.id });
 
         this.logger.log(
           `Proposal ${proposal.id} action[${i}]: swap ${assetIn}→${assetOut} ` +
