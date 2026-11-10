@@ -18,10 +18,13 @@ export class NotificationEventsListener {
     private notificationService: NotificationService,
     private readonly configService: ConfigService
   ) {
+    // Same source as the verification link (EmailVerificationService): every environment that sets
+    // CLIENT_APP_URL (stage, local) must send links to itself, not to testnet/app.
     this.emailUrl =
-      this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'
+      this.configService.get<string>('CLIENT_APP_URL')?.replace(/\/+$/, '') ||
+      (this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'
         ? 'https://app.l4va.org'
-        : 'https://testnet.l4va.org';
+        : 'https://testnet.l4va.org');
   }
 
   private formatEmailTime(date: Date = new Date()): string {
