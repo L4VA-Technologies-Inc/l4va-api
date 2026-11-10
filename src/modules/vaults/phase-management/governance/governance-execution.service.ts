@@ -407,7 +407,16 @@ export class GovernanceExecutionService {
 
       // Double-check the start time
       if (new Date() >= new Date(proposal.startDate)) {
-        await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.ACTIVE });
+        // Atomic UPCOMING -> ACTIVE transition: the scheduled job and the overdue
+        // fallback can fire at the same moment; only the winner continues.
+        const transition = await this.proposalRepository.update(
+          { id: proposalId, status: ProposalStatus.UPCOMING },
+          { status: ProposalStatus.ACTIVE }
+        );
+        if (!transition.affected) {
+          this.logger.debug(`Proposal ${proposalId} already activated by a concurrent run`);
+          return;
+        }
 
         // Emit event for real-time UI updates
         this.eventEmitter.emit('proposal.status.changed', {
