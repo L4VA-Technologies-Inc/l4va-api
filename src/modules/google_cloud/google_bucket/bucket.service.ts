@@ -323,8 +323,11 @@ export class GoogleCloudStorageService {
       const imageType = body?.imageType;
       const resizeParams = imageType ? ImageResizeMap[imageType] : null;
 
+      // Phones store portrait photos sideways plus an EXIF Orientation tag. Re-encoding to WebP
+      // drops that tag, so apply it first (`.rotate()` with no angle) or the image lands rotated.
       if (resizeParams) {
         processedImageBuffer = await sharp(file.buffer)
+          .rotate()
           .resize(resizeParams.width, resizeParams.height, {
             fit: 'cover',
             position: 'center',
@@ -337,6 +340,7 @@ export class GoogleCloudStorageService {
           .toBuffer();
       } else {
         processedImageBuffer = await sharp(file.buffer)
+          .rotate()
           .webp({
             quality: 80,
             lossless: false,
