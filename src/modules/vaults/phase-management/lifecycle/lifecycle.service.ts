@@ -2079,7 +2079,12 @@ export class LifecycleService {
    * (now, if none), plus a small margin — if that is earlier than the current end. Idempotent.
    */
   private async shortenAcquireExpansionAtMax(
-    vault: { id: string; expansion_phase_start?: Date | null; expansion_duration?: number | string | null },
+    vault: {
+      id: string;
+      contract_address?: string | null;
+      expansion_phase_start?: Date | null;
+      expansion_duration?: number | string | null;
+    },
     nativeCollected: bigint
   ): Promise<void> {
     const proposal = await this.proposalRepository.findOne({
@@ -2092,6 +2097,12 @@ export class LifecycleService {
     // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
     const maxWei = BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n;
     if (maxWei <= 0n || nativeCollected < maxWei) return;
+
+    // Ending early is only safe where the on-chain acquire window can be closed before the
+    // snapshot (see handleEvmContributionToSnapshotReady). Vaults without `closeAcquireWindow`
+    // keep their full duration: a cancel after the snapshot would otherwise keep its VT.
+    if (!vault.contract_address) return;
+    if (!(await this.evmCycleCloseService.supportsCloseAcquireWindow(vault.contract_address as `0x${string}`))) return;
 
     const start = new Date(vault.expansion_phase_start as Date).getTime();
     const currentEnd = start + Number(vault.expansion_duration ?? 0);
@@ -2810,9 +2821,26 @@ export class LifecycleService {
         if (vault.vault_status === VaultStatus.acquire_expansion && !expansionEnded && vault.expansion_phase_start) {
           await this.shortenAcquireExpansionAtMax(vault, cycleView.nativeCollected);
         }
-        const acquireEnded =
-          expansionEnded || cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
-        if (!assetEnded || !acquireEnded) {
+        if (!assetEnded) continue;
+
+        // The snapshot is built only once the acquire window is closed ON-CHAIN. While it is
+        // open, a contributor can `cancelContribution` after the snapshot and still be in the
+        // root `closeCycle` commits — refunded AND allocated VT. A normal cycle and an expansion
+        // that runs its full duration end on-chain no later than in the DB, so they pass here.
+        // An acquire expansion that ended early (its "Maximum ETH") is ended in the DB only:
+        // close its window on-chain first (vaults created from the post-V10 deployer), and
+        // snapshot on a later tick. Older vaults have no `closeAcquireWindow`; they wait for the
+        // on-chain end (shortenAcquireExpansionAtMax does not shorten them).
+        const acquireEndedOnChain = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        if (!acquireEndedOnChain) {
+          if (expansionEnded) {
+            const closed = await this.evmCycleCloseService.closeAcquireWindowIfSupported(vault.id);
+            const msg =
+              `EVM snapshot deferred: vault=${vault.id} cycle=${cycleId} expansion ended but on-chain acquire ` +
+              `window open — ${closed ? 'closed it on-chain, snapshot next tick' : 'no closeAcquireWindow on this vault, waiting for the on-chain end'}`;
+            if (closed) this.logger.log(msg);
+            else this.logger.debug(msg);
+          }
           continue;
         }
 
@@ -3048,7 +3076,7 @@ export class LifecycleService {
       .where('snap.status = :status', { status: EvmSnapshotStatus.ready })
       .andWhere('vault.chain_type = :evmChain', { evmChain: ChainType.robinhood })
       .andWhere('vault.evm_root_committed_at IS NULL')
-      .select(['snap.id', 'snap.vault_id', 'snap.cycle_id'])
+      .select(['snap.id', 'snap.vault_id', 'snap.cycle_id', 'snap.created_at'])
       .getMany();
 
     if (readySnapshots.length === 0) return;
@@ -3073,20 +3101,32 @@ export class LifecycleService {
         );
         // Cycle must still be Active on-chain.
         if (cycleView.status !== 0 /* EvmCycleStatus.Active */) continue;
-        // Both windows must have ended. Zero-length windows (start==end==0)
-        // are treated as already closed.
+        // Both windows must have ended ON-CHAIN. Zero-length windows (start==end==0)
+        // are treated as already closed. There is deliberately no DB-duration bypass:
+        // while the acquire window is open on-chain a contributor can cancel after the
+        // snapshot and keep their allocation (see handleEvmContributionToSnapshotReady,
+        // which closes an early-ended expansion's window before snapshotting).
         const assetEnded = cycleView.assetWindow.end === 0n || cycleView.assetWindow.end <= nowSec;
-        // An acquire-expansion cycle ends when its governance duration does, even
-        // if the on-chain window runs longer ("no limit" opens it for a year):
-        // closeCycle does not check the window end.
-        const expansionEnded =
-          vault.vault_status === VaultStatus.acquire_expansion &&
-          !!vault.expansion_phase_start &&
-          vault.expansion_duration != null &&
-          new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration) <= Date.now();
-        const acquireEnded =
-          expansionEnded || cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
+        const acquireEnded = cycleView.acquireWindow.end === 0n || cycleView.acquireWindow.end <= nowSec;
         bothWindowsClosed = assetEnded && acquireEnded;
+
+        // A snapshot built before the acquire window closed may include a contribution that
+        // was cancelled afterwards. Send it back for a rebuild instead of committing it.
+        const acquireEndMs = Number(cycleView.acquireWindow.end) * 1000;
+        if (bothWindowsClosed && acquireEndMs > 0 && new Date(snap.created_at).getTime() < acquireEndMs) {
+          await this.dataSource.getRepository(EvmValuationSnapshot).update(
+            { id: snap.id, status: EvmSnapshotStatus.ready },
+            {
+              status: EvmSnapshotStatus.calculated,
+              failure_reason: 'built before the acquire window closed on-chain; rebuilding',
+            }
+          );
+          this.logger.warn(
+            `EVM closeCycle skipped: vault=${snap.vault_id} cycle=${snap.cycle_id} snapshot=${snap.id} was built ` +
+              `before the acquire window closed on-chain — reset to calculated for a rebuild`
+          );
+          continue;
+        }
       } catch (err) {
         this.logger.warn(
           `EVM handleEvmAcquireToLocked window check failed for vault ${snap.vault_id}: ${(err as Error).message}`

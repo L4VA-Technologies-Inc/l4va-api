@@ -156,6 +156,23 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [],
   },
+  // Vaults created from the post-V10 deployer only; probe before use
+  // (EvmCycleCloseService.supportsCloseAcquireWindow).
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'closeAcquireWindow',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: 'event',
+    name: 'AcquireWindowClosed',
+    inputs: [
+      { name: 'cycleId', type: 'uint256', indexed: true },
+      { name: 'closedAt', type: 'uint64', indexed: false },
+    ],
+  },
 
   // --- Cycle lifecycle -----------------------------------------------------
   {

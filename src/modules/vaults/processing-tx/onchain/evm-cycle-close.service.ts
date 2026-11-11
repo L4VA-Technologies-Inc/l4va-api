@@ -358,6 +358,63 @@ export class EvmCycleCloseService {
    * refund via `refundContributions(...)` in Phase C.
    */
   /** `message`: plain-language reason shown in the vault activity feed. */
+  /** Vault code never changes, so a positive probe is cached for the process lifetime. */
+  private readonly closeAcquireWindowSupport = new Set<string>();
+
+  /**
+   * True when the vault has `closeAcquireWindow` (created from the post-V10 deployer) AND this
+   * backend can call it right now (cycle Active, our admin key is the authority). Probed with
+   * eth_call from the admin address; any revert — an older vault without the function included —
+   * reads as false, which callers treat as "wait for the on-chain window end", the safe default.
+   */
+  async supportsCloseAcquireWindow(vaultAddress: Address): Promise<boolean> {
+    const key = vaultAddress.toLowerCase();
+    if (this.closeAcquireWindowSupport.has(key)) return true;
+    try {
+      await this.contractReader.publicClient.simulateContract({
+        account: this.adminSigner.address,
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'closeAcquireWindow',
+        args: [],
+      });
+      this.closeAcquireWindowSupport.add(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Closes the current cycle's acquire window on-chain, so no contribution can be cancelled or
+   * added before the snapshot is built and committed. Returns false (and sends nothing) for a
+   * vault without `closeAcquireWindow`.
+   */
+  async closeAcquireWindowIfSupported(vaultId: string): Promise<boolean> {
+    const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
+    if (!vault?.contract_address || vault.chain_type !== ChainType.robinhood) return false;
+    const vaultAddress = vault.contract_address as Address;
+    if (!(await this.supportsCloseAcquireWindow(vaultAddress))) return false;
+
+    try {
+      const result = await this.adminSigner.sendAndConfirm(
+        { address: vaultAddress, abi: VAULT_ABI, functionName: 'closeAcquireWindow', args: [] },
+        ['AcquireWindowClosed'],
+        async () => {}
+      );
+      this.logger.log(`closeAcquireWindow confirmed for vault ${vaultId} tx=${result.hash}`);
+      return true;
+    } catch (err) {
+      this.logger.error(`closeAcquireWindow failed for vault ${vaultId}: ${(err as Error).message}`);
+      void this.alerts.sendAlert('evm_close_acquire_window_failed', {
+        chain: 'robinhood',
+        vaultId,
+        error: (err as Error).message,
+      });
+      return false;
+    }
+  }
+
   async cancelCurrentCycle(vaultId: string, reason: string, message?: string): Promise<{ txHash: Hex }> {
     const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
     if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
