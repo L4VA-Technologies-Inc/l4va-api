@@ -30,6 +30,7 @@ import { EvmPositionService } from './evm-position.service';
 import { EvmProtocolFeeSyncService } from './evm-protocol-fee-sync.service';
 import { EvmProtocolVersionBackfillService } from './evm-protocol-version-backfill.service';
 import { EvmRefundOrchestrator } from './evm-refund-orchestrator.service';
+import { EvmRescueService } from './evm-rescue.service';
 import { EvmSwapService } from './evm-swap.service';
 import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
 import { EvmTerminationService } from './evm-termination.service';
@@ -129,6 +130,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,
+    EvmRescueService,
     UniswapQuoteService,
     VaultManagingService,
     TransactionHealthService,
@@ -159,6 +161,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,
+    EvmRescueService,
     UniswapQuoteService,
   ],
 })

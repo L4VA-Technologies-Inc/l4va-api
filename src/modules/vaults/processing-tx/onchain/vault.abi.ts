@@ -1224,6 +1224,96 @@ export const VAULT_ABI = [
       { name: 'amount', type: 'uint256', indexed: false },
     ],
   },
+  // ---- untracked-asset rescue (vaults created from the post-V10 deployer only) ----
+  // Older vaults lack these; probe with `isSourceRescued` before use (see evm-rescue.service.ts).
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'untrackedBalance',
+    inputs: [
+      { name: 'kind', type: 'uint8' },
+      { name: 'asset', type: 'address' },
+      { name: 'tokenId', type: 'uint256' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'isSourceRescued',
+    inputs: [{ name: 'sourceId', type: 'bytes32' }],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'owedNftUnits',
+    inputs: [
+      { name: 'nft', type: 'address' },
+      { name: 'tokenId', type: 'uint256' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'rescueUntrackedNative',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'sourceId', type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'rescueUntrackedERC20',
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'sourceId', type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'rescueUntrackedERC721',
+    inputs: [
+      { name: 'nft', type: 'address' },
+      { name: 'tokenId', type: 'uint256' },
+      { name: 'to', type: 'address' },
+      { name: 'sourceId', type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'rescueUntrackedERC1155',
+    inputs: [
+      { name: 'nft', type: 'address' },
+      { name: 'tokenId', type: 'uint256' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'to', type: 'address' },
+      { name: 'sourceId', type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'event',
+    name: 'UntrackedRescued',
+    inputs: [
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'to', type: 'address', indexed: true },
+      { name: 'kind', type: 'uint8', indexed: false },
+      { name: 'sourceId', type: 'bytes32', indexed: false },
+    ],
+  },
 ] as const;
 export enum EvmCycleStatus {
   Active = 0,
