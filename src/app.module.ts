@@ -22,6 +22,7 @@ import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.
 import { SystemSettingsModule } from './modules/globals/system-settings';
 import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { GoogleCloudStorageModule } from './modules/google_cloud/google_bucket/bucket.module';
+import { CompetitionModule } from './modules/competition/competition.module';
 import { MarketModule } from './modules/market/market.module';
 import { PriceModule } from './modules/price/price.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
@@ -117,6 +118,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     ClaimsModule,
     VyfiModule,
     TaptoolsModule,
+    CompetitionModule,
     MarketModule,
     GovernanceModule,
     NotificationModule,
