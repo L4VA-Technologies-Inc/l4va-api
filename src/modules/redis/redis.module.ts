@@ -2,11 +2,16 @@ import { Module, Global } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
-export const REDIS_CLIENT = 'REDIS_CLIENT';
+import { RedisHealthService } from './redis-health.service';
+import { REDIS_CLIENT } from './redis.constants';
+
+import { AlertsModule } from '@/modules/alerts/alerts.module';
+
+export { REDIS_CLIENT };
 
 @Global()
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, AlertsModule],
   providers: [
     {
       provide: REDIS_CLIENT,
@@ -28,6 +33,7 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
       },
       inject: [ConfigService],
     },
+    RedisHealthService,
   ],
   exports: [REDIS_CLIENT],
 })
