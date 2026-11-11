@@ -73,6 +73,8 @@ export enum TransactionType {
   evmPause = 'evm-pause',
   /** EVM: admin-signed `unpause()`. */
   evmUnpause = 'evm-unpause',
+  /** EVM: admin-signed `rescueUntracked*` — returns a stray transfer to its sender. */
+  evmRescueUntracked = 'evm-rescue-untracked',
   all = 'all',
 }
 

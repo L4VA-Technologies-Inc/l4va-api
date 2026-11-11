@@ -62,7 +62,10 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       deployBlock: 107526764n,
       adapterRegistry: '0x1BB699ae8A027c242dA401f59B89B2bD6c9d3629',
       protocolFeeConfig: '0x4Be358fdb7e3BF2D2ca70e012c89257d0F3Eb734',
-      batchDeployer: '0x229401A16D551ca7520FE911B9648534480240D1',
+      // Current deployer: Vault code with untracked-asset rescue (vault-contract-solidity b6dd5d4), set on the
+      // V10 factory 2026-11-11 (tx 0x447d…36c6). Vaults created earlier came from 0x229401A1…40D1 and have no
+      // rescue; EvmRescueService detects that per vault. Same factory, registry, adapters and fee path.
+      batchDeployer: '0xA86E8A208B117D9d96b43265E85BF5f0aF08052a',
       // MULTI_PATH_EXACT_IN adapter, deployed and approved in this registry 2026-11-09
       // (tx 0x4e56…5a5c / 0xd981…c82). The previous adapter 0x80d16567…79DB stays approved.
       swapAdapter: '0x558C2F0060f5888daD42c79C87b99008ef45C7bB',
