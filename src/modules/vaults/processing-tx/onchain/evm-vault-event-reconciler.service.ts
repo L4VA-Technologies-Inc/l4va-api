@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Repository } from 'typeorm';
+import { DataSource, In, IsNull, Repository } from 'typeorm';
 import { decodeEventLog, type Address, type Hex } from 'viem';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -23,10 +23,12 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
-import { AssetStatus } from '@/types/asset.types';
+import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
+import { AssetStatus, AssetType } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { IndexLegStatus, IndexRebalanceStatus } from '@/types/index-vault.types';
+import { RewardActivityType } from '@/types/rewards.types';
 import { ExpectedEventSpec, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -90,7 +92,8 @@ export class EvmVaultEventReconciler {
     private readonly contractReader: EvmContractReader,
     private readonly cycleCloseService: EvmCycleCloseService,
     private readonly transactionsService: TransactionsService,
-    private readonly alerts: AlertsService
+    private readonly alerts: AlertsService,
+    private readonly rewardEventProducer: RewardEventProducer
   ) {}
 
   /** Process a batch of vault-emitted logs. Unknown events are ignored. */
@@ -282,14 +285,45 @@ export class EvmVaultEventReconciler {
       if (drift.length > 0) {
         throw new Error(`ContributionMade drift on existing row ${existing.id} tx=${log.txHash}: ${drift.join('; ')}`);
       }
+      // A redelivery re-applies the status and the lock in case they failed the first time. The
+      // reward is not re-sent: rows indexed before this code was deployed carry it under the old
+      // per-transaction key, so a second one would pay twice.
+      const parent = await this.transactionsRepository.findOne({
+        where: { id: existing.transaction_id },
+        relations: ['user'],
+      });
+      if (parent) {
+        await this.applyContributionLanded(
+          vault,
+          parent,
+          existing.asset_id ?? null,
+          kind,
+          amount,
+          log,
+          contributionId,
+          {
+            reward: false,
+          }
+        );
+      }
       return;
     }
 
+    // The hash a Transaction is found by is whatever the user sent to /confirm, so it only
+    // suggests the parent. The authorization nonce signed into the contribution is what names it:
+    // deriveContributionNonce(txId, index).
+    const authNonce = await this.authNonceOf(vault, BigInt(contributionId));
     let transaction = await this.findParentTransactionForContribution(vault.id, log.txHash);
-    if (!transaction) {
+    if (transaction && !(await this.transactionIssuedNonce(transaction, authNonce))) {
+      this.logger.warn(
+        `ContributionMade tx=${log.txHash} contributionId=${contributionId}: transaction ${transaction.id} holds ` +
+          `this hash but did not sign the contribution; resolving by nonce`
+      );
+      transaction = await this.adoptContributionByNonce(vault, log, authNonce, contributor);
+    } else if (!transaction) {
       // Give the app's own /confirm time to land first; the contribution backfill sweep retries.
       if (!(await this.isOlderThan(log, ADOPTION_GRACE_SECONDS))) return;
-      transaction = await this.adoptContributionByNonce(vault, log, BigInt(contributionId), contributor);
+      transaction = await this.adoptContributionByNonce(vault, log, authNonce, contributor);
     }
     if (!transaction) {
       // Every contribution needs our signature, so this is a signature whose
@@ -323,9 +357,7 @@ export class EvmVaultEventReconciler {
       );
     }
 
-    const assetRow = await this.assetsRepository.findOne({
-      where: { transaction: { id: transaction.id }, policy_id: asset },
-    });
+    const assetRow = await this.findAssetRowForContribution(transaction.id, kind, asset, tokenId);
 
     try {
       await this.contribsRepository.insert({
@@ -366,6 +398,112 @@ export class EvmVaultEventReconciler {
       }
       throw err;
     }
+
+    await this.applyContributionLanded(vault, transaction, assetRow?.id ?? null, kind, amount, log, contributionId);
+  }
+
+  /**
+   * A contribution signed for `transaction` is on-chain: mark the transaction confirmed, lock the
+   * Asset row of that contribution and record the reward. This is the only place an EVM
+   * contribute / acquire becomes confirmed (BlockchainWebhookService.applyEvmTransactionStatus
+   * leaves it to us). Idempotent: the status update is conditional, only PENDING rows lock and the
+   * reward has an idempotency key.
+   */
+  private async applyContributionLanded(
+    vault: Vault,
+    transaction: Transaction,
+    assetRowId: string | null,
+    kind: number,
+    amount: string,
+    log: VaultLogInput,
+    contributionId: string,
+    opts: { reward: boolean } = { reward: true }
+  ): Promise<void> {
+    await this.transactionsRepository.update(
+      {
+        id: transaction.id,
+        status: In([
+          TransactionStatus.created,
+          TransactionStatus.pending,
+          TransactionStatus.submitted,
+          TransactionStatus.failed,
+          TransactionStatus.stuck,
+        ]),
+      },
+      { status: TransactionStatus.confirmed }
+    );
+
+    try {
+      if (assetRowId) await this.transactionsService.lockAssetsForTransaction(transaction.id, [assetRowId]);
+    } catch (err) {
+      // Vault value refresh (prices) can fail; the row is retried on the next redelivery / sweep.
+      this.logger.warn(`Lock asset ${assetRowId} of transaction ${transaction.id} failed: ${(err as Error).message}`);
+    }
+
+    const wallet = transaction.user?.address;
+    if (!opts.reward || !wallet) return;
+    const isAcquire = transaction.type === TransactionType.acquire;
+    const inExpansion = isAcquire
+      ? vault.vault_status === VaultStatus.acquire_expansion || !!transaction.is_expansion
+      : vault.vault_status === VaultStatus.expansion;
+    const eventType = isAcquire
+      ? inExpansion
+        ? RewardActivityType.EXPANSION_TOKEN_PURCHASE
+        : RewardActivityType.TOKEN_ACQUIRE
+      : inExpansion
+        ? RewardActivityType.EXPANSION_ASSET_CONTRIBUTION
+        : RewardActivityType.ASSET_CONTRIBUTION;
+    await this.rewardEventProducer.indexEvent({
+      walletAddress: wallet,
+      vaultId: vault.id,
+      eventType,
+      txHash: log.txHash,
+      // One unit per contributed asset entry; an acquire counts its ETH in wei, as before.
+      units: isAcquire ? Number(amount) : 1,
+      metadata: {
+        transaction_id: transaction.id,
+        contribution_id: contributionId,
+        kind,
+        ...(isAcquire ? { amount } : {}),
+      },
+      idempotencyKey: `${eventType}:${log.txHash}:${contributionId}`,
+    });
+  }
+
+  /**
+   * The Asset row a landed contribution belongs to: same transaction and asset contract (any row
+   * of type ETH for a native contribution), not yet bound to another contribution, preferring the
+   * NFT with this token id.
+   */
+  private async findAssetRowForContribution(
+    transactionId: string,
+    kind: number,
+    asset: string,
+    tokenId: string
+  ): Promise<Asset | null> {
+    const rows = await this.assetsRepository.find({
+      where: { transaction: { id: transactionId }, deleted: false },
+    });
+    const bound = new Set(
+      (
+        await this.contribsRepository.find({
+          where: { transaction_id: transactionId },
+          select: ['id', 'asset_id'],
+        })
+      )
+        .map(c => c.asset_id)
+        .filter((id): id is string => !!id)
+    );
+    const candidates = rows.filter(r => {
+      if (bound.has(r.id)) return false;
+      if (kind === EvmAssetKindOnchain.Native) return r.type === AssetType.ETH;
+      return (r.policy_id || '').toLowerCase() === asset;
+    });
+    if (kind === EvmAssetKindOnchain.ERC721 || kind === EvmAssetKindOnchain.ERC1155) {
+      const exact = candidates.find(r => String(r.asset_id) === tokenId);
+      if (exact) return exact;
+    }
+    return candidates[0] ?? null;
   }
 
   /**
@@ -654,12 +792,10 @@ export class EvmVaultEventReconciler {
   private async adoptContributionByNonce(
     vault: Vault,
     log: VaultLogInput,
-    contributionId: bigint,
+    authNonce: bigint | null,
     contributor: string
   ): Promise<Transaction | null> {
-    if (!vault.contract_address) return null;
-    const onchain = await this.contractReader.getContribution(vault.contract_address as Address, contributionId);
-    const authNonce = BigInt(onchain.authNonce);
+    if (authNonce === null) return null;
 
     const candidates = await this.transactionsRepository
       .createQueryBuilder('t')
@@ -670,18 +806,44 @@ export class EvmVaultEventReconciler {
       .getMany();
 
     for (const candidate of candidates) {
-      const meta = candidate.metadata as unknown;
-      const metaAssets = Array.isArray(meta) ? meta : ((meta as { assets?: unknown[] })?.assets ?? []);
-      const assetRows = await this.assetsRepository.count({ where: { transaction: { id: candidate.id } } });
-      const slots = Math.max(metaAssets.length, assetRows);
-      for (let i = 0; i < slots; i++) {
+      const slots = await this.nonceSlots(candidate);
+      for (let i = 0; i < slots.count; i++) {
         if (deriveContributionNonce(candidate.id, i) === authNonce) {
-          await this.bindContributionHash(candidate, log.txHash, metaAssets.length > 0 && assetRows === 0);
+          await this.bindContributionHash(candidate, log.txHash, slots.metaAssets > 0 && slots.assetRows === 0);
           return candidate;
         }
       }
     }
     return null;
+  }
+
+  /** `authNonce` of on-chain contribution `contributionId`, or null when the vault has no address. */
+  private async authNonceOf(vault: Vault, contributionId: bigint): Promise<bigint | null> {
+    if (!vault.contract_address) return null;
+    const onchain = await this.contractReader.getContribution(vault.contract_address as Address, contributionId);
+    return BigInt(onchain.authNonce);
+  }
+
+  /** Whether one of `transaction`'s signed authorizations carries `authNonce`. */
+  private async transactionIssuedNonce(transaction: Transaction, authNonce: bigint | null): Promise<boolean> {
+    if (authNonce === null) return false;
+    const slots = await this.nonceSlots(transaction);
+    for (let i = 0; i < slots.count; i++) {
+      if (deriveContributionNonce(transaction.id, i) === authNonce) return true;
+    }
+    return false;
+  }
+
+  /** Asset indexes a Transaction can have signed: its metadata assets, or its Asset rows once metadata is consumed. */
+  private async nonceSlots(
+    transaction: Transaction
+  ): Promise<{ count: number; metaAssets: number; assetRows: number }> {
+    const meta = transaction.metadata as unknown;
+    const metaAssets = (Array.isArray(meta) ? meta : ((meta as { assets?: unknown[] })?.assets ?? [])).length;
+    const assetRows = await this.assetsRepository.count({
+      where: { transaction: { id: transaction.id } },
+    });
+    return { count: Math.max(metaAssets, assetRows), metaAssets, assetRows };
   }
 
   private async isOlderThan(log: VaultLogInput, seconds: number): Promise<boolean> {

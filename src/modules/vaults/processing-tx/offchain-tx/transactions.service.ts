@@ -610,9 +610,11 @@ export class TransactionsService {
    * Only locks assets that are still pending to prevent double locking
    * Invalidates user wallet cache to ensure they see updated asset list
    * @param transactionId Transaction ID
+   * @param assetIds Only these Asset rows of the transaction. EVM passes the row of the on-chain
+   *   contribution that just landed, so a row the user listed but never contributed stays PENDING.
    * @returns Number of assets locked
    */
-  async lockAssetsForTransaction(transactionId: string): Promise<number> {
+  async lockAssetsForTransaction(transactionId: string, assetIds?: string[]): Promise<number> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: transactionId },
       select: ['id', 'vault_id', 'tx_hash'],
@@ -628,8 +630,12 @@ export class TransactionsService {
       this.taptoolsService.invalidateWalletCache(transaction.user.address);
     }
 
+    if (assetIds && assetIds.length === 0) return 0;
+    const onlyIds = assetIds ? { id: In(assetIds) } : {};
+
     const assets = await this.assetRepository.find({
       where: {
+        ...onlyIds,
         transaction: { id: transaction.id },
         status: AssetStatus.PENDING, // Only lock pending assets
         deleted: false,
@@ -677,6 +683,7 @@ export class TransactionsService {
     const now = new Date();
     await this.assetRepository.update(
       {
+        ...onlyIds,
         transaction: { id: transaction.id },
         status: AssetStatus.PENDING,
         deleted: false,

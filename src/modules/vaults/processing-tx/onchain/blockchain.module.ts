@@ -17,6 +17,7 @@ import { EvmAirdropOrchestrator } from './evm-airdrop-orchestrator.service';
 import { EvmAllocationService } from './evm-allocation.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmContributionBackfillService } from './evm-contribution-backfill.service';
+import { EvmContributionCapsService } from './evm-contribution-caps.service';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmFeeWithdrawService } from './evm-fee-withdraw.service';
 import { EvmKmsSigners } from './evm-kms-signers.service';
@@ -114,6 +115,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmRefundOrchestrator,
     EvmVaultSignerService,
     EvmVaultContributionService,
+    EvmContributionCapsService,
     EvmVaultEventReconciler,
     EvmVaultEventIndexerService,
     EvmContributionBackfillService,
@@ -152,6 +154,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmContributionBackfillService,
+    EvmContributionCapsService,
     EvmOpenCycleService,
     EvmFeeWithdrawService,
     EvmGovernanceFeeService,

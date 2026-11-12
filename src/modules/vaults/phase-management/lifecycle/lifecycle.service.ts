@@ -30,6 +30,7 @@ import {
   EvmAllocationService,
 } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmContributionCapsService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-caps.service';
 import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
 import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/onchain/evm-fee-withdraw.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
@@ -98,6 +99,7 @@ export class LifecycleService {
     private readonly evmCycleCloseService: EvmCycleCloseService,
     private readonly evmLiquidityService: EvmLiquidityService,
     private readonly evmContractReader: EvmContractReader,
+    private readonly evmContributionCaps: EvmContributionCapsService,
     private readonly evmAirdropOrchestrator: EvmAirdropOrchestrator,
     private readonly evmRefundOrchestrator: EvmRefundOrchestrator,
     private readonly evmAllocationService: EvmAllocationService,
@@ -3173,28 +3175,13 @@ export class LifecycleService {
       };
     }
 
-    const contributedAssets = await this.assetsRepository.find({
-      where: {
-        vault: { id: vaultId },
-        deleted: false,
-        origin_type: AssetOriginType.CONTRIBUTED,
-      },
-    });
+    // Counted from the chain: contributions that landed and were not refunded. DB Asset rows can
+    // exist without a contribution, and a cancelled one keeps its row (RELEASED), so counting rows
+    // let anyone push a vault over a maximum (failing it) or satisfy a minimum without assets.
+    const usage = await this.evmContributionCaps.onChainUsage(vaultId);
+    const policyIdCounts = Object.fromEntries(usage.perAsset) as Record<string, number>;
 
-    const policyIdCounts = contributedAssets.reduce(
-      (counts, asset) => {
-        const policyId = (asset.policy_id || '').toLowerCase();
-        if (!policyId) return counts;
-        if (!counts[policyId]) {
-          counts[policyId] = 0;
-        }
-        counts[policyId] += asset.normalizedQuantity;
-        return counts;
-      },
-      {} as Record<string, number>
-    );
-
-    const hasAnyAssets = contributedAssets.length > 0;
+    const hasAnyAssets = usage.contributionCount > 0;
     const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
 
     for (const whitelistItem of vault.assets_whitelist) {
@@ -3221,7 +3208,7 @@ export class LifecycleService {
       isValid: thresholdViolations.length === 0,
       thresholdViolations,
       hasAnyAssets,
-      contributedAssetsCount: contributedAssets.length,
+      contributedAssetsCount: usage.contributionCount,
     };
   }
 

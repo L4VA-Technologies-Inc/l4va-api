@@ -296,6 +296,21 @@ export class BlockchainWebhookService {
       }
     }
 
+    // A contribution or acquire is confirmed only by the vault event reconciler, once a
+    // ContributionMade signed for THIS transaction (its authNonce) is indexed: it then marks the
+    // transaction confirmed, locks that asset and records the reward. A successful receipt proves
+    // nothing here: the user chooses the hash in /confirm, and any successful transaction would do.
+    // A reverted receipt still marks the transaction failed.
+    if (status === TransactionStatus.confirmed) {
+      const transaction = await this.transactionRepository.findOne({
+        where: { tx_hash: txHash },
+        select: ['id', 'type'],
+      });
+      if (transaction?.type === TransactionType.contribute || transaction?.type === TransactionType.acquire) {
+        return transaction.id;
+      }
+    }
+
     return this.applyTransactionStatus(txHash, txIndex, status);
   }
 

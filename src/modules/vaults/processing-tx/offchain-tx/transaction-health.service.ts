@@ -182,6 +182,23 @@ export class TransactionHealthService {
           // already handled it. Reconciliation status is persisted so the
           // cron can retry on the next tick if this fails.
           await this.reconcileEvmReceipt(transaction, receipt);
+
+          // A contribute / acquire is confirmed only when the reconciler finds a contribution signed
+          // for it. Still unconfirmed past the stuck timeout: its hash holds no such contribution, so
+          // stop re-checking it. The reconciler still confirms it if one is indexed later.
+          if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
+            const current = await this.transactionRepository.findOne({
+              where: { id: transaction.id },
+              select: ['id', 'status'],
+            });
+            if (current && current.status !== TransactionStatus.confirmed) {
+              this.logger.warn(
+                `EVM ${transaction.type} ${transaction.id}: receipt ${transaction.tx_hash} holds no contribution ` +
+                  `signed for it, marking as failed`
+              );
+              await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+            }
+          }
         } else {
           // Transaction failed on-chain
           this.logger.error(
