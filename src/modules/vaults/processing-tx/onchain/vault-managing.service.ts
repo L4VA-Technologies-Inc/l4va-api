@@ -83,6 +83,9 @@ export interface VaultCreateConfig {
   customMetadata?: [string, string][];
 }
 
+// Contribution/acquire txs are built with a 2h validity; the on-chain window must outlive it
+const TX_VALIDITY_GRACE_MS = 2 * 60 * 60 * 1000;
+
 @Injectable()
 export class VaultManagingService {
   private readonly logger = new Logger(VaultManagingService.name);
@@ -393,9 +396,10 @@ export class VaultManagingService {
                 vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
-                // semi-private: whitelist enforced backend-only so acquirers are not blocked on-chain
+                // Only private vaults restrict who may contribute on-chain. Public and semi-private
+                // vaults omit the list: the owner is always in it, so it made them owner-only.
                 ...(contributorKeyHashes &&
-                  vaultConfig.contractType !== 2 && { contributor_whitelist: contributorKeyHashes }),
+                  vaultConfig.contractType === 0 && { contributor_whitelist: contributorKeyHashes }),
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {
@@ -403,8 +407,8 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    // H-3: no grace period, the on-chain window ends with the DB phase
-                    bound_type: new Date(vaultConfig.assetWindow.end).getTime(),
+                    // H-3: grace is only the 2h a built tx stays valid (Anvil always sets end = now + 2h), not 24h
+                    bound_type: new Date(vaultConfig.assetWindow.end).getTime() + TX_VALIDITY_GRACE_MS,
                     is_inclusive: true,
                   },
                 },
@@ -415,7 +419,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date(vaultConfig.acquireWindow.end).getTime(),
+                    bound_type: new Date(vaultConfig.acquireWindow.end).getTime() + TX_VALIDITY_GRACE_MS,
                     is_inclusive: true,
                   },
                 },
@@ -706,8 +710,9 @@ export class VaultManagingService {
               vault_status: vaultStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
-              // semi-private: whitelist enforced backend-only so acquirers are not blocked on-chain
-              ...(contributorKeyHashes && contract_type !== 2 && { contributor_whitelist: contributorKeyHashes }),
+              // Only private vaults restrict who may contribute on-chain. Public and semi-private
+              // vaults omit the list: the owner is always in it, so it made them owner-only.
+              ...(contributorKeyHashes && contract_type === 0 && { contributor_whitelist: contributorKeyHashes }),
               asset_window: {
                 lower_bound: {
                   bound_type: asset_window?.start

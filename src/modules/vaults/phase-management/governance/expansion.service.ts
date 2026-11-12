@@ -79,7 +79,7 @@ export class ExpansionService {
             }
           : {
               start: Date.now(),
-              end: Date.now() + expansionConfig.duration + 24 * 60 * 60 * 1000, // Add 1 day buffer to ensure on-chain state is updated before accepting contributions
+              end: Date.now() + expansionConfig.duration + 2 * 60 * 60 * 1000, // H-3: 2h buffer = validity of a built contribution tx (was 1 day)
             },
       });
 
@@ -507,7 +507,7 @@ export class ExpansionService {
             }
           : {
               start: Date.now(),
-              end: Date.now() + expansionConfig.duration + 24 * 60 * 60 * 1000, // Add 1 day buffer
+              end: Date.now() + expansionConfig.duration + 2 * 60 * 60 * 1000, // H-3: 2h buffer = validity of a built contribution tx (was 1 day)
             },
       });
 
