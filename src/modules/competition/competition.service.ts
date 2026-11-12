@@ -64,9 +64,9 @@ const num = (v: unknown): number => {
 const pctChange = (from: number, to: number): number => (from > 0 ? +(((to - from) / from) * 100).toFixed(2) : 0);
 
 /**
- * Creator Challenge v0.1. Every hour, Robinhood vaults launched inside the
- * active season's entry window and holding a live pool are entered and
- * snapshotted. Everything is read from source, nothing derived from other
+ * Creator Challenge v0.1. Every hour, every Robinhood vault with a live pool
+ * (including vaults created before the season) is entered while entries are
+ * open and snapshotted until the season ends. Everything is read from source, nothing derived from other
  * crons: token price and liquidity from the vault's own pool (on-chain),
  * NAV from the vault, holders from Blockscout. The leaderboard is computed
  * from those snapshots on read.
@@ -151,10 +151,8 @@ export class CompetitionService implements OnApplicationBootstrap {
         .where('v.chain_type = :chain', { chain: ChainType.robinhood })
         .andWhere('v.has_active_lp = true')
         .andWhere('v.vault_status IN (:...statuses)', { statuses: VAULT_STATUSES_WITH_POTENTIAL_LP })
-        .andWhere('v.created_at >= :start AND v.created_at <= :cutoff', {
-          start: season.start_at,
-          cutoff: season.entry_cutoff_at,
-        })
+        // Vaults created before the season count too: their baseline is the first
+        // snapshot inside the season, not their launch price.
         .getMany();
       this.logger.log(`Competition ${season.slug}: ${vaults.length} eligible vaults`);
       if (vaults.length === 0) continue;
@@ -162,8 +160,12 @@ export class CompetitionService implements OnApplicationBootstrap {
       const entries = await this.entryRepo.find({ where: { season_id: season.id } });
       const entered = new Set(entries.map(e => e.vault_id));
 
+      const entryOpen = now <= new Date(season.entry_cutoff_at);
+
       let taken = 0;
       for (const vault of vaults) {
+        // After the cutoff, keep snapshotting entered vaults but admit no new ones.
+        if (!entryOpen && !entered.has(vault.id)) continue;
         let lp: Awaited<ReturnType<EvmLiquidityService['getVaultLp']>>;
         try {
           lp = await this.liquidityService.getVaultLp(vault.id);
