@@ -15,6 +15,8 @@ export type SlackAlertType =
   | 'expansion_invalid_vtprice'
   | 'multiplier_underflow_detected'
   | 'stake_reward_insufficient_funds'
+  | 'redis_unavailable'
+  | 'redis_recovered'
   | string;
 
 @Injectable()
@@ -672,6 +674,50 @@ export class AlertsService {
           ],
         };
       }
+
+      case 'redis_unavailable':
+        return {
+          text: `🚨 Redis unavailable (${this.nodeEnv}): ${data.error}`,
+          blocks: [
+            { type: 'header', text: { type: 'plain_text', text: '🚨 Redis unavailable', emoji: true } },
+            {
+              type: 'section',
+              fields: [
+                { type: 'mrkdwn', text: `*Environment:*\n${this.nodeEnv}` },
+                { type: 'mrkdwn', text: `*Target:*\n\`${data.target}\`` },
+                { type: 'mrkdwn', text: `*Down since:*\n${data.downSince}` },
+                { type: 'mrkdwn', text: `*Error:*\n\`${data.error}\`` },
+              ],
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `Queues, cache and sessions are affected. Repeats at most hourly while down. *Timestamp:* ${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'redis_recovered':
+        return {
+          text: `✅ Redis recovered (${this.nodeEnv}) after ${data.downForSec}s`,
+          blocks: [
+            { type: 'header', text: { type: 'plain_text', text: '✅ Redis recovered', emoji: true } },
+            {
+              type: 'section',
+              fields: [
+                { type: 'mrkdwn', text: `*Environment:*\n${this.nodeEnv}` },
+                { type: 'mrkdwn', text: `*Target:*\n\`${data.target}\`` },
+                { type: 'mrkdwn', text: `*Downtime:*\n${data.downForSec}s` },
+                { type: 'mrkdwn', text: `*Last error:*\n\`${data.lastError ?? 'n/a'}\`` },
+              ],
+            },
+            { type: 'context', elements: [{ type: 'mrkdwn', text: `*Timestamp:* ${timestamp}` }] },
+          ],
+        };
 
       default:
         return {

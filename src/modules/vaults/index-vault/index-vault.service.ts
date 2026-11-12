@@ -156,6 +156,8 @@ export class IndexVaultService implements OnApplicationBootstrap {
   private readonly logger = new Logger(IndexVaultService.name);
   private readonly portfolioCache = new Map<string, { at: number; data: IndexPortfolio }>();
   private readonly running = new Set<string>();
+  /** Vaults already reported as stuck on a non-multi-path adapter, so the cron warns once, not every minute. */
+  private readonly outdatedAdapterWarned = new Set<string>();
   /**
    * `INDEX_BASKET_ALLOWED_ASSETS`: comma-separated token addresses. When set
    * (testnet — the fixed-rate adapter's seeded tokens), baskets are limited to
@@ -823,11 +825,24 @@ export class IndexVaultService implements OnApplicationBootstrap {
         contract_address: Not(IsNull()),
         evm_root_committed_at: Not(IsNull()),
       },
-      select: ['id', 'evm_current_cycle_id'],
+      select: ['id', 'evm_current_cycle_id', 'chain_id', 'evm_protocol_version'],
     });
 
     for (const vault of vaults) {
       if (!vault.evm_current_cycle_id) continue;
+      // An adapter that cannot run the routes we build never recovers by retrying, and the check
+      // throws before a run row exists, so the backoff below would never apply.
+      try {
+        this.routeService.tradingAdapterFor(vault);
+        this.outdatedAdapterWarned.delete(vault.id);
+      } catch (err) {
+        if (!(err instanceof SwapAdapterOutdatedError)) throw err;
+        if (!this.outdatedAdapterWarned.has(vault.id)) {
+          this.outdatedAdapterWarned.add(vault.id);
+          this.logger.warn(`Index initial buy skipped for vault ${vault.id}: ${err.message}`);
+        }
+        continue;
+      }
       // The pool gets its native first; buying the basket now would spend it.
       if (await this.liquidityService.isLpPending(vault.id, vault.evm_current_cycle_id)) continue;
       const key = `initial:cycle:${vault.evm_current_cycle_id}`;

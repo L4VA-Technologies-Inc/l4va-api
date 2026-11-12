@@ -19,6 +19,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { EvmContributionCapsService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-caps.service';
 import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
@@ -42,7 +43,8 @@ export class ContributionService {
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
     private readonly transactionsService: TransactionsService,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly evmContributionCaps: EvmContributionCapsService
   ) {}
 
   async contribute(
@@ -110,7 +112,16 @@ export class ContributionService {
     let currentAssetCount = 0;
     let policyCountMap = new Map<string, number>();
 
-    if (requestedPolicyIds.length > 0) {
+    if (vaultData.chain_type === ChainType.robinhood) {
+      // EVM: count what the vault holds on-chain plus signatures still usable, not Asset rows
+      // (those exist without a contribution, and a cancelled one keeps its row). This is a
+      // pre-check; the cap is enforced when the signatures are issued (prepareContribution).
+      const usage = await this.evmContributionCaps.currentUsage(vaultId);
+      currentAssetCount = usage.total;
+      policyCountMap = new Map(
+        requestedPolicyIds.map(policyId => [policyId, usage.perAsset.get(policyId.toLowerCase()) ?? 0])
+      );
+    } else if (requestedPolicyIds.length > 0) {
       // Fetch individual assets to properly convert raw quantities to decimal for FTs
       const existingAssets = await this.assetRepository
         .createQueryBuilder('asset')

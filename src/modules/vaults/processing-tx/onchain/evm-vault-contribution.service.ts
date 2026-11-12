@@ -1,14 +1,15 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { formatEther, parseEther, type Address, type Hex } from 'viem';
+import { Brackets, Repository } from 'typeorm';
+import { decodeEventLog, formatEther, parseEther, type Address, type Hex } from 'viem';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { sumOutstandingAcquireSignatures } from './evm-acquire-signatures';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmContributionCapsService } from './evm-contribution-caps.service';
 import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmKmsSigners } from './evm-kms-signers.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
@@ -165,7 +166,8 @@ export class EvmVaultContributionService {
     private readonly systemSettingsService: SystemSettingsService,
     private readonly evmFeeService: EvmGovernanceFeeService,
     private readonly alerts: AlertsService,
-    private readonly signers: EvmKmsSigners
+    private readonly signers: EvmKmsSigners,
+    private readonly contributionCaps: EvmContributionCapsService
   ) {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
@@ -299,6 +301,21 @@ export class EvmVaultContributionService {
       });
     }
 
+    // The signatures are what let assets in, so the asset caps are enforced here, counted from the
+    // chain plus other signatures still usable (see EvmContributionCapsService).
+    if (transaction.type === TransactionType.contribute) {
+      await this.contributionCaps.reserveForTransaction(
+        vault,
+        transaction.id,
+        calls.map(c => ({
+          kind: c.authorization.kind,
+          asset: c.authorization.asset,
+          amount: c.authorization.amount,
+        })),
+        deadline
+      );
+    }
+
     if (vault.vault_status === VaultStatus.acquire_expansion && transaction.type === TransactionType.acquire) {
       const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
       await this.reserveAcquireExpansionSignature(
@@ -400,12 +417,16 @@ export class EvmVaultContributionService {
     userId: string,
     childTxHashes?: string[]
   ): Promise<{ success: boolean; txHash: string }> {
-    const transaction = await this.transactionRepository.findOne({ where: { id: txId } });
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: txId },
+      relations: ['user'],
+    });
     if (!transaction) throw new NotFoundException('Transaction not found');
     if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
     if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
       throw new BadRequestException('Transaction is not a contribution or acquire');
     }
+    await this.assertConfirmHashes(transaction, txHash, childTxHashes ?? []);
 
     // createAssets consumes metadata, so preserve child hashes on the row
     // BEFORE createAssets clears metadata. Support both metadata shapes:
@@ -455,6 +476,71 @@ export class EvmVaultContributionService {
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
+
+  /**
+   * The hashes sent to /confirm are chosen by the caller and are stored where other code looks
+   * transactions up by hash. Refuse a hash another transaction already holds, and a mined primary
+   * hash whose receipt has no ContributionMade from this vault for this caller. A receipt that is
+   * not visible yet is accepted: nothing is confirmed from the hash anyway — the vault event
+   * reconciler confirms the transaction only from a contribution signed for it.
+   */
+  private async assertConfirmHashes(transaction: Transaction, txHash: string, childTxHashes: string[]): Promise<void> {
+    const hashes = Array.from(new Set([txHash, ...childTxHashes]));
+    for (const h of hashes) {
+      if (!/^0x[0-9a-fA-F]{64}$/.test(h)) throw new BadRequestException(`Invalid transaction hash ${h}`);
+    }
+    const lower = hashes.map(h => h.toLowerCase());
+
+    const clash = await this.transactionRepository
+      .createQueryBuilder('t')
+      .where('t.id != :id', { id: transaction.id })
+      .andWhere(
+        new Brackets(qb =>
+          qb
+            .where('LOWER(t.tx_hash) IN (:...lower)', { lower })
+            .orWhere(`jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...hashes]::text[])`, { hashes })
+            .orWhere(`jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...lower]::text[])`, { lower })
+        )
+      )
+      .getExists();
+    if (clash) throw new BadRequestException('This transaction hash is already recorded for another transaction');
+
+    let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>> | null = null;
+    try {
+      receipt = await this.contractReader.getTransactionReceipt(txHash as Hex);
+    } catch {
+      receipt = null; // not mined or not visible yet
+    }
+    if (!receipt || receipt.status !== 'success') return;
+
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: transaction.vault_id },
+      select: ['id', 'contract_address'],
+    });
+    const vaultAddress = vault?.contract_address?.toLowerCase();
+    const contributor = transaction.user?.address?.toLowerCase();
+    const hasOwnContribution = (receipt.logs ?? []).some(log => {
+      if (!vaultAddress || !contributor || String(log.address).toLowerCase() !== vaultAddress) return false;
+      try {
+        const decoded = decodeEventLog({
+          abi: VAULT_ABI,
+          data: log.data,
+          topics: log.topics,
+        }) as {
+          eventName?: string;
+          args?: { contributor?: string };
+        };
+        return (
+          decoded.eventName === 'ContributionMade' && String(decoded.args?.contributor).toLowerCase() === contributor
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (!hasOwnContribution) {
+      throw new BadRequestException('This transaction is not a contribution of yours to this vault');
+    }
+  }
 
   /** Per asset entry for contribute (NFT or FT type, quantity ignored), flat for acquire. */
   private quoteProtocolFeeWei(type: TransactionType, assetCount: number): bigint {
