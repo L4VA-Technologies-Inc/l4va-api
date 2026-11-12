@@ -83,8 +83,6 @@ export interface VaultCreateConfig {
   customMetadata?: [string, string][];
 }
 
-const one_day = 24 * 60 * 60 * 1000;
-
 @Injectable()
 export class VaultManagingService {
   private readonly logger = new Logger(VaultManagingService.name);
@@ -405,7 +403,8 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date(vaultConfig.assetWindow.end).getTime() + one_day,
+                    // H-3: no grace period, the on-chain window ends with the DB phase
+                    bound_type: new Date(vaultConfig.assetWindow.end).getTime(),
                     is_inclusive: true,
                   },
                 },
@@ -416,7 +415,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date(vaultConfig.acquireWindow.end).getTime() + one_day,
+                    bound_type: new Date(vaultConfig.acquireWindow.end).getTime(),
                     is_inclusive: true,
                   },
                 },

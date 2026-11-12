@@ -705,8 +705,49 @@ export class LifecycleService {
     }
   }
 
+  /** H-2/H-3: drop contributions whose UTxO was spent outside the backend before counting them. */
+  private async reconcileOnChain(vault: Vault): Promise<void> {
+    if (vault.chain_type === ChainType.robinhood) return;
+    try {
+      const { released } = await this.transactionsService.reconcileCardanoContributionUtxos(vault.id);
+      if (released.length) {
+        await this.alertsService.sendAlert('contribution_utxo_spent_externally', {
+          vaultId: vault.id,
+          vaultName: vault.name || vault.asset_vault_name,
+          count: released.length,
+          details: JSON.stringify(released),
+          action: 'Transactions marked refunded and assets released; they no longer count toward this vault',
+        });
+      }
+    } catch (error) {
+      this.logger.error(`[reconcile] vault ${vault.id} failed: ${(error as Error).message}`);
+    }
+  }
+
+  /** Periodic monitoring of open Cardano vaults (H-2 has no on-chain fix for existing vaults). */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async monitorCardanoContributionUtxos(): Promise<void> {
+    const vaults = await this.vaultRepository.find({
+      where: {
+        chain_type: Not(ChainType.robinhood),
+        vault_status: In([
+          VaultStatus.contribution,
+          VaultStatus.acquire,
+          VaultStatus.expansion,
+          VaultStatus.acquire_expansion,
+        ]),
+      },
+      select: ['id', 'name', 'asset_vault_name', 'chain_type'],
+    });
+    for (const vault of vaults) {
+      await this.reconcileOnChain(vault);
+    }
+  }
+
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
     try {
+      await this.reconcileOnChain(vault);
+
       // Step 1: Switch all custom prices to market prices in the asset whitelist
       await this.switchCustomPricesToMarket(vault.id);
 
@@ -891,6 +932,8 @@ export class LifecycleService {
    */
   private async executeAcquireToGovernanceTransition(vault: Vault): Promise<void> {
     try {
+      await this.reconcileOnChain(vault);
+
       // Sync transactions one more time
       await this.transactionsService.syncVaultTransactions(vault.id);
 
@@ -1483,6 +1526,8 @@ export class LifecycleService {
    */
   private async executeContributionDirectToGovernance(vault: Vault): Promise<void> {
     try {
+      await this.reconcileOnChain(vault);
+
       const freshVault = await this.vaultRepository.findOne({
         where: { id: vault.id },
         select: ['id', 'vault_status'],
@@ -2318,6 +2363,8 @@ export class LifecycleService {
    */
   private async executeAcquireOnlyTransition(vault: Vault): Promise<void> {
     try {
+      await this.reconcileOnChain(vault);
+
       await this.transactionsService.syncVaultTransactions(vault.id);
 
       const acquisitionTransactions = await this.transactionsRepository.find({

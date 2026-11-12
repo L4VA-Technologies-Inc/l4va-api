@@ -2897,8 +2897,6 @@ export class GovernanceService {
   }
 
   async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {
-    const normalizedVoterAddress = this.normalizeAddress(voteReq.voterAddress);
-
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
       relations: ['vault'],
@@ -2920,27 +2918,34 @@ export class GovernanceService {
       throw new BadRequestException('Abstain option is not allowed for this proposal');
     }
 
-    // Check if user has already voted
+    // H-4: the voter is the authenticated user and the address they log in with, never the
+    // address from the request body (that let one user vote many times under different addresses).
+    const voter = await this.userRepository.findOne({ where: { id: userId }, select: ['id', 'address'] });
+    if (!voter?.address) {
+      throw new BadRequestException('User has no wallet address');
+    }
+    const normalizedVoterAddress = this.normalizeAddress(voter.address);
+
+    // One vote per user and per address on a proposal
     const existingVote = await this.voteRepository
       .createQueryBuilder('vote')
       .where('vote.proposalId = :proposalId', { proposalId })
-      .andWhere('LOWER(vote.voterAddress) = :voterAddress', {
-        voterAddress: normalizedVoterAddress,
-      })
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('vote.voterId = :userId', { userId }).orWhere('LOWER(vote.voterAddress) = :voterAddress', {
+            voterAddress: normalizedVoterAddress,
+          });
+        })
+      )
       .getExists();
 
     if (existingVote) {
       throw new BadRequestException('Address has already voted on this proposal');
     }
 
-    // EVM: weigh the vote by the proposal's own snapshot, so VT moved after the
-    // proposal was created cannot vote a second time from another wallet.
-    const voteWeight = await this.getVotingPower(
-      proposal.vaultId,
-      userId,
-      'vote',
-      proposal.vault?.chain_type === ChainType.robinhood ? proposal.snapshotId : undefined
-    );
+    // Weigh the vote by the proposal's own snapshot on every chain, so VT moved after the
+    // proposal was created (or a newer daily snapshot) cannot vote a second time.
+    const voteWeight = await this.getVotingPower(proposal.vaultId, userId, 'vote', proposal.snapshotId);
 
     // Collect the voting fee before the vote is recorded. Nothing linked a vote
     // to a payment before this: the fee builder existed but vote() never checked
@@ -3045,6 +3050,7 @@ export class GovernanceService {
       if (!voteReq.feeTransaction) {
         throw new BadRequestException('feeTransaction is required — this proposal charges a voting fee');
       }
+      this.governanceFeeService.assertPaysAdmin(voteReq.feeTransaction, feeAmount as number);
       const result = await this.blockchainService.submitTransaction({
         transaction: voteReq.feeTransaction,
         signatures: voteReq.feeSignatures || [],
@@ -3222,6 +3228,7 @@ export class GovernanceService {
         txHash = verifiedEvmTxHash;
         this.logger.log(`Verified governance fee transaction: ${txHash} for proposal ${proposalId}`);
       } else {
+        this.governanceFeeService.assertPaysAdmin(payment.transaction, Number(pendingPayment.feeAmount));
         const result = await this.blockchainService.submitTransaction({
           transaction: payment.transaction,
           signatures: payment.signatures || [],

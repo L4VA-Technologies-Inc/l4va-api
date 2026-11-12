@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
@@ -80,6 +82,70 @@ export class TransactionsService {
       is_expansion: data.is_expansion || false,
       expansion_proposal_id: data.expansion_proposal_id,
     });
+  }
+
+  /**
+   * H-2/H-3: the on-chain windows outlive the DB phases and anyone can spend a contribution
+   * UTxO to strip its receipt, while the backend only learns about spends it built itself.
+   * Before a phase is closed (and periodically while it is open) check every counted Cardano
+   * contribution/acquire UTxO on chain. If it was spent by a transaction the backend does not
+   * know, it is no longer in the vault: stop counting it (tx -> refunded, assets -> released).
+   */
+  async reconcileCardanoContributionUtxos(
+    vaultId: string
+  ): Promise<{ released: Array<{ txId: string; txHash: string; spentBy: string }> }> {
+    const released: Array<{ txId: string; txHash: string; spentBy: string }> = [];
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'contract_address', 'script_hash', 'chain_type'],
+    });
+    if (!vault?.contract_address || !vault.script_hash || vault.chain_type === ChainType.robinhood) {
+      return { released };
+    }
+    const receiptUnit = `${vault.script_hash}${Buffer.from('receipt').toString('hex')}`;
+
+    const txs = await this.transactionRepository.find({
+      where: {
+        vault_id: vaultId,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: In([TransactionStatus.submitted, TransactionStatus.confirmed]),
+        tx_hash: Not(IsNull()),
+      },
+      select: ['id', 'tx_hash'],
+    });
+
+    for (const tx of txs) {
+      let utxos: Awaited<ReturnType<BlockFrostAPI['txsUtxos']>>;
+      try {
+        utxos = await this.blockfrost.txsUtxos(tx.tx_hash);
+      } catch (error) {
+        // Not indexed yet (or Blockfrost hiccup): leave it, the next run re-checks
+        this.logger.warn(`[reconcile] ${tx.tx_hash}: ${(error as Error).message}`);
+        continue;
+      }
+      const output = utxos.outputs.find(
+        o => o.address === vault.contract_address && o.amount.some(a => a.unit === receiptUnit)
+      );
+      const spentBy = (output as { consumed_by_tx?: string | null } | undefined)?.consumed_by_tx;
+      if (!output || !spentBy) continue;
+
+      const knownSpend = await this.transactionRepository.exists({ where: { tx_hash: spentBy } });
+      if (knownSpend) continue;
+
+      await this.transactionRepository.update({ id: tx.id }, { status: TransactionStatus.refunded });
+      await this.assetRepository
+        .createQueryBuilder()
+        .update(Asset)
+        .set({ status: AssetStatus.RELEASED })
+        .where('transaction_id = :txId', { txId: tx.id })
+        .andWhere('status IN (:...statuses)', { statuses: [AssetStatus.PENDING, AssetStatus.LOCKED] })
+        .execute();
+      released.push({ txId: tx.id, txHash: tx.tx_hash, spentBy });
+      this.logger.warn(
+        `[reconcile] vault ${vaultId}: contribution ${tx.tx_hash} was spent by unknown tx ${spentBy}; no longer counted`
+      );
+    }
+    return { released };
   }
 
   async createAssets(txId: string): Promise<{ success: boolean }> {
