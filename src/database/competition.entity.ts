@@ -20,7 +20,7 @@ export class CompetitionSeason {
   @Column({ name: 'start_at', type: 'timestamptz' })
   start_at: Date;
 
-  /** Vaults launched after this are not entered. */
+  /** No new entries after this; vaults entered before keep being tracked. */
   @Column({ name: 'entry_cutoff_at', type: 'timestamptz' })
   entry_cutoff_at: Date;
 

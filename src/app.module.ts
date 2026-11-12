@@ -15,6 +15,7 @@ import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
 import { SentryMonitoringService } from './common/services/sentry-monitoring.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { CompetitionModule } from './modules/competition/competition.module';
 import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
 import { DiagnosticModule } from './modules/diagnostics/diagnostic.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
@@ -22,7 +23,6 @@ import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.
 import { SystemSettingsModule } from './modules/globals/system-settings';
 import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { GoogleCloudStorageModule } from './modules/google_cloud/google_bucket/bucket.module';
-import { CompetitionModule } from './modules/competition/competition.module';
 import { MarketModule } from './modules/market/market.module';
 import { PriceModule } from './modules/price/price.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
@@ -42,6 +42,7 @@ import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { BurnLockModule } from '@/modules/burn-lock/burn-lock.module';
 import { CardanoBuybackModule } from '@/modules/cardano-buyback/cardano-buyback.module';
+import { EnvCheckModule } from '@/modules/env-check/env-check.module';
 import { FeeKeeperModule } from '@/modules/fee-keeper/fee-keeper.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
@@ -104,6 +105,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     AuthModule,
     AiModule,
     AlertsModule,
+    EnvCheckModule,
     SupportModule,
     AssetsModule,
     BlockchainModule,
