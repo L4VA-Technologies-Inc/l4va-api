@@ -2402,6 +2402,10 @@ export class VaultsService {
       if (!vault) {
         throw new UnauthorizedException('Vault is not found or you are not the owner of this vault');
       }
+      await this.transactionsService.assertSubmittableTransaction(publishDto.txId, {
+        vaultId: vault.id,
+        type: TransactionType.burn,
+      });
 
       const { txHash } = await this.blockchainService.submitTransaction({
         transaction: publishDto.transaction,

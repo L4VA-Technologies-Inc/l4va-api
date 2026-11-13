@@ -94,3 +94,11 @@ export class EvmChallengeReq {
   @ApiProperty({ description: 'EVM wallet address that will sign the login message' })
   walletAddress: string;
 }
+
+export class CardanoChallengeReq {
+  @Expose()
+  @IsNotEmpty()
+  @IsString()
+  @ApiProperty({ description: 'Stake address that will sign the login message' })
+  stakeAddress: string;
+}

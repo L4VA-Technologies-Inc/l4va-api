@@ -186,7 +186,8 @@ export class TerminationController {
   @ApiResponse({ status: 200, description: 'Transaction submitted successfully' })
   async submitTerminationClaim(
     @Param('transactionId') transactionId: string,
-    @Body() params: SubmitTransactionDto
+    @Body() params: SubmitTransactionDto,
+    @Req() req: AuthRequest
   ): Promise<{
     success: boolean;
     vtTxHash: string;
@@ -194,6 +195,6 @@ export class TerminationController {
     adaReceived: string;
     ftsReceived?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>;
   }> {
-    return this.terminationService.submitTerminationClaimTransaction(params);
+    return this.terminationService.submitTerminationClaimTransaction(params, req.user.sub);
   }
 }

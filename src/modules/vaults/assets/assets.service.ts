@@ -502,6 +502,7 @@ export class AssetsService {
         `SUM(
           CASE
             WHEN asset.type = :ethType THEN asset.quantity / 1000000000000000000.0
+            WHEN asset.type = :adaType THEN asset.quantity / 1000000.0
             WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
             ELSE asset.quantity
           END
@@ -516,6 +517,8 @@ export class AssetsService {
               (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
             WHEN asset.type = :ethType THEN
               (asset.quantity / 1000000000000000000.0) * COALESCE(NULLIF(asset.dex_price, 0), NULLIF(asset.floor_price, 0), :ethPriceInAda, 0)
+            -- Cardano acquires are stored in lovelace
+            WHEN asset.type = :adaType THEN asset.quantity / 1000000.0
             ELSE asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
           END
         )`,
@@ -535,6 +538,7 @@ export class AssetsService {
         nftType: AssetType.NFT,
         ftType: AssetType.FT,
         ethType: AssetType.ETH,
+        adaType: AssetType.ADA,
         ethPriceInAda,
       })
       .getRawOne();
@@ -564,8 +568,10 @@ export class AssetsService {
         // Acquired assets are always native (ADA or ETH) — use ethPriceInAda for ETH type.
         const effectivePriceAda =
           asset.type === AssetType.ETH ? ethPriceInAda : (asset.dex_price ?? asset.floor_price ?? 0);
-        const effectiveValueAda = asset.normalizedQuantity * effectivePriceAda;
-        plain.quantity = asset.normalizedQuantity;
+        // Cardano acquires are stored in lovelace (client sends raw lovelace since 2026-07)
+        const quantity = asset.type === AssetType.ADA ? Number(asset.quantity) / 1_000_000 : asset.normalizedQuantity;
+        const effectiveValueAda = asset.type === AssetType.ADA ? quantity : quantity * effectivePriceAda;
+        plain.quantity = quantity;
         plain.valueAda = effectiveValueAda;
         plain.valueUsd = effectiveValueAda * adaPrice;
         return plain;

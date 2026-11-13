@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -2163,6 +2163,8 @@ export class TerminationService {
         adaAmount: hasAda ? dynamicShare.adaShare.toString() : '0',
         ftShares: hasFtDistribution ? ftShares : [],
         treasuryAddress: treasuryWallet.treasury_address,
+        // C-2: submit only treasury-signs a tx whose body is exactly the one built here
+        txBodyHash: FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex')).transaction_hash().to_hex(),
         burnOnly: false,
       },
       assets: [],
@@ -2192,7 +2194,10 @@ export class TerminationService {
    * The user has already signed their part (VT inputs)
    * Now we add the treasury KMS signature and submit
    */
-  async submitTerminationClaimTransaction(params: SubmitTransactionDto): Promise<{
+  async submitTerminationClaimTransaction(
+    params: SubmitTransactionDto,
+    userId: string
+  ): Promise<{
     success: boolean;
     vtTxHash: string;
     distributionTxHash: string;
@@ -2211,6 +2216,9 @@ export class TerminationService {
 
     if (!claim) {
       throw new NotFoundException('Termination claim transaction not found');
+    }
+    if (claim.user_id !== userId) {
+      throw new ForbiddenException('Claim does not belong to the current user');
     }
 
     const vault = claim.vault;
@@ -2243,6 +2251,13 @@ export class TerminationService {
 
         // Parse the user-signed transaction
         const txToSubmit = FixedTransaction.from_bytes(Buffer.from(params.transaction, 'hex'));
+
+        // C-2: never sign a body other than the one the server built for this claim. The user
+        // may only add witnesses; any change to inputs/outputs changes the body hash.
+        const expectedBodyHash = txMetadata?.txBodyHash;
+        if (!expectedBodyHash || txToSubmit.transaction_hash().to_hex() !== expectedBodyHash) {
+          throw new BadRequestException('Transaction does not match the built termination claim');
+        }
 
         // Add treasury wallet signatures
         txToSubmit.sign_and_add_vkey_signature(privateKey);

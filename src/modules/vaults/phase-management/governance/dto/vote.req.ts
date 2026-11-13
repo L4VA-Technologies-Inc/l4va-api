@@ -16,13 +16,14 @@ export class VoteReq {
   vote: VoteType;
 
   @ApiProperty({
-    description: "The voter's Cardano address",
+    description: 'Deprecated and ignored: the voter is always the signed-in user',
     example: 'addr_test1qpjavyk....nw8s46zete',
+    required: false,
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @Expose()
-  voterAddress: string;
+  voterAddress?: string;
 
   // --- Voting fee proof -----------------------------------------------------
   // Required only when the chain's voting fee is above zero. Cardano supplies

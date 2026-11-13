@@ -1,7 +1,14 @@
 import { Buffer } from 'buffer';
+import { randomBytes } from 'crypto';
 
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
-import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
+import {
+  Ed25519Signature,
+  PublicKey,
+  Address,
+  BaseAddress,
+  RewardAddress,
+} from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -35,6 +42,8 @@ const DEFAULT_SIWE_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ];
+const CARDANO_CHALLENGE_TTL_SECONDS = 300;
+const cardanoChallengeKey = (stakeAddress: string): string => `auth:cardano-challenge:${stakeAddress}`;
 const evmChallengeKey = (address: string): string => `auth:evm-challenge:${address.toLowerCase()}`;
 
 @Injectable()
@@ -81,6 +90,32 @@ export class AuthService {
       expirationTime: new Date(now.getTime() + EVM_CHALLENGE_TTL_SECONDS * 1000),
     });
     await this.redis.set(evmChallengeKey(walletAddress), message, 'EX', EVM_CHALLENGE_TTL_SECONDS);
+    return { message };
+  }
+
+  /**
+   * Issue a single-use CIP-30 signData message for a Cardano stake address. Same rules as
+   * the EVM challenge: latest one wins, expires after CARDANO_CHALLENGE_TTL_SECONDS, consumed
+   * by the first login attempt.
+   */
+  async createCardanoChallenge(stakeAddress: string): Promise<{ message: string }> {
+    let reward: RewardAddress | undefined;
+    try {
+      reward = RewardAddress.from_address(Address.from_bech32(stakeAddress));
+    } catch {
+      reward = undefined;
+    }
+    if (!reward) throw new BadRequestException('Invalid stake address');
+
+    const issuedAt = new Date();
+    const message = [
+      'Sign in to L4VA',
+      `account: ${stakeAddress}`,
+      `nonce: ${randomBytes(16).toString('hex')}`,
+      `issued: ${issuedAt.toISOString()}`,
+      `expires: ${new Date(issuedAt.getTime() + CARDANO_CHALLENGE_TTL_SECONDS * 1000).toISOString()}`,
+    ].join('\n');
+    await this.redis.set(cardanoChallengeKey(stakeAddress), message, 'EX', CARDANO_CHALLENGE_TTL_SECONDS);
     return { message };
   }
 
@@ -251,16 +286,35 @@ export class AuthService {
       const sig = Ed25519Signature.from_bytes(decoded.signature());
       const signedData = decoded.signed_data().to_bytes();
 
-      const signerStakeAddrBech32 = RewardAddress.from_address(address).to_address().to_bech32();
+      // C-1: the COSE key must actually own the stake credential of the signing address,
+      // otherwise anyone can sign with their own key while claiming someone else's address.
+      const reward = RewardAddress.from_address(address);
+      const stakeKeyHash = reward?.payment_cred().to_keyhash();
+      const keyOwnsAddress = !!stakeKeyHash && stakeKeyHash.to_hex() === publicKey.hash().to_hex();
+      const signerStakeAddrBech32 = reward?.to_address().to_bech32();
+      const addressMatches = !!signerStakeAddrBech32 && signerStakeAddrBech32 === stakeAddress;
 
-      const utf8Payload = Buffer.from(payload).toString('utf8');
-      const expectedMessage = `account: ${signerStakeAddrBech32}`;
+      // walletAddress is stored as the user's address, so it must sit on the same stake key
+      const walletStakeHash = ((): string | undefined => {
+        try {
+          return BaseAddress.from_address(Address.from_bech32(walletAddress))?.stake_cred().to_keyhash()?.to_hex();
+        } catch {
+          return undefined;
+        }
+      })();
+      const walletMatches = !!walletStakeHash && walletStakeHash === stakeKeyHash?.to_hex();
+
+      // Server-issued single-use challenge, consumed before verification (one attempt per message)
+      const challengeKey = cardanoChallengeKey(stakeAddress);
+      const [[, expectedMessage]] = (await this.redis.multi().get(challengeKey).del(challengeKey).exec()) as [
+        [Error | null, string | null],
+      ];
+      const utf8Payload = payload ? Buffer.from(payload).toString('utf8') : '';
+      const messageMatches = !!expectedMessage && utf8Payload === expectedMessage;
 
       const isVerified = publicKey.verify(signedData, sig);
-      const messageMatches = utf8Payload === expectedMessage;
-      const addressMatches = signerStakeAddrBech32 === stakeAddress;
 
-      if (!isVerified || !messageMatches || !addressMatches) {
+      if (!isVerified || !keyOwnsAddress || !messageMatches || !addressMatches || !walletMatches) {
         return {
           success: false,
           message: 'Signature verification failed',

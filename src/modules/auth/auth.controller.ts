@@ -2,7 +2,7 @@ import { Body, Controller, Headers, HttpCode, HttpStatus, Post } from '@nestjs/c
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 import { AuthService } from './auth.service';
-import { EvmChallengeReq, LoginReq } from './dto/login.req';
+import { CardanoChallengeReq, EvmChallengeReq, LoginReq } from './dto/login.req';
 import { LoginRes } from './dto/login.res';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
@@ -35,5 +35,18 @@ export class AuthController {
   @Post('evm/challenge')
   async evmChallenge(@Body() body: EvmChallengeReq, @Headers('origin') origin?: string): Promise<{ message: string }> {
     return this.authService.createEvmChallenge(body.walletAddress, origin);
+  }
+
+  @ApiDoc({
+    summary: 'Get a Cardano login message',
+    description:
+      'Returns a single-use message (nonce + expiry) the wallet must CIP-30 signData with its stake key and send ' +
+      'to /auth/login as signature',
+    status: 200,
+  })
+  @HttpCode(HttpStatus.OK)
+  @Post('cardano/challenge')
+  async cardanoChallenge(@Body() body: CardanoChallengeReq): Promise<{ message: string }> {
+    return this.authService.createCardanoChallenge(body.stakeAddress);
   }
 }
