@@ -194,6 +194,7 @@ export class CompetitionService implements OnApplicationBootstrap {
               vault_id: vault.id,
               entered_at: now,
               entry_price_usd: String(priceUsd),
+              entry_price_native: String(lp.vtPriceNative),
               entry_value_usd: String(valueUsd),
             })
           );
@@ -205,6 +206,7 @@ export class CompetitionService implements OnApplicationBootstrap {
             vault_id: vault.id,
             taken_at: now,
             price_usd: String(priceUsd),
+            price_native: String(lp.vtPriceNative),
             value_usd: String(valueUsd),
             fdv_usd: String(priceUsd * num(vault.ft_token_supply)),
             // Both sides of the pool, valued at the pool price.
@@ -274,7 +276,17 @@ export class CompetitionService implements OnApplicationBootstrap {
       const avg = (pick: (s: CompetitionSnapshot) => number): number =>
         window.length ? window.reduce((sum, s) => sum + pick(s), 0) / window.length : 0;
 
-      const entryPrice = num(entry.entry_price_usd);
+      // Token returns are measured in ETH: the pool prices the token in ETH, so a USD
+      // return would mostly track ETH/USD and move every entry together. Entries made
+      // before price_native existed fall back to USD.
+      const entryNative = num(entry.entry_price_native);
+      const useNative = entryNative > 0 && num(latest.price_native) > 0;
+      const entryPrice = useNative ? entryNative : num(entry.entry_price_usd);
+      const tokenPrice = (s: CompetitionSnapshot): number => (useNative ? num(s.price_native) : num(s.price_usd));
+      const priceWindow = useNative ? window.filter(s => num(s.price_native) > 0) : window;
+      const avgPrice = priceWindow.length
+        ? priceWindow.reduce((sum, s) => sum + tokenPrice(s), 0) / priceWindow.length
+        : 0;
       const entryValue = num(entry.entry_value_usd);
       const liquidityUsd = num(latest.liquidity_usd);
 
@@ -293,11 +305,8 @@ export class CompetitionService implements OnApplicationBootstrap {
           imageUrl: vault?.ft_token_img?.file_url ?? vault?.vault_image?.file_url ?? null,
           enteredAt: entry.entered_at,
           status,
-          qualifyingReturn: pctChange(
-            entryPrice,
-            avg(s => num(s.price_usd))
-          ),
-          totalReturn: pctChange(entryPrice, num(latest.price_usd)),
+          qualifyingReturn: pctChange(entryPrice, avgPrice),
+          totalReturn: pctChange(entryPrice, tokenPrice(latest)),
           qualifyingValueReturn: pctChange(
             entryValue,
             avg(s => num(s.value_usd))
