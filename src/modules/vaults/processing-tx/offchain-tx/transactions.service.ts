@@ -1,5 +1,7 @@
+import { Buffer } from 'node:buffer';
+
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -80,6 +82,74 @@ export class TransactionsService {
       is_expansion: data.is_expansion || false,
       expansion_proposal_id: data.expansion_proposal_id,
     });
+  }
+
+  /**
+   * H-2/H-3: the on-chain windows outlive the DB phases and anyone can spend a contribution
+   * UTxO to strip its receipt, while the backend only learns about spends it built itself.
+   * Before a phase is closed (and periodically while it is open) check every counted Cardano
+   * contribution/acquire UTxO on chain. If it was spent by a transaction the backend does not
+   * know, it is no longer in the vault: stop counting it (tx -> refunded, assets -> released).
+   */
+  async reconcileCardanoContributionUtxos(
+    vaultId: string
+  ): Promise<{ released: Array<{ txId: string; txHash: string; spentBy: string }> }> {
+    const released: Array<{ txId: string; txHash: string; spentBy: string }> = [];
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'contract_address', 'script_hash', 'chain_type'],
+    });
+    if (!vault?.contract_address || !vault.script_hash || vault.chain_type === ChainType.robinhood) {
+      return { released };
+    }
+    const receiptUnit = `${vault.script_hash}${Buffer.from('receipt').toString('hex')}`;
+
+    const txs = await this.transactionRepository.find({
+      where: {
+        vault_id: vaultId,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: In([TransactionStatus.submitted, TransactionStatus.confirmed]),
+        tx_hash: Not(IsNull()),
+      },
+      select: ['id', 'tx_hash'],
+    });
+
+    for (const tx of txs) {
+      let utxos: Awaited<ReturnType<BlockFrostAPI['txsUtxos']>>;
+      try {
+        utxos = await this.blockfrost.txsUtxos(tx.tx_hash);
+      } catch (error) {
+        // Not indexed yet (or Blockfrost hiccup): leave it, the next run re-checks
+        this.logger.warn(`[reconcile] ${tx.tx_hash}: ${(error as Error).message}`);
+        continue;
+      }
+      const output = utxos.outputs.find(
+        o => o.address === vault.contract_address && o.amount.some(a => a.unit === receiptUnit)
+      );
+      // No receipt output at the contract: the tx on chain is not a contribution to this vault
+      // (e.g. an unrelated tx whose hash got attached to the record), so it never counts.
+      const spentBy = output ? (output as { consumed_by_tx?: string | null }).consumed_by_tx : 'no-contract-output';
+      if (!spentBy) continue;
+
+      if (output) {
+        const knownSpend = await this.transactionRepository.exists({ where: { tx_hash: spentBy } });
+        if (knownSpend) continue;
+      }
+
+      await this.transactionRepository.update({ id: tx.id }, { status: TransactionStatus.refunded });
+      await this.assetRepository
+        .createQueryBuilder()
+        .update(Asset)
+        .set({ status: AssetStatus.RELEASED })
+        .where('transaction_id = :txId', { txId: tx.id })
+        .andWhere('status IN (:...statuses)', { statuses: [AssetStatus.PENDING, AssetStatus.LOCKED] })
+        .execute();
+      released.push({ txId: tx.id, txHash: tx.tx_hash, spentBy });
+      this.logger.warn(
+        `[reconcile] vault ${vaultId}: contribution ${tx.tx_hash} ${output ? `was spent by unknown tx ${spentBy}` : 'has no receipt output at the contract'}; no longer counted`
+      );
+    }
+    return { released };
   }
 
   async createAssets(txId: string): Promise<{ success: boolean }> {
@@ -552,6 +622,30 @@ export class TransactionsService {
     });
 
     return { items, total, page: parsedPage, limit: parsedLimit };
+  }
+
+  /**
+   * A client-supplied record id must point at the record built for this action. Without this, any
+   * signed tx could be attached to someone's unpaid contribute/acquire record and the webhook would
+   * confirm it by hash, locking assets that were never sent.
+   */
+  async assertSubmittableTransaction(
+    id: string,
+    expected: { vaultId: string; type: TransactionType; userId?: string }
+  ): Promise<void> {
+    const tx = await this.transactionRepository.findOne({
+      where: { id },
+      select: ['id', 'vault_id', 'type', 'user_id', 'status', 'tx_hash'],
+    });
+    if (!tx || tx.vault_id !== expected.vaultId || tx.type !== expected.type) {
+      throw new BadRequestException('Transaction record does not match this action');
+    }
+    if (expected.userId && tx.user_id && tx.user_id !== expected.userId) {
+      throw new ForbiddenException('Transaction record belongs to another user');
+    }
+    if (tx.tx_hash || ![TransactionStatus.created, TransactionStatus.pending].includes(tx.status)) {
+      throw new BadRequestException('Transaction record was already submitted');
+    }
   }
 
   async updateTransactionHash(id: string, txHash: string, metadata?: Record<string, any>): Promise<void> {

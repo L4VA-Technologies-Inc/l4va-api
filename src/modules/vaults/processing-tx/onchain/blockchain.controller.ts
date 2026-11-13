@@ -56,8 +56,11 @@ export class BlockchainController {
     type: BuildTransactionRes,
   })
   @UseGuards(AuthGuard)
-  async buildTransaction(@Body() params: BuildTransactionDto): Promise<BuildTransactionRes> {
-    return this.vaultContributionService.buildContributionTransaction(params);
+  async buildTransaction(
+    @Body() params: BuildTransactionDto,
+    @Request() req: AuthRequest
+  ): Promise<BuildTransactionRes> {
+    return this.vaultContributionService.buildContributionTransaction(params, req.user.sub);
   }
 
   @Post('transaction/submit')
@@ -68,8 +71,11 @@ export class BlockchainController {
     type: TransactionSubmitResponseDto,
   })
   @UseGuards(AuthGuard)
-  async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
-    return this.vaultContributionService.submitContributionTransaction(params);
+  async submitTransaction(
+    @Body() params: SubmitTransactionDto,
+    @Request() req: AuthRequest
+  ): Promise<TransactionSubmitResponseDto> {
+    return this.vaultContributionService.submitContributionTransaction(params, req.user.sub);
   }
 
   @Post('evm/contribution/prepare')

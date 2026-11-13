@@ -2,9 +2,17 @@ import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { FixedTransaction, PrivateKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
-import { BadRequestException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import Redis from 'ioredis';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -25,6 +33,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ContributionInput } from '@/modules/distribution/distribution.types';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { sumContributionQuantitiesForLimits } from '@/modules/vaults/phase-management/contribution/contribution-asset.utils';
 import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -32,6 +41,9 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 // Acquire and Contribution
+
+// H-1: the body hash of the tx the server built, so submit can refuse any other CBOR
+const builtBodyKey = (txId: string): string => `contribution:built-body:${txId}`;
 
 @Injectable()
 export class VaultContributionService {
@@ -58,7 +70,8 @@ export class VaultContributionService {
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -69,12 +82,22 @@ export class VaultContributionService {
     });
   }
 
-  async buildContributionTransaction(params: BuildTransactionParams): Promise<{
+  async buildContributionTransaction(
+    requestParams: BuildTransactionParams,
+    userId: string
+  ): Promise<{
     presignedTx: string;
   }> {
+    let params = requestParams;
     try {
       // Validate that the transaction exists and get its current state
       const transaction = await this.transactionsService.validateTransactionExists(params.txId);
+      if (transaction.user_id !== userId) {
+        throw new ForbiddenException('Transaction does not belong to the current user');
+      }
+      // H-1: build exactly what was declared (and is later counted) for this transaction,
+      // never the amounts from the build request body.
+      params = { ...params, outputs: [{ ...(params.outputs?.[0] ?? {}), assets: this.declaredAssets(transaction) }] };
 
       // Security check: Verify the changeAddress matches the transaction creator's address
       const transactionWithUser = await this.transactionRepository.findOne({
@@ -283,6 +306,12 @@ export class VaultContributionService {
       // Sign the transaction
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+      await this.redis.set(
+        builtBodyKey(params.txId),
+        txToSubmitOnChain.transaction_hash().to_hex(),
+        'EX',
+        (this.TX_VALIDITY_MINUTES + 60) * 60
+      );
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
@@ -315,7 +344,10 @@ export class VaultContributionService {
    * @param signedTx - Object containing the transaction and signatures
    * @returns Transaction hash
    */
-  async submitContributionTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
+  async submitContributionTransaction(
+    signedTx: SubmitTransactionDto,
+    userId: string
+  ): Promise<TransactionSubmitResponse> {
     if (!signedTx.txId) {
       throw new BadRequestException('Contribution transaction ID is required');
     }
@@ -329,6 +361,25 @@ export class VaultContributionService {
       // Extra validation layer: re-check limits at submit time
       // Guards against cases where user built transaction but someone else contributed before they submitted
       const transaction = await this.transactionsService.validateTransactionExists(signedTx.txId);
+      if (transaction.user_id !== userId) {
+        throw new ForbiddenException('Transaction does not belong to the current user');
+      }
+
+      // H-1: only the tx the server built for this record may be submitted, so the
+      // amounts written to the DB are the amounts that actually go on chain.
+      const expectedBodyHash = await this.redis.get(builtBodyKey(signedTx.txId));
+      let submittedBodyHash: string | undefined;
+      try {
+        submittedBodyHash = FixedTransaction.from_bytes(Buffer.from(signedTx.transaction, 'hex'))
+          .transaction_hash()
+          .to_hex();
+      } catch {
+        submittedBodyHash = undefined;
+      }
+      if (!expectedBodyHash || submittedBodyHash !== expectedBodyHash) {
+        throw new BadRequestException('Transaction does not match the one built for this contribution');
+      }
+
       const vault = await this.vaultsRepository.findOne({
         where: { id: transaction.vault_id },
       });
@@ -383,8 +434,34 @@ export class VaultContributionService {
         );
       }
 
+      if (error instanceof ForbiddenException || error instanceof BadRequestException) {
+        throw error;
+      }
+
       throw new BadRequestException(`Failed to submit contribution transaction: ${error.message}`);
     }
+  }
+
+  /** Assets declared when the transaction record was created, in build-request shape. */
+  private declaredAssets(transaction: Transaction): Array<{ policyId: string; assetName: string; quantity: number }> {
+    const raw = transaction.metadata;
+    const items: any[] = Array.isArray(raw) ? raw : ((raw as any)?.assets ?? []);
+    if (!items.length) {
+      throw new BadRequestException('Transaction has no declared assets');
+    }
+    return items.map(item => {
+      const isAda =
+        String(item.type ?? '').toLowerCase() === 'ada' ||
+        item.assetName === 'lovelace' ||
+        item.policyId === 'lovelace';
+      const quantity = Number(item.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new BadRequestException('Invalid declared asset quantity');
+      }
+      return isAda
+        ? { policyId: 'lovelace', assetName: 'lovelace', quantity }
+        : { policyId: String(item.policyId), assetName: String(item.assetName), quantity };
+    });
   }
 
   /**

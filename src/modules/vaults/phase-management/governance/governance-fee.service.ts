@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { FixedTransaction, Address } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
@@ -58,6 +58,31 @@ export class GovernanceFeeService {
   /**
    * Get the voting fee amount
    */
+  /**
+   * Check that a client-supplied Cardano fee tx actually pays at least `minLovelace`
+   * to the admin address. Without this any CBOR that submits (e.g. a self-transfer)
+   * counted as a paid fee.
+   */
+  assertPaysAdmin(txHex: string, minLovelace: number): void {
+    let tx: FixedTransaction;
+    try {
+      tx = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+    } catch {
+      throw new BadRequestException('Invalid fee transaction');
+    }
+    const outputs = tx.body().outputs();
+    let paid = 0n;
+    for (let i = 0; i < outputs.len(); i++) {
+      const out = outputs.get(i);
+      if (out.address().to_bech32() === this.adminAddress) {
+        paid += BigInt(out.amount().coin().to_str());
+      }
+    }
+    if (paid < BigInt(minLovelace)) {
+      throw new BadRequestException('Fee transaction does not pay the governance fee to the admin address');
+    }
+  }
+
   getVotingFee(): number {
     return this.systemSettingsService.governanceFeeVoting;
   }
