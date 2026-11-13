@@ -43,7 +43,6 @@ const HEX_64_KEYS = ['REFERENCE_SCRIPT_TX_HASH'];
 const EVM_ADDRESS_KEYS = [
   'EVM_FACTORY_ADDRESS',
   'EVM_SWAP_ADAPTER_ADDRESS',
-  'EVM_SWAP_ADAPTER_MULTI_PATH',
   'EVM_LP_ADAPTER_ADDRESS',
   'EVM_NFT_SALE_ADAPTER_ADDRESS',
   'EVM_MOCK_ADAPTER_ADDRESS',
@@ -207,8 +206,6 @@ export function checkEnv(env: EnvMap): EnvIssue[] {
   const uniChain = val(env, 'UNISWAP_CHAIN_ID');
   if (chainIdRaw && uniChain && uniChain !== chainIdRaw) {
     err('UNISWAP_CHAIN_ID', `is ${uniChain} but EVM_CHAIN_ID is ${chainIdRaw}`);
-  } else if (!uniChain && evmKnown && !evmMainnet) {
-    warn('UNISWAP_CHAIN_ID', 'is not set; Uniswap trading defaults to 4663 (mainnet) while EVM_CHAIN_ID is testnet');
   }
 
   const alchemyNet = val(env, 'ALCHEMY_NETWORK');
@@ -291,7 +288,8 @@ export function checkEnv(env: EnvMap): EnvIssue[] {
       else if (
         u.protocol === 'http:' &&
         (cardanoMainnet || evmMainnet) &&
-        !/^(localhost|127\.|10\.|192\.168\.|host\.docker)/.test(u.hostname)
+        !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|host\.docker)/.test(u.hostname) &&
+        u.hostname.includes('.') // single-label hosts (e.g. l4va-rewards) are Docker-network internal
       ) {
         warn(key, 'uses plain http on a mainnet config');
       }

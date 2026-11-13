@@ -9,14 +9,22 @@ import {
   BaseAddress,
   RewardAddress,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { Brackets, Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
-import { createPublicClient, defineChain, getAddress, isAddress, type Hex } from 'viem';
+import {
+  createPublicClient,
+  defineChain,
+  getAddress,
+  isAddress,
+  isAddressEqual,
+  recoverMessageAddress,
+  type Hex,
+} from 'viem';
 import { createSiweMessage, generateSiweNonce } from 'viem/siwe';
 
 import { PriceService } from '../price/price.service';
@@ -43,8 +51,17 @@ const DEFAULT_SIWE_ORIGINS = [
   'http://127.0.0.1:5173',
 ];
 const CARDANO_CHALLENGE_TTL_SECONDS = 300;
-const cardanoChallengeKey = (stakeAddress: string): string => `auth:cardano-challenge:${stakeAddress}`;
-const evmChallengeKey = (address: string): string => `auth:evm-challenge:${address.toLowerCase()}`;
+// Challenges live in a sorted set per address (member = message, score = expiry in ms), so a new
+// challenge never replaces one a user is still signing: anyone can request a challenge for any
+// public address, and with "latest wins" that let a third party keep a victim's login failing.
+const MAX_ACTIVE_CHALLENGES = 20;
+// Smart-contract wallets cannot be matched by local ecrecover; each candidate costs an RPC call
+const MAX_CONTRACT_WALLET_CANDIDATES = 3;
+const CHALLENGE_RATE_LIMIT = 20; // challenge requests per IP per window
+const CHALLENGE_RATE_WINDOW_SECONDS = 60;
+const cardanoChallengeKey = (stakeAddress: string): string => `auth:cardano-challenges:${stakeAddress}`;
+const evmChallengeKey = (address: string): string => `auth:evm-challenges:${address.toLowerCase()}`;
+const challengeRateKey = (ip: string): string => `auth:challenge-rate:${ip}`;
 
 @Injectable()
 export class AuthService {
@@ -60,10 +77,52 @@ export class AuthService {
     private vaultRepository: Repository<Vault>
   ) {}
 
+  /** Throttle challenge requests per client IP so nobody can flood the challenge sets. */
+  async assertChallengeRateLimit(ip: string | undefined): Promise<void> {
+    const key = challengeRateKey(ip || 'unknown');
+    const [[, count]] = (await this.redis
+      .multi()
+      .incr(key)
+      .expire(key, CHALLENGE_RATE_WINDOW_SECONDS, 'NX')
+      .exec()) as [[Error | null, number]];
+    if (count > CHALLENGE_RATE_LIMIT) {
+      throw new HttpException('Too many sign-in requests, try again in a minute', HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
+
+  /** Add a challenge to the address's set; expired and overflow (oldest) entries are dropped. */
+  private async storeChallenge(key: string, message: string, ttlSeconds: number): Promise<void> {
+    const now = Date.now();
+    await this.redis
+      .multi()
+      .zremrangebyscore(key, '-inf', now)
+      .zadd(key, now + ttlSeconds * 1000, message)
+      .zremrangebyrank(key, 0, -(MAX_ACTIVE_CHALLENGES + 1))
+      .expire(key, ttlSeconds)
+      .exec();
+  }
+
+  /** Unexpired challenges for an address, newest first. */
+  private async activeChallenges(key: string): Promise<string[]> {
+    return this.redis.zrevrangebyscore(key, '+inf', Date.now());
+  }
+
   /**
-   * Issue a single-use login message for an EVM wallet. Only the latest message
-   * per address is valid, it expires after EVM_CHALLENGE_TTL_SECONDS and is
-   * consumed by the first login attempt, so a captured signature cannot be replayed.
+   * Atomically take one challenge out of the set. True only for the caller that removed it while it
+   * was still valid, so each message logs in at most once.
+   */
+  private async consumeChallenge(key: string, message: string): Promise<boolean> {
+    const [[, score], [, removed]] = (await this.redis.multi().zscore(key, message).zrem(key, message).exec()) as [
+      [Error | null, string | null],
+      [Error | null, number],
+    ];
+    return removed === 1 && score !== null && Number(score) > Date.now();
+  }
+
+  /**
+   * Issue a single-use login message for an EVM wallet. Several may be active per address; each
+   * expires after EVM_CHALLENGE_TTL_SECONDS and is consumed by the login that uses it, so a
+   * captured signature cannot be replayed.
    */
   async createEvmChallenge(walletAddress: string, origin: string | undefined): Promise<{ message: string }> {
     const allowedOrigins =
@@ -89,14 +148,14 @@ export class AuthService {
       issuedAt: now,
       expirationTime: new Date(now.getTime() + EVM_CHALLENGE_TTL_SECONDS * 1000),
     });
-    await this.redis.set(evmChallengeKey(walletAddress), message, 'EX', EVM_CHALLENGE_TTL_SECONDS);
+    await this.storeChallenge(evmChallengeKey(walletAddress), message, EVM_CHALLENGE_TTL_SECONDS);
     return { message };
   }
 
   /**
    * Issue a single-use CIP-30 signData message for a Cardano stake address. Same rules as
-   * the EVM challenge: latest one wins, expires after CARDANO_CHALLENGE_TTL_SECONDS, consumed
-   * by the first login attempt.
+   * the EVM challenge: several may be active, each expires after CARDANO_CHALLENGE_TTL_SECONDS
+   * and is consumed by the login that uses it.
    */
   async createCardanoChallenge(stakeAddress: string): Promise<{ message: string }> {
     let reward: RewardAddress | undefined;
@@ -115,24 +174,47 @@ export class AuthService {
       `issued: ${issuedAt.toISOString()}`,
       `expires: ${new Date(issuedAt.getTime() + CARDANO_CHALLENGE_TTL_SECONDS * 1000).toISOString()}`,
     ].join('\n');
-    await this.redis.set(cardanoChallengeKey(stakeAddress), message, 'EX', CARDANO_CHALLENGE_TTL_SECONDS);
+    await this.storeChallenge(cardanoChallengeKey(stakeAddress), message, CARDANO_CHALLENGE_TTL_SECONDS);
     return { message };
   }
 
   private async verifyEvmLogin(walletAddress: string, signature: string): Promise<boolean> {
     if (!isAddress(walletAddress) || !signature) return false;
 
-    // Consume the challenge before verifying so every message gets exactly one attempt
+    // The login request carries only the signature, so find which active challenge it signs
     const key = evmChallengeKey(walletAddress);
-    const [[, message]] = (await this.redis.multi().get(key).del(key).exec()) as [[Error | null, string | null]];
-    if (!message) return false;
+    const candidates = await this.activeChallenges(key);
+    if (!candidates.length) return false;
+    const address = getAddress(walletAddress);
 
-    // publicClient.verifyMessage covers EOAs as well as smart-contract wallets (EIP-1271/6492)
-    return this.getEvmPublicClient().verifyMessage({
-      address: getAddress(walletAddress),
-      message,
-      signature: signature as Hex,
-    });
+    // EOAs: local ecrecover, no RPC
+    let signed: string | undefined;
+    for (const message of candidates) {
+      try {
+        if (isAddressEqual(await recoverMessageAddress({ message, signature: signature as Hex }), address)) {
+          signed = message;
+          break;
+        }
+      } catch {
+        break; // not an ECDSA signature: a smart-contract wallet, checked below
+      }
+    }
+
+    // Smart-contract wallets (EIP-1271/6492) need the chain; only the newest few to cap RPC calls
+    if (!signed) {
+      const client = this.getEvmPublicClient();
+      for (const message of candidates.slice(0, MAX_CONTRACT_WALLET_CANDIDATES)) {
+        const ok = await client
+          .verifyMessage({ address, message, signature: signature as Hex })
+          .catch((): boolean => false);
+        if (ok) {
+          signed = message;
+          break;
+        }
+      }
+    }
+
+    return !!signed && (await this.consumeChallenge(key, signed));
   }
 
   private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
@@ -304,15 +386,18 @@ export class AuthService {
       })();
       const walletMatches = !!walletStakeHash && walletStakeHash === stakeKeyHash?.to_hex();
 
-      // Server-issued single-use challenge, consumed before verification (one attempt per message)
-      const challengeKey = cardanoChallengeKey(stakeAddress);
-      const [[, expectedMessage]] = (await this.redis.multi().get(challengeKey).del(challengeKey).exec()) as [
-        [Error | null, string | null],
-      ];
       const utf8Payload = payload ? Buffer.from(payload).toString('utf8') : '';
-      const messageMatches = !!expectedMessage && utf8Payload === expectedMessage;
-
       const isVerified = publicKey.verify(signedData, sig);
+
+      // Server-issued single-use challenge: the signed payload must be one of the address's active
+      // challenges. Consumed only once everything else checks out, so a bad attempt cannot burn it.
+      const messageMatches =
+        isVerified &&
+        keyOwnsAddress &&
+        addressMatches &&
+        walletMatches &&
+        !!utf8Payload &&
+        (await this.consumeChallenge(cardanoChallengeKey(stakeAddress), utf8Payload));
 
       if (!isVerified || !keyOwnsAddress || !messageMatches || !addressMatches || !walletMatches) {
         return {

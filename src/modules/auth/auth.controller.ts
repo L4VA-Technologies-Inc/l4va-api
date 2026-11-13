@@ -1,11 +1,25 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
+import { Request } from 'express';
 
 import { AuthService } from './auth.service';
 import { CardanoChallengeReq, EvmChallengeReq, LoginReq } from './dto/login.req';
 import { LoginRes } from './dto/login.res';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
+
+/**
+ * Client IP behind Cloudflare/nginx (the app does not set trust proxy, so req.ip is the proxy).
+ * Only used to throttle challenge requests; a spoofed header just changes which bucket is hit.
+ */
+const clientIp = (req: Request): string | undefined => {
+  const header = (name: string): string | undefined => {
+    const value = req.headers[name];
+    return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
+  };
+  const forwarded = header('x-forwarded-for')?.split(',');
+  return header('cf-connecting-ip') ?? header('x-real-ip') ?? forwarded?.[forwarded.length - 1]?.trim() ?? req.ip;
+};
 
 @ApiTags('auth')
 @Controller('auth')
@@ -33,7 +47,12 @@ export class AuthController {
   })
   @HttpCode(HttpStatus.OK)
   @Post('evm/challenge')
-  async evmChallenge(@Body() body: EvmChallengeReq, @Headers('origin') origin?: string): Promise<{ message: string }> {
+  async evmChallenge(
+    @Body() body: EvmChallengeReq,
+    @Req() req: Request,
+    @Headers('origin') origin?: string
+  ): Promise<{ message: string }> {
+    await this.authService.assertChallengeRateLimit(clientIp(req));
     return this.authService.createEvmChallenge(body.walletAddress, origin);
   }
 
@@ -46,7 +65,8 @@ export class AuthController {
   })
   @HttpCode(HttpStatus.OK)
   @Post('cardano/challenge')
-  async cardanoChallenge(@Body() body: CardanoChallengeReq): Promise<{ message: string }> {
+  async cardanoChallenge(@Body() body: CardanoChallengeReq, @Req() req: Request): Promise<{ message: string }> {
+    await this.authService.assertChallengeRateLimit(clientIp(req));
     return this.authService.createCardanoChallenge(body.stakeAddress);
   }
 }

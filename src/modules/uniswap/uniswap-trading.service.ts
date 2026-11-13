@@ -41,7 +41,9 @@ export class UniswapTradingService {
     configService: ConfigService
   ) {
     this.apiKey = configService.get<string>('UNISWAP_API_KEY') || undefined;
-    this.chainId = Number(configService.get<string>('UNISWAP_CHAIN_ID') || '4663');
+    this.chainId = Number(
+      configService.get<string>('UNISWAP_CHAIN_ID') || configService.get<string>('EVM_CHAIN_ID') || '4663'
+    );
     const bipsRaw = configService.get<string>('UNISWAP_INTEGRATOR_FEE_BIPS');
     const recipient = configService.get<string>('UNISWAP_FEE_RECIPIENT');
     if (bipsRaw && recipient && /^0x[a-fA-F0-9]{40}$/.test(recipient)) {

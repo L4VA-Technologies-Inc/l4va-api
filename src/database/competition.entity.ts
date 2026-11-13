@@ -71,6 +71,10 @@ export class CompetitionEntry {
   @Column({ name: 'entry_price_usd', type: 'numeric' })
   entry_price_usd: string;
 
+  /** Token price in ETH at entry; token returns are measured in ETH. Null for entries made before it existed. */
+  @Column({ name: 'entry_price_native', type: 'numeric', nullable: true })
+  entry_price_native: string | null;
+
   @Column({ name: 'entry_value_usd', type: 'numeric', default: 0 })
   entry_value_usd: string;
 
@@ -96,6 +100,10 @@ export class CompetitionSnapshot {
 
   @Column({ name: 'price_usd', type: 'numeric' })
   price_usd: string;
+
+  /** Token price in ETH, straight from the pool. */
+  @Column({ name: 'price_native', type: 'numeric', nullable: true })
+  price_native: string | null;
 
   /** Vault asset value (NAV). */
   @Column({ name: 'value_usd', type: 'numeric', default: 0 })
