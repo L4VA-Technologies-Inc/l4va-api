@@ -804,6 +804,11 @@ export class VaultManagingService {
   ): Promise<{
     txHash: string;
   }> {
+    await this.transactionsService.assertSubmittableTransaction(signedTx.txId, {
+      vaultId: vault.id,
+      type: TransactionType.createVault,
+      userId: ownerId,
+    });
     try {
       // Ensure signatures is always an array
       const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
