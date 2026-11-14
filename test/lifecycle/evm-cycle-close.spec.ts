@@ -27,9 +27,9 @@ import {
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { TransactionHealthService } from '@/modules/vaults/processing-tx/offchain-tx/transaction-health.service';
-import { EvmAdminSigner } from '@/modules/vaults/processing-tx/onchain/evm-admin-signer.service';
-import { EMPTY_CYCLE_ROOT } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
+import { EMPTY_CYCLE_ROOT } from '@/modules/vaults/processing-tx/evm/allocation/allocation.service';
+import { EvmAdminSigner } from '@/modules/vaults/processing-tx/evm/signers/admin-signer.service';
+import { TransactionHealthService } from '@/modules/vaults/processing-tx/transactions/transaction-health.service';
 import { VaultStatus } from '@/types/vault.types';
 
 describe('EVM cycle close', () => {

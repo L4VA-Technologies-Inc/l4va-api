@@ -8,7 +8,7 @@ import { TaptoolsModule } from '../taptools/taptools.module';
 import { WayUpPricingModule } from '../wayup/wayup-pricing.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
-import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
+import { EvmVaultSignerService } from './processing-tx/evm/signers/vault-signer.service';
 import { TokenVerificationRefreshService } from './token-verification-refresh.service';
 import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
@@ -38,8 +38,8 @@ import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.modul
 import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
-import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/transactions/transactions.module';
 import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
 import { VaultsAdminController } from '@/modules/vaults/vaults-admin/vaults-admin.controller';
 import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.service';

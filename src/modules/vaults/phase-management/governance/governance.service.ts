@@ -17,8 +17,8 @@ import NodeCache from 'node-cache';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 import { formatUnits } from 'viem';
 
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
+import { BlockchainService } from '../../processing-tx/cardano/cardano-tx.service';
+import { TransactionsService } from '../../processing-tx/transactions/transactions.service';
 
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
@@ -55,10 +55,10 @@ import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
-import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
-import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
-import { EvmLpStatus } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
-import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/evm/liquidity/liquidity.service';
+import { EvmLpStatus } from '@/modules/vaults/processing-tx/evm/liquidity/lp.config';
+import { UniswapQuoteService } from '@/modules/vaults/processing-tx/evm/liquidity/uniswap-quote.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/evm/protocol/contract-reader.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';

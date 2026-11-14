@@ -4,17 +4,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { type Address } from 'viem';
 
-import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
-import { EvmOpenCycleService, type EvmOpenCycleConfig } from '../../processing-tx/onchain/evm-open-cycle.service';
+import { EvmOpenCycleService, type EvmOpenCycleConfig } from '../../processing-tx/evm/cycle/open-cycle.service';
 import {
   buildOperationId,
   encodeMockAdapterParams,
   EvmAssetKind,
   EvmPositionService,
   type SellNftParams,
-} from '../../processing-tx/onchain/evm-position.service';
-import { EvmSwapService } from '../../processing-tx/onchain/evm-swap.service';
-import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
+} from '../../processing-tx/evm/liquidity/position.service';
+import { EvmSwapService } from '../../processing-tx/evm/liquidity/swap.service';
+import { EvmAdapterRegistryService } from '../../processing-tx/evm/protocol/adapter-registry.service';
+import { EvmTerminationService } from '../../processing-tx/evm/termination/termination.service';
 
 import { EvmDistributionService } from './evm-distribution.service';
 

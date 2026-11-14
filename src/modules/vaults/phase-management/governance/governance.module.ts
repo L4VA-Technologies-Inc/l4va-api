@@ -3,8 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '../../processing-tx/blockchain.module';
+import { TransactionsModule } from '../../processing-tx/transactions/transactions.module';
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { DistributionService } from './distribution.service';

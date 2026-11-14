@@ -19,8 +19,8 @@ import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
-import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/transactions/transactions.module';
 
 @Module({
   imports: [

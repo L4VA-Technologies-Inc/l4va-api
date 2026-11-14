@@ -13,8 +13,8 @@ import {
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { PriceService } from '@/modules/price/price.service';
-import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
-import { EvmLpStatus } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/evm/liquidity/liquidity.service';
+import { EvmLpStatus } from '@/modules/vaults/processing-tx/evm/liquidity/lp.config';
 import { ChainType, VAULT_STATUSES_WITH_POTENTIAL_LP, VaultStatus } from '@/types/vault.types';
 
 /** Qualifying return is the average price over this window after entry vs the entry price. */

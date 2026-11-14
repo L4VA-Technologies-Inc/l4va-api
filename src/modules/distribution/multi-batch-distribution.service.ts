@@ -4,7 +4,7 @@ import { In, Repository } from 'typeorm';
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
-import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { VaultManagingService } from '@/modules/vaults/processing-tx/cardano/cardano-vault-builder.service';
 import { SmartContractVaultStatus } from '@/types/vault.types';
 
 /**

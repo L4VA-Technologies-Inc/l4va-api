@@ -8,8 +8,8 @@ import { EstimateSwapInput, EstimateSwapResponse } from './dto/estimate-swap.dto
 import { ExecuteSwapInput, ExecuteSwapResponse } from './dto/execute-swap.dto';
 
 import { Vault } from '@/database/vault.entity';
-import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 

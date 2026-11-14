@@ -5,9 +5,9 @@ import { Repository } from 'typeorm';
 import { createWalletClient, type Account, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { EvmContractReader } from '../vaults/processing-tx/onchain/evm-contract-reader.service';
-import { findEvmProtocolVersionByFeeConverter } from '../vaults/processing-tx/onchain/evm-protocol-versions';
-import { VAULT_ABI } from '../vaults/processing-tx/onchain/vault.abi';
+import { VAULT_ABI } from '../vaults/processing-tx/evm/abi/vault.abi';
+import { EvmContractReader } from '../vaults/processing-tx/evm/protocol/contract-reader.service';
+import { findEvmProtocolVersionByFeeConverter } from '../vaults/processing-tx/evm/protocol/protocol-versions';
 
 import { ERC20_BALANCE_ABI, FEE_CONTROLLER_ABI, FEE_CONVERTER_ABI, L4VA_BURN_ABI } from './fee-keeper.abis';
 import { loadFeeKeeperConfig, type FeeKeeperConfig } from './fee-keeper.config';

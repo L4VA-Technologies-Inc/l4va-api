@@ -1,0 +1,860 @@
+import { Buffer } from 'node:buffer';
+
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import {
+  Address,
+  FixedTransaction,
+  PrivateKey,
+  TransactionUnspentOutputs,
+  TransactionUnspentOutput,
+} from '@emurgo/cardano-serialization-lib-nodejs';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+
+import { AssetsService } from '../../assets/assets.service';
+import { PublishVaultDto } from '../../dto/publish-vault.dto';
+
+import { BlockchainService } from './cardano-tx.service';
+import { Datum1 } from './cardano-tx.types';
+import {
+  generate_tag_from_txhash_index,
+  getAddressFromHash,
+  getUtxosExtract,
+  getVaultUtxo,
+  convertAddressesToKeyHashes,
+} from './cardano-utxo.utils';
+
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Vault } from '@/database/vault.entity';
+import { VaultCreationInput } from '@/modules/distribution/distribution.types';
+import { SystemSettingsService } from '@/modules/globals/system-settings/index';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
+
+export interface VaultConfig {
+  vaultName: string;
+  customerAddress: string;
+  adminKeyHash: string;
+  policyId: string;
+  allowedPolicies: string[];
+  allowedContributors?: string[];
+  assetWindow?: {
+    start: number;
+    end: number;
+  };
+  acquireWindow?: {
+    start: number;
+    end: number;
+  };
+  acquireMultiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
+  adaPairMultiplier?: number; // 0: FIXED | 1: LBE
+  contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
+  valueMethod?: number; // 0: FIXED | 1: LBE
+  customMetadata?: [string, string][];
+}
+
+export interface VaultCreateConfig {
+  vaultName: string;
+  userId: string;
+  customerAddress: string;
+  vaultId: string;
+  allowedPolicies: string[];
+  allowedContributors: string[];
+  assetWindow?: {
+    start: number;
+    end: number;
+  };
+  acquireWindow?: {
+    start: number;
+    end: number;
+  };
+  contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
+  valueMethod?: number; // 0: FIXED | 1: LBE
+  customMetadata?: [string, string][];
+}
+
+// Contribution/acquire txs are built with a 2h validity; the on-chain window must outlive it
+const TX_VALIDITY_GRACE_MS = 2 * 60 * 60 * 1000;
+
+@Injectable()
+export class VaultManagingService {
+  private readonly logger = new Logger(VaultManagingService.name);
+  private scAddress: string;
+  private readonly scPolicyId: string;
+  private readonly adminHash: string;
+  private readonly adminSKey: string;
+  private readonly adminAddress: string;
+  private readonly vaultScriptAddress: string;
+  private readonly unparametizedScriptHash: string;
+  private readonly blueprintTitle: string;
+  private readonly networkId: number;
+  private readonly blockfrost: BlockFrostAPI;
+
+  private readonly VLRM_HEX_ASSET_NAME: string;
+  private readonly VLRM_POLICY_ID: string;
+
+  constructor(
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
+    private readonly configService: ConfigService,
+    @Inject(BlockchainService)
+    private readonly blockchainService: BlockchainService,
+    private readonly transactionsService: TransactionsService,
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly assetsService: AssetsService
+  ) {
+    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
+    this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
+    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
+    this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
+    this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
+    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
+
+    // Validate critical environment variables
+    this.validateEnvironmentVariables();
+  }
+
+  /**
+   * Validates that all required environment variables are present
+   * Logs warnings for missing critical configuration
+   */
+  private validateEnvironmentVariables(): void {
+    this.logger.log('=== Validating VaultManaging Service Configuration ===');
+
+    const requiredVars = [
+      { key: 'VAULT_SCRIPT_ADDRESS', value: this.vaultScriptAddress, critical: true },
+      { key: 'ADMIN_S_KEY', value: this.adminSKey, critical: true, sensitive: true },
+      { key: 'ADMIN_ADDRESS', value: this.adminAddress, critical: true },
+      { key: 'ADMIN_KEY_HASH', value: this.adminHash, critical: true },
+      { key: 'SC_POLICY_ID', value: this.scPolicyId, critical: true },
+      { key: 'CONTRIBUTION_SCRIPT_HASH', value: this.unparametizedScriptHash, critical: true },
+      { key: 'BLUEPRINT_TITLE', value: this.blueprintTitle, critical: true },
+      { key: 'VLRM_POLICY_ID', value: this.VLRM_POLICY_ID, critical: true },
+      { key: 'VLRM_HEX_ASSET_NAME', value: this.VLRM_HEX_ASSET_NAME, critical: true },
+      {
+        key: 'BLOCKFROST_API_KEY',
+        value: this.configService.get<string>('BLOCKFROST_API_KEY'),
+        critical: true,
+        sensitive: true,
+      },
+      { key: 'NETWORK_ID', value: this.networkId?.toString(), critical: true },
+      { key: 'POOL_ADDRESS', value: this.configService.get<string>('POOL_ADDRESS'), critical: false },
+    ];
+
+    let missingCritical = 0;
+    let missingOptional = 0;
+
+    requiredVars.forEach(({ key, value, critical, sensitive }) => {
+      if (!value || value === '' || value === 'undefined') {
+        if (critical) {
+          this.logger.error(`❌ MISSING CRITICAL: ${key}`);
+          missingCritical++;
+        } else {
+          this.logger.warn(`⚠️  MISSING OPTIONAL: ${key}`);
+          missingOptional++;
+        }
+      } else {
+        const displayValue = sensitive ? '***REDACTED***' : value.length > 50 ? `${value.substring(0, 20)}...` : value;
+        this.logger.log(`✅ ${key}: ${displayValue}`);
+      }
+    });
+
+    if (missingCritical > 0) {
+      this.logger.error(
+        `❌ ${missingCritical} critical environment variable(s) missing. Service may not function correctly.`
+      );
+    }
+    if (missingOptional > 0) {
+      this.logger.warn(
+        `⚠️  ${missingOptional} optional environment variable(s) missing. Some features may be limited.`
+      );
+    }
+    if (missingCritical === 0 && missingOptional === 0) {
+      this.logger.log('✅ All required environment variables are configured');
+    }
+
+    this.logger.log('=== Configuration Validation Complete ===');
+  }
+
+  /**
+   * Create a new vault with the specified configuration
+   * @param config Vault configuration parameters
+   * @returns Transaction hash and vault ID
+   */
+  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<{
+    presignedTx: string;
+    contractAddress: string;
+    vaultAssetName: string;
+    scriptHash: string;
+    transactionId: string;
+    applyParamsResult: any;
+  }> {
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultConfig.vaultId,
+      type: TransactionType.createVault,
+      userId: vaultConfig.userId,
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+
+    this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
+
+    // Use the optimized function with better error handling
+    let utxoHexArray: string[];
+    let requiredInputs: string[];
+
+    try {
+      const result = await getUtxosExtract(
+        Address.from_bech32(vaultConfig.customerAddress),
+        this.blockfrost,
+        {
+          filterByAda: 8000000,
+          validateUtxos: false,
+          ...(this.systemSettingsService.vlrmCreatorFeeEnabled && {
+            targetAssets: [
+              {
+                token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
+                amount: this.systemSettingsService.vlrmCreatorFee,
+              },
+            ],
+          }),
+        } // 4 ADA minimum
+      );
+      utxoHexArray = result.filteredUtxos;
+      requiredInputs = result.requiredInputs;
+    } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
+      // Check if this is an insufficient assets error
+      if (error.message && error.message.includes('Insufficient assets found')) {
+        // Check if it's specifically about VLRM tokens
+        const vlrmToken = `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`;
+        if (error.message.includes(vlrmToken)) {
+          const requiredVlrm = this.systemSettingsService.vlrmCreatorFee;
+          throw new BadRequestException(
+            `Insufficient VLRM tokens. You need ${requiredVlrm} VLRM tokens to create a vault. Please acquire more VLRM tokens and try again.`
+          );
+        }
+        // Other asset insufficiency
+        throw new BadRequestException(
+          `${error.message}. Please ensure your wallet has the required tokens and try again.`
+        );
+      }
+
+      // Check if this is an insufficient ADA error
+      if (error.message && error.message.includes('Insufficient ADA found')) {
+        throw new BadRequestException(
+          'Insufficient ADA balance. You need at least 8 ADA in your wallet to create a vault. Please add more ADA and try again.'
+        );
+      }
+
+      // For other UTXO-related errors, likely client-side issues
+      if (error.message) {
+        this.logger.error(`Failed to extract UTXOs for vault creation: ${error.message}`);
+        throw new BadRequestException(
+          `Unable to create vault: ${error.message}. Please ensure your wallet has sufficient funds and UTXOs are available.`
+        );
+      }
+
+      // Unexpected server errors
+      this.logger.error('Unexpected error during vault creation:', error);
+      throw new InternalServerErrorException(
+        'An unexpected error occurred while creating the vault. Please try again later.'
+      );
+    }
+
+    // Convert hex array back to TransactionUnspentOutputs for compatibility
+    const utxos = TransactionUnspentOutputs.new();
+    utxoHexArray.forEach(utxoHex => {
+      const utxo = TransactionUnspentOutput.from_hex(utxoHex);
+      utxos.add(utxo);
+    });
+
+    const selectedUtxo = utxos.get(0);
+    const REQUIRED_INPUTS = [selectedUtxo.to_hex(), ...requiredInputs];
+    const assetName = generate_tag_from_txhash_index(
+      selectedUtxo.input().transaction_id().to_hex(),
+      selectedUtxo.input().index()
+    );
+
+    // Apply parameters to the blueprint before building the transaction
+    const applyParamsResult = await this.blockchainService.applyBlueprintParameters({
+      params: {
+        [this.unparametizedScriptHash]: [
+          this.scPolicyId, // policy id of the vault
+          assetName, // newly created vault id from generate_tag_from_txhash_index
+        ],
+      },
+      blueprint: {
+        title: this.blueprintTitle,
+        version: '0.1.1',
+      },
+    });
+
+    // Upload the parameterized script
+    await this.blockchainService.uploadBlueprint({
+      blueprint: {
+        ...applyParamsResult.preloadedScript.blueprint,
+        preamble: {
+          ...applyParamsResult.preloadedScript.blueprint.preamble,
+          id: undefined,
+          title: 'l4va/vault/' + assetName,
+          version: '0.0.1',
+        },
+        validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
+          (v: any) => v.title.includes('contribute') && v.hash !== this.unparametizedScriptHash
+        ),
+      },
+    });
+
+    const scriptHash =
+      applyParamsResult.preloadedScript.blueprint.validators.find(
+        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== this.unparametizedScriptHash
+      )?.hash || '';
+    if (!scriptHash) {
+      throw new Error('Failed to find script hash');
+    }
+
+    const vaultAddress = getAddressFromHash(scriptHash, this.networkId);
+
+    try {
+      // Convert contributor wallet addresses to verification key hashes for smart contract
+      let contributorKeyHashes: string[] | null = null;
+      try {
+        contributorKeyHashes =
+          vaultConfig.allowedContributors && vaultConfig.allowedContributors.length > 0
+            ? convertAddressesToKeyHashes(vaultConfig.allowedContributors)
+            : null;
+
+        if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+          this.logger.log(`Vault creation with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+        }
+      } catch (conversionError) {
+        this.logger.error('Failed to convert contributor addresses to key hashes:', conversionError);
+        await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+        throw new BadRequestException(
+          `Invalid contributor address(es): ${conversionError.message || 'Unable to convert wallet addresses to verification key hashes. Please ensure all addresses are valid Cardano addresses.'}`
+        );
+      }
+
+      const input: VaultCreationInput = {
+        changeAddress: vaultConfig.customerAddress,
+        message: `${vaultConfig.vaultName} Vault Creation`,
+        utxos: utxoHexArray,
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: assetName, format: 'hex' },
+            policyId: this.scPolicyId,
+            type: 'plutus',
+            quantity: 1,
+            metadata: {},
+          },
+        ],
+        scriptInteractions: [
+          {
+            purpose: 'mint',
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: {
+                vault_token_index: 0,
+                asset_name: assetName,
+              },
+            },
+          },
+        ],
+        outputs: [
+          {
+            address: this.scAddress,
+            assets: [
+              {
+                assetName: { name: assetName, format: 'hex' },
+                policyId: this.scPolicyId,
+                quantity: 1,
+              },
+            ],
+            datum: {
+              type: 'inline',
+              value: {
+                vault_status: SmartContractVaultStatus.OPEN,
+                contract_type: vaultConfig.contractType,
+                asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
+                // Only private vaults restrict who may contribute on-chain. Public and semi-private
+                // vaults omit the list: the owner is always in it, so it made them owner-only.
+                ...(contributorKeyHashes &&
+                  vaultConfig.contractType === 0 && { contributor_whitelist: contributorKeyHashes }),
+                asset_window: {
+                  // Time allowed to upload NFT
+                  lower_bound: {
+                    bound_type: new Date().getTime(),
+                    is_inclusive: true,
+                  },
+                  upper_bound: {
+                    // H-3: grace is only the 2h a built tx stays valid (Anvil always sets end = now + 2h), not 24h
+                    bound_type: new Date(vaultConfig.assetWindow.end).getTime() + TX_VALIDITY_GRACE_MS,
+                    is_inclusive: true,
+                  },
+                },
+                acquire_window: {
+                  // Time allowed to upload ADA
+                  lower_bound: {
+                    bound_type: new Date(vaultConfig.acquireWindow.start).getTime(),
+                    is_inclusive: true,
+                  },
+                  upper_bound: {
+                    bound_type: new Date(vaultConfig.acquireWindow.end).getTime() + TX_VALIDITY_GRACE_MS,
+                    is_inclusive: true,
+                  },
+                },
+                valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
+                // fractionalization: {},
+                custom_metadata: [], // like a tuple
+                // termination: {},
+                // acquire: {},
+                admin: this.adminHash,
+                minting_key: this.adminHash,
+              },
+              shape: {
+                validatorHash: this.scPolicyId,
+                purpose: 'spend',
+              },
+            },
+          },
+          {
+            address: this.vaultScriptAddress,
+            datum: {
+              type: 'script',
+              hash: scriptHash,
+            },
+          },
+          ...(this.systemSettingsService.vlrmCreatorFeeEnabled
+            ? [
+                {
+                  address: vaultAddress,
+                  assets: [
+                    {
+                      assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
+                      policyId: this.VLRM_POLICY_ID,
+                      quantity: this.systemSettingsService.vlrmCreatorFee,
+                    },
+                  ],
+                },
+              ]
+            : []),
+        ],
+        requiredInputs: REQUIRED_INPUTS,
+      };
+
+      this.logger.log(JSON.stringify(input));
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      // Sign the transaction
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+        vaultAssetName: assetName,
+        scriptHash,
+        applyParamsResult,
+        transactionId: transaction.id,
+      };
+    } catch (error) {
+      this.logger.error('Failed to create vault:', error);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
+      throw error;
+    }
+  }
+
+  async createBurnTx(burnConfig: {
+    vaultId: string;
+    vaultOwnerAddress: string;
+    assetVaultName: string;
+    publicationHash: string;
+  }): Promise<{
+    presignedTx: string;
+    txId: string;
+  }> {
+    this.logger.log(`Creating burn transaction for vault ${burnConfig.assetVaultName}`);
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: burnConfig.vaultId,
+      type: TransactionType.burn,
+      assets: [],
+    });
+
+    try {
+      if (!burnConfig.vaultOwnerAddress) {
+        throw new BadRequestException('Customer address is required');
+      }
+
+      if (!burnConfig.assetVaultName) {
+        throw new BadRequestException('Asset vault name is required');
+      }
+
+      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+        minAda: 4000000,
+        validateUtxos: false,
+      });
+
+      const requiredInputs: string[] = [];
+
+      // Get the vault UTXO
+      const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
+
+      if (!vaultUtxo) {
+        throw new NotFoundException(`Vault UTXO not found for asset name ${burnConfig.assetVaultName}`);
+      }
+
+      // Create transaction input
+      const input = {
+        changeAddress: burnConfig.vaultOwnerAddress,
+        message: 'Vault Burn',
+        utxos: adminUtxos,
+        scriptInteractions: [
+          {
+            purpose: 'spend',
+            outputRef: vaultUtxo,
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: 'VaultBurn',
+            },
+          },
+          {
+            purpose: 'mint',
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: 'VaultBurn',
+            },
+          },
+        ],
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: burnConfig.assetVaultName, format: 'hex' },
+            policyId: this.scPolicyId,
+            type: 'plutus',
+            quantity: -1,
+          },
+        ],
+        requiredSigners: [this.adminHash],
+        requiredInputs,
+        outputs: [],
+      };
+
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        txId: transaction.id,
+      };
+    } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+
+      if (error.status_code && error.message) {
+        throw new InternalServerErrorException(`Blockchain API error (${error.status_code}): ${error.message}`);
+      }
+
+      throw new InternalServerErrorException(`Failed to create burn transaction: ${error.message || 'Unknown error'}`);
+    }
+  }
+
+  async updateVaultMetadataTx(config: {
+    vault: Pick<
+      Vault,
+      'id' | 'asset_vault_name' | 'privacy' | 'contribution_phase_start' | 'contribution_duration' | 'value_method'
+    >;
+    vaultStatus: SmartContractVaultStatus;
+    acquireMultiplier?: [string, string | null, number][];
+    adaPairMultiplier?: number;
+    adaDistribution?: [string, string | null, number][];
+    contributorWhitelist?: string[]; // Array of wallet addresses
+    asset_window?: {
+      start: number;
+      end: number;
+    };
+    acquire_window?: {
+      start: number;
+      end: number;
+    };
+  }): Promise<{
+    success: boolean;
+    txHash: string;
+    message: string;
+  }> {
+    const {
+      vault,
+      vaultStatus,
+      asset_window,
+      acquire_window,
+      acquireMultiplier = [],
+      adaPairMultiplier = 0,
+      adaDistribution = [],
+      contributorWhitelist = [],
+    } = config;
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.updateVault,
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+
+    const assetsWhitelist = await this.assetsWhitelistRepository.find({
+      where: { vault: { id: vault.id } },
+      select: ['policy_id'],
+    });
+
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 4000000,
+      validateUtxos: false,
+    });
+
+    const requiredInputs: string[] = [];
+
+    const allowedPolicies: string[] =
+      Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
+        ? assetsWhitelist.map(policy => policy.policy_id)
+        : [];
+    const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
+
+    // Convert contributor wallet addresses to verification key hashes for smart contract
+    let contributorKeyHashes: string[] | null = null;
+    try {
+      contributorKeyHashes =
+        contributorWhitelist && contributorWhitelist.length > 0
+          ? convertAddressesToKeyHashes(contributorWhitelist)
+          : null;
+
+      if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+        this.logger.log(`Vault update with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+      }
+    } catch (conversionError) {
+      this.logger.error('Failed to convert contributor addresses to key hashes:', conversionError);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+      throw new BadRequestException(
+        `Invalid contributor address(es): ${conversionError.message || 'Unable to convert wallet addresses to verification key hashes. Please ensure all addresses are valid Cardano addresses.'}`
+      );
+    }
+
+    this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
+
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
+
+    let vaultMessageStatus = '';
+    if (vaultStatus === SmartContractVaultStatus.SUCCESSFUL) {
+      vaultMessageStatus = 'Locked';
+    } else if (vaultStatus === SmartContractVaultStatus.CANCELLED) {
+      vaultMessageStatus = 'Failed';
+    } else if (vaultStatus === SmartContractVaultStatus.OPEN) {
+      vaultMessageStatus = 'Open';
+    } else {
+      vaultMessageStatus = 'Unknown';
+    }
+    const input = {
+      changeAddress: this.adminAddress,
+      message: `Vault ${vault.id} ${vaultMessageStatus} Update`,
+      utxos: adminUtxos,
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: 'json',
+            value: {
+              vault_token_index: 0, // must fit the ordering defined in the outputs array
+              asset_name: vault.asset_vault_name,
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: this.scAddress,
+          assets: [
+            {
+              assetName: vault.asset_vault_name,
+              policyId: this.scPolicyId,
+              quantity: 1,
+            },
+          ],
+          datum: {
+            type: 'inline',
+            value: {
+              vault_status: vaultStatus, // Added vault_status field
+              contract_type: contract_type,
+              asset_whitelist: allowedPolicies,
+              // Only private vaults restrict who may contribute on-chain. Public and semi-private
+              // vaults omit the list: the owner is always in it, so it made them owner-only.
+              ...(contributorKeyHashes && contract_type === 0 && { contributor_whitelist: contributorKeyHashes }),
+              asset_window: {
+                lower_bound: {
+                  bound_type: asset_window?.start
+                    ? asset_window.start
+                    : new Date(vault.contribution_phase_start).getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: asset_window?.end
+                    ? asset_window?.end
+                    : new Date(
+                        new Date(vault.contribution_phase_start).getTime() + Number(vault.contribution_duration)
+                      ).getTime(),
+                  is_inclusive: true,
+                },
+              },
+              acquire_window: {
+                lower_bound: {
+                  bound_type: acquire_window?.start ? acquire_window.start : new Date().getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: acquire_window?.end ? acquire_window.end : new Date().getTime(),
+                  is_inclusive: true,
+                },
+              },
+              valuation_type: vault.value_method === 'fixed' ? 0 : 1,
+              custom_metadata: [],
+              admin: this.adminHash,
+              minting_key: this.adminHash,
+              acquire_multiplier: acquireMultiplier,
+              ada_distribution: adaDistribution,
+              ada_pair_multipler: adaPairMultiplier,
+            } satisfies Datum1,
+            shape: {
+              validatorHash: this.scPolicyId,
+              purpose: 'spend',
+            },
+          },
+        },
+      ],
+      requiredInputs,
+      requiredSigners: [this.adminHash],
+    };
+
+    this.logger.debug('Vault update transaction input:', JSON.stringify(input));
+    try {
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      // Validate buildResponse.complete is a valid hex string
+      if (!buildResponse.complete || typeof buildResponse.complete !== 'string') {
+        this.logger.error('Invalid buildResponse.complete:', typeof buildResponse.complete, buildResponse.complete);
+        throw new Error(`Invalid transaction response: expected hex string, got ${typeof buildResponse.complete}`);
+      }
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const signedTxHex = txToSubmitOnChain.to_hex();
+      // Validate signed transaction hex
+      if (!signedTxHex || typeof signedTxHex !== 'string') {
+        this.logger.error('Invalid signed transaction hex:', typeof signedTxHex);
+        throw new Error(`Failed to serialize signed transaction: got ${typeof signedTxHex}`);
+      }
+
+      const response = await this.blockchainService.submitTransaction({
+        transaction: signedTxHex,
+      });
+
+      await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
+      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
+    } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+      this.logger.error('Failed to build vault update tx:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Submit a signed vault transaction to the blockchain
+   * @param signedTx Object containing the transaction and signatures
+   * @returns Transaction hash
+   */
+  async submitOnChainVaultTx(
+    signedTx: PublishVaultDto,
+    vault: Vault,
+    ownerId: string
+  ): Promise<{
+    txHash: string;
+  }> {
+    await this.transactionsService.assertSubmittableTransaction(signedTx.txId, {
+      vaultId: vault.id,
+      type: TransactionType.createVault,
+      userId: ownerId,
+    });
+    try {
+      // Ensure signatures is always an array
+      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
+
+      const result = await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures,
+      });
+
+      await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
+
+      // Create VLRM fee asset if enabled
+      if (this.systemSettingsService.vlrmCreatorFeeEnabled && this.systemSettingsService.vlrmCreatorFee > 0) {
+        await this.assetsService.addVLRMFeeAsset(vault, ownerId, signedTx.txId);
+      }
+
+      if (result.txHash) {
+        // Step 4: Update blueprint with the script transaction reference
+        await this.blockchainService.uploadBlueprint({
+          blueprint: {
+            ...vault.apply_params_result.preloadedScript.blueprint,
+            preamble: {
+              ...vault.apply_params_result.preloadedScript.blueprint.preamble,
+              id: undefined,
+              title: 'l4va/vault/' + vault.asset_vault_name,
+              version: '0.0.1',
+            },
+            validators: vault.apply_params_result.preloadedScript.blueprint.validators.filter((v: any) =>
+              v.title.includes('contribute')
+            ),
+          },
+          refs: {
+            [vault.script_hash]: {
+              txHash: result.txHash,
+              index: 1, // Script output is at index 1 (vault is at index 0)
+            },
+          },
+        });
+      } else {
+        throw new Error(`Failed to create vault and upload script: 'Unknown error'`);
+      }
+
+      return { txHash: result.txHash };
+    } catch (error) {
+      this.logger.error('Failed to submit vault transaction', error);
+      throw new Error(`Failed to submit transaction: ${error.message}`);
+    }
+  }
+}

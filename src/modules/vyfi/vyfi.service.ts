@@ -10,9 +10,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
-import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { MissingUtxoException } from '../vaults/processing-tx/onchain/exceptions/utxo-missing.exception';
-import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '../vaults/processing-tx/cardano/cardano-tx.service';
+import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/cardano/cardano-utxo.utils';
+import { MissingUtxoException } from '../vaults/processing-tx/exceptions/utxo-missing.exception';
 
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';

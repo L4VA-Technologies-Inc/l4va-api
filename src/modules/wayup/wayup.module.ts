@@ -10,8 +10,8 @@ import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
-import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/transactions/transactions.module';
 
 @Module({
   imports: [

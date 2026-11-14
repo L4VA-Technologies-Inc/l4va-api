@@ -16,7 +16,10 @@ import { selectDispatchUtxos, validateBalanceEquation } from '../utils/distribut
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
-import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getAddressFromHash,
+} from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
 
 /**
  * Builds payment transactions for contributor claims

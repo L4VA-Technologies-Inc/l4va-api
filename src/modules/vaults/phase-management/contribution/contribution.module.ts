@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '../../processing-tx/blockchain.module';
+import { TransactionsModule } from '../../processing-tx/transactions/transactions.module';
 
 import { ContributionController } from './contribution.controller';
 import { ContributionService } from './contribution.service';

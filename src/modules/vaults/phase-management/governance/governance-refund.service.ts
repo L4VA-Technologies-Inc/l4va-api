@@ -5,8 +5,8 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
+import { EvmAdminSigner } from '../../processing-tx/evm/signers/admin-signer.service';
+import { TransactionsService } from '../../processing-tx/transactions/transactions.service';
 
 import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { Proposal } from '@/database/proposal.entity';

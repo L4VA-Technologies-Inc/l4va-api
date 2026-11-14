@@ -19,13 +19,13 @@ import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
 import { TerminationService } from '@/modules/vaults/phase-management/governance/termination.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/cardano/cardano-tx.types';
 import {
   generate_tag_from_txhash_index,
   getTransactionSize,
   getUtxosExtract,
-} from '@/modules/vaults/processing-tx/onchain/utils/lib';
+} from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';

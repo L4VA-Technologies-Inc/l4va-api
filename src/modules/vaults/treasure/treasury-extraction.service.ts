@@ -5,9 +5,9 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import { TransactionsService } from '../processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '../processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '../processing-tx/onchain/utils/lib';
+import { BlockchainService } from '../processing-tx/cardano/cardano-tx.service';
+import { getUtxosExtract } from '../processing-tx/cardano/cardano-utxo.utils';
+import { TransactionsService } from '../processing-tx/transactions/transactions.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';

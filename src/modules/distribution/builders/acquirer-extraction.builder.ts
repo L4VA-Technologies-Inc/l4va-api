@@ -5,7 +5,10 @@ import { ExtractInput, ScriptInteraction, TransactionOutput, MintAsset } from '.
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
-import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getAddressFromHash,
+} from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
 
 /**
  * Builds extraction transactions for acquirer claims

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions.module';
+import { TransactionsModule } from '../../processing-tx/transactions/transactions.module';
 
 import { AcquireController } from './acquire.controller';
 import { AcquireService } from './acquire.service';

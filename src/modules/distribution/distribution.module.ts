@@ -4,7 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AlertsModule } from '../alerts/alerts.module';
-import { TransactionsModule } from '../vaults/processing-tx/offchain-tx/transactions.module';
+import { TransactionsModule } from '../vaults/processing-tx/transactions/transactions.module';
 
 import { AutomatedDistributionService } from './automated-distribution.service';
 import { AcquireOnlyExtractionBuilder } from './builders/acquire-only-extraction.builder';
@@ -24,7 +24,7 @@ import { Vault } from '@/database/vault.entity';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 
 @Module({

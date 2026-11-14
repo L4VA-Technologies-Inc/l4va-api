@@ -25,7 +25,7 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
-import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';

@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AssetsModule } from '../vaults/assets/assets.module';
-import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '../vaults/processing-tx/blockchain.module';
 import { TreasureWalletModule } from '../vaults/treasure/treasure-wallet.module';
 
 import { DexHunterPricingModule } from './dexhunter-pricing.module';
@@ -12,7 +12,7 @@ import { DexHunterService } from './dexhunter.service';
 
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
-import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/transactions/transactions.module';
 
 @Module({
   imports: [

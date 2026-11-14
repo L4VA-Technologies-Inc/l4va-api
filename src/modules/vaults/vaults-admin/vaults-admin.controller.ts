@@ -4,7 +4,7 @@ import { ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { Vault } from '@/database/vault.entity';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
-import { EvmRescueService, type RescuePreview } from '@/modules/vaults/processing-tx/onchain/evm-rescue.service';
+import { EvmRescueService, type RescuePreview } from '@/modules/vaults/processing-tx/evm/termination/rescue.service';
 import { RescueUntrackedDto } from '@/modules/vaults/vaults-admin/dto/rescue-untracked.dto';
 import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.service';
 

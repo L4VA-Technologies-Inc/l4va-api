@@ -6,7 +6,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 
-import { TransactionsService } from '../processing-tx/offchain-tx/transactions.service';
+import { TransactionsService } from '../processing-tx/transactions/transactions.service';
 
 import { ClaimsService } from './claims.service';
 
@@ -15,8 +15,8 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { getUtxosExtract } from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';

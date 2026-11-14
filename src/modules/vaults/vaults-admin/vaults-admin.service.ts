@@ -7,7 +7,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
-import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { VaultManagingService } from '@/modules/vaults/processing-tx/cardano/cardano-vault-builder.service';
 import { AssetStatus } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {

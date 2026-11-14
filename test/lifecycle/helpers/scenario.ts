@@ -22,9 +22,9 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
 import { AcquireService } from '@/modules/vaults/phase-management/acquire/acquire.service';
 import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { EvmGovernanceExecutionService } from '@/modules/vaults/phase-management/governance/evm-governance-execution.service';
-import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-backfill.service';
-import { EvmVaultContributionService } from '@/modules/vaults/processing-tx/onchain/evm-vault-contribution.service';
-import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
+import { VAULT_ABI } from '@/modules/vaults/processing-tx/evm/abi/vault.abi';
+import { EvmVaultContributionService } from '@/modules/vaults/processing-tx/evm/contribution/vault-contribution.service';
+import { EvmContributionBackfillService } from '@/modules/vaults/processing-tx/evm/indexing/contribution-backfill.service';
 import { VaultsService } from '@/modules/vaults/vaults.service';
 import { VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';

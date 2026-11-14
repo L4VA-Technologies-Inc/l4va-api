@@ -20,8 +20,8 @@ import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { ContributionModule } from '@/modules/vaults/phase-management/contribution/contribution.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
-import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/transactions/transactions.module';
 import { TreasureWalletModule } from '@/modules/vaults/treasure/treasure-wallet.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 

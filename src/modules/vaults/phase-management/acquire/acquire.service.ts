@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThanOrEqual, Repository } from 'typeorm';
 import { formatEther } from 'viem';
 
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { TransactionsService } from '../../processing-tx/transactions/transactions.service';
 import { normalizeContributionAssets } from '../contribution/contribution-asset.utils';
 import { ContributionAsset } from '../contribution/dto/contribute.req';
 

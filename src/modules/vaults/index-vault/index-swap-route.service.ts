@@ -20,14 +20,14 @@ import {
 } from './swap-route/route-probe';
 import { TradingApiUnavailableError, UniswapTradingApiClient } from './swap-route/uniswap-trading-api.client';
 
-import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmSwapService, type SwapParams } from '@/modules/vaults/processing-tx/evm/liquidity/swap.service';
+import { UNISWAP_V3_ROBINHOOD } from '@/modules/vaults/processing-tx/evm/liquidity/uniswap-quote.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/evm/protocol/contract-reader.service';
 import {
   findEvmProtocolVersionByFactory,
   resolveVaultSwapAdapter,
   vaultSwapAdapterIsMultiPath,
-} from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
-import { EvmSwapService, type SwapParams } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
-import { UNISWAP_V3_ROBINHOOD } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
+} from '@/modules/vaults/processing-tx/evm/protocol/protocol-versions';
 
 export { NATIVE, NoSupportedRouteError };
 

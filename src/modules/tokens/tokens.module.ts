@@ -5,7 +5,7 @@ import { TokensService } from './tokens.service';
 
 import { MarketModule } from '@/modules/market/market.module';
 import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
-import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/evm/protocol/contract-reader.service';
 
 @Module({
   imports: [TapToolsPricingModule, MarketModule],

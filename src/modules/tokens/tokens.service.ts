@@ -20,9 +20,9 @@ import { Market } from '@/database/market.entity';
 import { MarketService } from '@/modules/market/market.service';
 import { PriceService } from '@/modules/price/price.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
-import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
-import { getEvmLpAdapterAddress } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
-import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
+import { VAULT_ABI } from '@/modules/vaults/processing-tx/evm/abi/vault.abi';
+import { getEvmLpAdapterAddress } from '@/modules/vaults/processing-tx/evm/liquidity/lp.config';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/evm/protocol/contract-reader.service';
 import { MarketTokenKind } from '@/types/market.types';
 import { ChainType } from '@/types/vault.types';
 

@@ -3,7 +3,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '../vaults/processing-tx/blockchain.module';
 
 import { VyfiService } from './vyfi.service';
 

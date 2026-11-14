@@ -11,11 +11,11 @@ import Redis from 'ioredis';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
-import { SubmitTransactionDto } from '../../processing-tx/onchain/dto/transaction.dto';
-import { getUtxosExtract } from '../../processing-tx/onchain/utils/lib';
-import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
+import { BlockchainService } from '../../processing-tx/cardano/cardano-tx.service';
+import { getUtxosExtract } from '../../processing-tx/cardano/cardano-utxo.utils';
+import { VaultManagingService } from '../../processing-tx/cardano/cardano-vault-builder.service';
+import { SubmitTransactionDto } from '../../processing-tx/dto/transaction.dto';
+import { TransactionsService } from '../../processing-tx/transactions/transactions.service';
 import { TreasuryWalletService } from '../../treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '../../treasure/treasury-extraction.service';
 

@@ -4,15 +4,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { erc20Abi, parseAbiItem, type Address } from 'viem';
 
-import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
-import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
+import { VAULT_ABI } from '../../processing-tx/evm/abi/vault.abi';
+import { EvmContractReader } from '../../processing-tx/evm/protocol/contract-reader.service';
 
 import { EvmLpVotingService } from './evm-lp-voting.service';
 
 import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { resolveVaultDeployBlock } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
+import { resolveVaultDeployBlock } from '@/modules/vaults/processing-tx/evm/protocol/protocol-versions';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 

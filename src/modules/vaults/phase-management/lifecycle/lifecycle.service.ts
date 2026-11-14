@@ -5,7 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { TransactionsService } from '../../processing-tx/transactions/transactions.service';
 import { ExpansionService } from '../governance/expansion.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -23,26 +23,26 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
-import { latestOutstandingAcquireDeadline } from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
-import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
+import { VaultManagingService } from '@/modules/vaults/processing-tx/cardano/cardano-vault-builder.service';
+import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/cardano/token-metadata-registry.service';
+import { EvmCycleStatus, VAULT_ABI } from '@/modules/vaults/processing-tx/evm/abi/vault.abi';
+import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/evm/allocation/airdrop-orchestrator.service';
 import {
   EmptyAllocationError,
   EvmAllocationService,
-} from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
-import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
-import { EvmContributionCapsService } from '@/modules/vaults/processing-tx/onchain/evm-contribution-caps.service';
-import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/onchain/evm-cycle-close.service';
-import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/onchain/evm-fee-withdraw.service';
-import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
+} from '@/modules/vaults/processing-tx/evm/allocation/allocation.service';
+import { EvmContributionCapsService } from '@/modules/vaults/processing-tx/evm/contribution/contribution-caps.service';
+import { EvmCycleCloseService } from '@/modules/vaults/processing-tx/evm/cycle/cycle-close.service';
 import {
   EvmLockTimePricingService,
   MissingPriceError,
-} from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
-import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
-import { EvmTerminationService } from '@/modules/vaults/processing-tx/onchain/evm-termination.service';
-import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
-import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
-import { EvmCycleStatus, VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
+} from '@/modules/vaults/processing-tx/evm/cycle/lock-time-pricing.service';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/evm/liquidity/liquidity.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/evm/protocol/contract-reader.service';
+import { EvmFeeWithdrawService } from '@/modules/vaults/processing-tx/evm/protocol/fee-withdraw.service';
+import { latestOutstandingAcquireDeadline } from '@/modules/vaults/processing-tx/evm/signers/acquire-signatures';
+import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/evm/termination/refund-orchestrator.service';
+import { EvmTerminationService } from '@/modules/vaults/processing-tx/evm/termination/termination.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';

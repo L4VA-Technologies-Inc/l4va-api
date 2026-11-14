@@ -14,15 +14,15 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
-import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { MissingUtxoException } from '@/modules/vaults/processing-tx/onchain/exceptions/utxo-missing.exception';
-import { UtxoSpentException } from '@/modules/vaults/processing-tx/onchain/exceptions/utxo-spent.exception';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
 import {
   getAddressFromHash,
   getTransactionSize,
   getUtxosExtract,
-} from '@/modules/vaults/processing-tx/onchain/utils/lib';
+} from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
+import { MissingUtxoException } from '@/modules/vaults/processing-tx/exceptions/utxo-missing.exception';
+import { UtxoSpentException } from '@/modules/vaults/processing-tx/exceptions/utxo-spent.exception';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 

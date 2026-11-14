@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuard
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { TransactionsService } from '../../processing-tx/transactions/transactions.service';
 import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 import { AcquireService } from './acquire.service';

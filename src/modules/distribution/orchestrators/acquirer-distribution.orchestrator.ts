@@ -12,9 +12,9 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
-import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getTransactionSize, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { getTransactionSize, getUtxosExtract } from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 

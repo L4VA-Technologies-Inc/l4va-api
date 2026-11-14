@@ -8,7 +8,7 @@ import { UniswapTradingApiClient } from './swap-route/uniswap-trading-api.client
 
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
 import { Vault } from '@/database/vault.entity';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Vault, EvmIndexRebalance]), BlockchainModule],

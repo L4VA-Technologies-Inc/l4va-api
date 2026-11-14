@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DistributionModule } from '../distribution/distribution.module';
-import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '../vaults/processing-tx/blockchain.module';
 
 import { DiagnosticController } from './diagnostic.controller';
 import { DiagnosticService } from './diagnostic.service';

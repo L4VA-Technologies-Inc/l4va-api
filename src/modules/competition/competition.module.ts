@@ -8,7 +8,7 @@ import { CompetitionEntry, CompetitionSeason, CompetitionSnapshot } from '@/data
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { PriceModule } from '@/modules/price/price.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
 
 @Module({
   imports: [

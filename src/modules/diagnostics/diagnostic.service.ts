@@ -5,9 +5,9 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { Datum1 } from '../vaults/processing-tx/onchain/types/type';
-import { getAddressFromHash, getUtxosExtract, getVaultUtxo } from '../vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '../vaults/processing-tx/cardano/cardano-tx.service';
+import { Datum1 } from '../vaults/processing-tx/cardano/cardano-tx.types';
+import { getAddressFromHash, getUtxosExtract, getVaultUtxo } from '../vaults/processing-tx/cardano/cardano-utxo.utils';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';

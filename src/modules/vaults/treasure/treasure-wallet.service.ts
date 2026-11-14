@@ -16,8 +16,8 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { generateCardanoWallet, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { generateCardanoWallet, getUtxosExtract } from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class TreasuryWalletService {

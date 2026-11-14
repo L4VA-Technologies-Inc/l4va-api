@@ -1,8 +1,8 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
-import { SubmitTransactionDto } from '../../processing-tx/onchain/dto/transaction.dto';
-import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
+import { SubmitTransactionDto } from '../../processing-tx/dto/transaction.dto';
+import { EvmTerminationService } from '../../processing-tx/evm/termination/termination.service';
 
 import { TerminationStatusRes } from './dto/termination-claim.dto';
 import { TerminationService } from './termination.service';

@@ -5,9 +5,9 @@ import Redis from 'ioredis';
 import { Repository } from 'typeorm';
 import { encodeAbiParameters, keccak256, zeroAddress, zeroHash, type Address, type Hex } from 'viem';
 
-import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
-import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
-import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
+import { VAULT_ABI } from '../../processing-tx/evm/abi/vault.abi';
+import { EvmContractReader } from '../../processing-tx/evm/protocol/contract-reader.service';
+import { EvmAdminSigner } from '../../processing-tx/evm/signers/admin-signer.service';
 
 import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
 import { EvmSnapshotService } from './evm-snapshot.service';

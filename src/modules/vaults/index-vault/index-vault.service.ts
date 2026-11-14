@@ -38,11 +38,11 @@ import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
-import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
-import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
-import { EvmAssetKind } from '@/modules/vaults/processing-tx/onchain/evm-position.service';
-import { EvmSwapService, SwapNotBroadcastError } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
-import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
+import { VAULT_ABI } from '@/modules/vaults/processing-tx/evm/abi/vault.abi';
+import { EvmLiquidityService } from '@/modules/vaults/processing-tx/evm/liquidity/liquidity.service';
+import { EvmAssetKind } from '@/modules/vaults/processing-tx/evm/liquidity/position.service';
+import { EvmSwapService, SwapNotBroadcastError } from '@/modules/vaults/processing-tx/evm/liquidity/swap.service';
+import { EvmContractReader } from '@/modules/vaults/processing-tx/evm/protocol/contract-reader.service';
 import {
   INDEX_DEFAULT_DRIFT_TOLERANCE_BPS,
   INDEX_DEFAULT_SLIPPAGE_BPS,

@@ -23,9 +23,9 @@ import {
 } from './wayup.types';
 
 import { Vault } from '@/database/vault.entity';
-import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { getUtxosExtract } from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 

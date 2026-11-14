@@ -5,8 +5,8 @@ import { FixedTransaction, Address } from '@emurgo/cardano-serialization-lib-nod
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '../../processing-tx/onchain/utils/lib';
+import { BlockchainService } from '../../processing-tx/cardano/cardano-tx.service';
+import { getUtxosExtract } from '../../processing-tx/cardano/cardano-utxo.utils';
 
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 

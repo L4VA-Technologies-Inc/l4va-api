@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { getAddress, type Address, type Hex } from 'viem';
 
-import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
+import { EvmContractReader } from '../../processing-tx/evm/protocol/contract-reader.service';
 
 import { Transaction } from '@/database/transaction.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';

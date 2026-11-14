@@ -1,4 +1,4 @@
-import { Datum, Datum1 } from '../vaults/processing-tx/onchain/types/type';
+import { Datum, Datum1 } from '../vaults/processing-tx/cardano/cardano-tx.types';
 
 export interface TransactionInput {
   changeAddress: string;

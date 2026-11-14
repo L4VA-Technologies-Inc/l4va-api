@@ -44,7 +44,7 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultActivityItem } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
-import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
+import { TransactionsService } from './processing-tx/transactions/transactions.service';
 import { VaultsService } from './vaults.service';
 
 import { Transaction } from '@/database/transaction.entity';

@@ -23,9 +23,9 @@ import { L4VA_BURN_REDEEMER, findL4vaPolicy } from '@/common/cardano/l4va-token-
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
-import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '@/modules/vaults/processing-tx/cardano/cardano-tx.service';
+import { getUtxosExtract } from '@/modules/vaults/processing-tx/cardano/cardano-utxo.utils';
+import { TransactionsService } from '@/modules/vaults/processing-tx/transactions/transactions.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 const LOCK_KEY = 'cardano-buyback:cycle:lock';

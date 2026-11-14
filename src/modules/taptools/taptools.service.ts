@@ -9,7 +9,7 @@ import { In, Repository } from 'typeorm';
 import { createPublicClient, defineChain, formatUnits, parseAbi, type Address } from 'viem';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
-import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
+import { VaultAssetsSummaryDto } from '../vaults/processing-tx/transactions/dto/vault-assets-summary.dto';
 import { VyfiService } from '../vyfi/vyfi.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 

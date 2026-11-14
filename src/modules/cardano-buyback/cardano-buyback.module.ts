@@ -5,8 +5,8 @@ import { CardanoBuybackService } from './cardano-buyback.service';
 
 import { DexHunterModule } from '@/modules/dexhunter/dexhunter.module';
 import { RedisModule } from '@/modules/redis/redis.module';
-import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/blockchain.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/transactions/transactions.module';
 
 @Module({
   imports: [DexHunterModule, BlockchainModule, TransactionsModule, RedisModule],
