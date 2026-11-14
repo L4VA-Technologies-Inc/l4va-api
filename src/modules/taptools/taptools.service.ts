@@ -1073,14 +1073,7 @@ export class TaptoolsService {
       const uniqueAssets = Array.from(uniqueAssetsMap.values());
 
       // Load custom prices for all relevant vaults
-      const customPricesByVault = new Map<string, Map<string, number>>();
-
-      for (const vaultId of vaultIds) {
-        const { customPrices } = await this.getVaultCustomPrices(vaultId);
-        if (customPrices.size > 0) {
-          customPricesByVault.set(vaultId, customPrices);
-        }
-      }
+      const customPricesByVault = await this.getCustomPricesForVaults(vaultIds);
 
       let updatedCount = 0;
       const rejectedUpdates: Array<{
@@ -1530,16 +1523,8 @@ export class TaptoolsService {
         relations: ['assets'],
       });
 
-      // Load custom prices for all vaults
-      const customPricesMap = new Map<string, Map<string, number>>();
-      await Promise.all(
-        vaults.map(async vault => {
-          const { customPrices } = await this.getVaultCustomPrices(vault.id);
-          if (customPrices && customPrices.size > 0) {
-            customPricesMap.set(vault.id, customPrices);
-          }
-        })
-      );
+      // Load custom prices for all vaults (batched: 2 queries, no parallel connection burst)
+      const customPricesMap = await this.getCustomPricesForVaults(vaults.map(v => v.id));
 
       const [adaPrice, ethPrice] = await Promise.all([
         this.priceService.getAdaPrice(),
@@ -2334,60 +2319,146 @@ export class TaptoolsService {
         }
       }
 
-      for (const whitelistItem of vault.assets_whitelist) {
-        // Handle static custom pricing
-        if (whitelistItem.valuation_method === AssetValuationMethod.CUSTOM && whitelistItem.custom_price_ada) {
-          customPrices.set(whitelistItem.policy_id, Number(whitelistItem.custom_price_ada));
-        }
-
-        // Handle dynamic LP token pricing
-        if (
-          whitelistItem.valuation_method === AssetValuationMethod.LP_TOKEN_DYNAMIC &&
-          whitelistItem.lp_pool_onchain_id
-        ) {
-          let lpPrice: number | null = null;
-
-          // Check if this is a VyFi pool (format: tokenA:tokenB)
-          if (whitelistItem.lp_pool_onchain_id.includes(':')) {
-            // VyFi LP token: parse tokenA and tokenB from colon-separated format
-            const [tokenAUnit, tokenBUnit] = whitelistItem.lp_pool_onchain_id.split(':');
-
-            // Get the full LP token unit from assets table
-            const lpAsset = await this.assetRepository.findOne({
-              where: {
-                vault_id: vaultId,
-                policy_id: whitelistItem.policy_id,
-              },
-            });
-
-            if (lpAsset) {
-              const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
-
-              lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
-            } else {
-              // Asset not in vault yet - skip silently (this is expected for whitelisted assets not yet deposited)
-              continue;
-            }
-          } else {
-            // TapTools LP token: use onchainID directly
-            lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
-          }
-
-          if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
-            customPrices.set(whitelistItem.policy_id, lpPrice);
-          } else {
-            this.logger.debug(
-              `Failed to calculate LP price for ${whitelistItem.policy_id} - asset may not be deposited yet`
-            );
-          }
-        }
-      }
+      const built = await this.buildCustomPricesFromWhitelist(vault.assets_whitelist, policyId =>
+        this.assetRepository.findOne({ where: { vault_id: vaultId, policy_id: policyId } })
+      );
+      built.forEach((price, policyId) => customPrices.set(policyId, price));
 
       return { customPrices, chainlinkFeeds };
     } catch (error: any) {
       this.logger.error(`Failed to load custom prices for vault ${vaultId}:`, error.message);
       return { customPrices, chainlinkFeeds };
     }
+  }
+
+  /**
+   * Batch variant of getVaultCustomPrices (custom prices only, no Chainlink feeds) for cron paths.
+   * Uses 2 queries total instead of 1+ per vault, processes vaults sequentially so the cron
+   * never floods the DB connection pool, and dedupes identical LP price lookups across vaults.
+   * Returns only vaults that have at least one custom price.
+   */
+  private async getCustomPricesForVaults(vaultIds: string[]): Promise<Map<string, CustomPriceMap>> {
+    const result = new Map<string, CustomPriceMap>();
+    if (vaultIds.length === 0) return result;
+
+    try {
+      const vaults = await this.vaultRepository.find({
+        where: { id: In(vaultIds) },
+        relations: ['assets_whitelist'],
+      });
+
+      // Prefetch LP assets needed for VyFi pricing in one query (previously one findOne per item)
+      const vyfiItems = vaults.flatMap(v =>
+        (v.assets_whitelist ?? [])
+          .filter(
+            w =>
+              w.valuation_method === AssetValuationMethod.LP_TOKEN_DYNAMIC &&
+              w.lp_pool_onchain_id &&
+              w.lp_pool_onchain_id.includes(':')
+          )
+          .map(w => ({ vaultId: v.id, policyId: w.policy_id }))
+      );
+      const lpAssetByKey = new Map<string, Asset>();
+      if (vyfiItems.length > 0) {
+        const lpAssets = await this.assetRepository.find({
+          where: {
+            vault_id: In([...new Set(vyfiItems.map(i => i.vaultId))]),
+            policy_id: In([...new Set(vyfiItems.map(i => i.policyId))]),
+          },
+          select: ['id', 'vault_id', 'policy_id', 'asset_id'],
+        });
+        for (const asset of lpAssets) {
+          const key = `${asset.vault_id}:${asset.policy_id}`;
+          if (!lpAssetByKey.has(key)) lpAssetByKey.set(key, asset);
+        }
+      }
+
+      const lpPriceMemo = new Map<string, Promise<number | null>>();
+      for (const vault of vaults) {
+        if (!vault.assets_whitelist?.length) continue;
+        try {
+          const prices = await this.buildCustomPricesFromWhitelist(
+            vault.assets_whitelist,
+            async policyId => lpAssetByKey.get(`${vault.id}:${policyId}`) ?? null,
+            lpPriceMemo
+          );
+          if (prices.size > 0) result.set(vault.id, prices);
+        } catch (error: any) {
+          this.logger.error(`Failed to load custom prices for vault ${vault.id}:`, error.message);
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Failed to batch-load custom prices for ${vaultIds.length} vaults:`, error.message);
+    }
+
+    return result;
+  }
+
+  /**
+   * Shared pricing logic for whitelist items with valuation_method CUSTOM / LP_TOKEN_DYNAMIC.
+   * `findLpAsset` resolves the vault's LP asset for VyFi pools; `lpPriceMemo` (optional) dedupes
+   * external LP price calls within one batch run.
+   */
+  private async buildCustomPricesFromWhitelist(
+    whitelist: Vault['assets_whitelist'],
+    findLpAsset: (policyId: string) => Promise<Pick<Asset, 'policy_id' | 'asset_id'> | null>,
+    lpPriceMemo?: Map<string, Promise<number | null>>
+  ): Promise<CustomPriceMap> {
+    const customPrices: CustomPriceMap = new Map();
+    const memoized = (key: string, fn: () => Promise<number | null>): Promise<number | null> => {
+      if (!lpPriceMemo) return fn();
+      if (!lpPriceMemo.has(key)) lpPriceMemo.set(key, fn());
+      return lpPriceMemo.get(key);
+    };
+
+    for (const whitelistItem of whitelist) {
+      // Handle static custom pricing
+      if (whitelistItem.valuation_method === AssetValuationMethod.CUSTOM && whitelistItem.custom_price_ada) {
+        customPrices.set(whitelistItem.policy_id, Number(whitelistItem.custom_price_ada));
+      }
+
+      // Handle dynamic LP token pricing
+      if (
+        whitelistItem.valuation_method === AssetValuationMethod.LP_TOKEN_DYNAMIC &&
+        whitelistItem.lp_pool_onchain_id
+      ) {
+        let lpPrice: number | null = null;
+        const onchainId = whitelistItem.lp_pool_onchain_id;
+
+        // Check if this is a VyFi pool (format: tokenA:tokenB)
+        if (onchainId.includes(':')) {
+          // VyFi LP token: parse tokenA and tokenB from colon-separated format
+          const [tokenAUnit, tokenBUnit] = onchainId.split(':');
+
+          // Get the full LP token unit from assets table
+          const lpAsset = await findLpAsset(whitelistItem.policy_id);
+
+          if (lpAsset) {
+            const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
+
+            lpPrice = await memoized(`vyfi:${onchainId}:${lpTokenUnit}`, () =>
+              this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit)
+            );
+          } else {
+            // Asset not in vault yet - skip silently (this is expected for whitelisted assets not yet deposited)
+            continue;
+          }
+        } else {
+          // TapTools LP token: use onchainID directly
+          lpPrice = await memoized(`tt:${onchainId}`, () => this.calculateLpTokenPrice(onchainId));
+        }
+
+        if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
+          customPrices.set(whitelistItem.policy_id, lpPrice);
+        } else {
+          this.logger.debug(
+            `Failed to calculate LP price for ${whitelistItem.policy_id} - asset may not be deposited yet`
+          );
+        }
+      }
+    }
+
+    return customPrices;
   }
 
   // ---------------------------------------------------------------------------

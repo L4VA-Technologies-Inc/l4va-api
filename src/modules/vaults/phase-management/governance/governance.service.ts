@@ -2476,6 +2476,12 @@ export class GovernanceService {
       }
     }
 
+    // Vote tallies + snapshot voting power for the whole page in 2 aggregate queries
+    // (previously 3 queries per proposal, each pulling the full snapshot JSON into Node).
+    const voteSummary = await this.getProposalListVoteSummary(
+      proposals.filter(p => p.status !== ProposalStatus.UPCOMING)
+    );
+
     // Process each proposal to add vote information
     const items = await Promise.all(
       proposals.map(async proposal => {
@@ -2499,22 +2505,37 @@ export class GovernanceService {
           return baseProposal;
         }
 
-        try {
-          const { votes: voteList, totals } = await this.getVotes(proposal.id);
-          const voteResult = this.voteCountingService.calculateResult(voteList, 0, 0, BigInt(totals.totalVotingPower));
-
-          return {
-            ...baseProposal,
-            votes: {
-              yes: voteResult.yesVotePercent,
-              no: voteResult.noVotePercent,
-              abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
-            },
-          };
-        } catch (error) {
-          this.logger.error(`Error fetching votes for proposal ${proposal.id}: ${error.message}`, error.stack);
+        const totalVotingPower = voteSummary?.totalPowerBySnapshot.get(proposal.snapshotId);
+        if (totalVotingPower === undefined) {
+          // Summary unavailable (query failed) or snapshot missing — same fallback as before
           return baseProposal;
         }
+
+        const tally = voteSummary.talliesByProposal.get(proposal.id);
+        const now = new Date();
+        const syntheticVotes = (
+          [
+            [VoteType.YES, tally?.yes ?? 0n],
+            [VoteType.NO, tally?.no ?? 0n],
+            [VoteType.ABSTAIN, tally?.abstain ?? 0n],
+          ] as const
+        ).map(([vote, weight]) => ({
+          id: vote,
+          voterAddress: '',
+          voteWeight: weight.toString(),
+          vote,
+          timestamp: now,
+        }));
+        const voteResult = this.voteCountingService.calculateResult(syntheticVotes, 0, 0, totalVotingPower);
+
+        return {
+          ...baseProposal,
+          votes: {
+            yes: voteResult.yesVotePercent,
+            no: voteResult.noVotePercent,
+            abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
+          },
+        };
       })
     );
 
@@ -2525,6 +2546,62 @@ export class GovernanceService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * Aggregated vote data for the proposals list. Sums are computed in Postgres so the
+   * (potentially large) snapshot balance JSON never leaves the DB. Total voting power matches
+   * voting-power.util `totalVotingPower`: sum of addressBalances + lpBalances values.
+   * Returns null if the queries fail, so the caller degrades to proposals without vote %.
+   */
+  private async getProposalListVoteSummary(proposals: Proposal[]): Promise<{
+    talliesByProposal: Map<string, { yes: bigint; no: bigint; abstain: bigint }>;
+    totalPowerBySnapshot: Map<string, bigint>;
+  } | null> {
+    const talliesByProposal = new Map<string, { yes: bigint; no: bigint; abstain: bigint }>();
+    const totalPowerBySnapshot = new Map<string, bigint>();
+    if (proposals.length === 0) return { talliesByProposal, totalPowerBySnapshot };
+
+    try {
+      const sumJsonObject = (column: string): string =>
+        `COALESCE(CASE WHEN jsonb_typeof(${column}) = 'object' ` +
+        `THEN (SELECT SUM(value::numeric) FROM jsonb_each_text(${column})) END, 0)`;
+
+      const [voteRows, snapshotRows] = await Promise.all([
+        this.voteRepository
+          .createQueryBuilder('vote')
+          .select('vote.proposalId', 'proposalId')
+          .addSelect('vote.vote', 'vote')
+          .addSelect('SUM(CAST(vote.vote_weight AS numeric))::text', 'weight')
+          .where('vote.proposalId IN (:...ids)', { ids: proposals.map(p => p.id) })
+          .groupBy('vote.proposalId')
+          .addGroupBy('vote.vote')
+          .getRawMany<{ proposalId: string; vote: VoteType; weight: string }>(),
+        this.snapshotRepository
+          .createQueryBuilder('s')
+          .select('s.id', 'id')
+          .addSelect(`(${sumJsonObject('s.address_balances')} + ${sumJsonObject('s.lp_balances')})::text`, 'total')
+          .where('s.id IN (:...ids)', { ids: [...new Set(proposals.map(p => p.snapshotId))] })
+          .getRawMany<{ id: string; total: string }>(),
+      ]);
+
+      for (const row of voteRows) {
+        const tally = talliesByProposal.get(row.proposalId) ?? { yes: 0n, no: 0n, abstain: 0n };
+        const weight = BigInt(row.weight ?? '0');
+        if (row.vote === VoteType.YES) tally.yes += weight;
+        else if (row.vote === VoteType.NO) tally.no += weight;
+        else if (row.vote === VoteType.ABSTAIN) tally.abstain += weight;
+        talliesByProposal.set(row.proposalId, tally);
+      }
+      for (const row of snapshotRows) {
+        totalPowerBySnapshot.set(row.id, BigInt(row.total ?? '0'));
+      }
+
+      return { talliesByProposal, totalPowerBySnapshot };
+    } catch (error) {
+      this.logger.error(`Error fetching vote summary for proposals list: ${error.message}`, error.stack);
+      return null;
+    }
   }
 
   async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
