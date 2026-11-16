@@ -10,6 +10,15 @@ import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { EvmLpVotingService } from './evm-lp-voting.service';
 
+import {
+  fetchJsonWithRetry,
+  HttpStatusError,
+  isBaseDown,
+  isBlockedHttpError,
+  markBaseDown,
+  resolveBlockscoutBases,
+  withBlockscoutKey,
+} from '@/common/http/http-retry';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -565,12 +574,24 @@ export class EvmSnapshotService {
     const errors: string[] = [];
 
     for (const baseUrl of baseUrls) {
+      // A base that hard-blocked us (403 Cloudflare) recently is skipped silently until its cooldown ends.
+      if (isBaseDown(baseUrl)) {
+        errors.push(`${baseUrl}: on cooldown`);
+        continue;
+      }
       try {
         return await this.fetchHolderBalancesFromApiBase(baseUrl, token, vaultId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`${baseUrl}: ${message}`);
-        this.logger.warn(`[EVM Snapshot] Vault ${vaultId}: holders API base failed (${baseUrl}) -> ${message}`);
+        if (isBlockedHttpError(error)) {
+          markBaseDown(baseUrl);
+          this.logger.warn(
+            `[EVM Snapshot] Vault ${vaultId}: holders API base blocked (${baseUrl}) -> ${message}; skipping it for 15 min`
+          );
+        } else {
+          this.logger.warn(`[EVM Snapshot] Vault ${vaultId}: holders API base failed (${baseUrl}) -> ${message}`);
+        }
       }
     }
 
@@ -578,25 +599,7 @@ export class EvmSnapshotService {
   }
 
   private resolveHoldersApiBaseUrls(): string[] {
-    const explicit = this.configService.get<string>('ROBINHOOD_HOLDERS_API_BASE_URL')?.trim();
-    if (explicit) {
-      return [explicit.replace(/\/$/, '')];
-    }
-
-    const testnetBase = 'https://explorer.testnet.chain.robinhood.com/api/v2';
-    const mainnetBase = 'https://robinhoodchain.blockscout.com/api/v2';
-    const rpcUrl = this.configService.get<string>('ROBINHOOD_RPC_URL', '').toLowerCase();
-
-    if (rpcUrl.includes('testnet')) {
-      return [testnetBase, mainnetBase];
-    }
-
-    // The Blockscout PRO API key only works on api.blockscout.com/<chainId>; the explorer
-    // domain sits behind a Cloudflare challenge that rejects server requests (403).
-    const proBase = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim()
-      ? ['https://api.blockscout.com/4663/api/v2']
-      : [];
-    return [...proBase, mainnetBase, testnetBase];
+    return resolveBlockscoutBases(this.configService);
   }
 
   private async fetchHolderBalancesFromApiBase(
@@ -645,21 +648,20 @@ export class EvmSnapshotService {
         }
 
         // Only api.blockscout.com accepts the PRO key; the explorer domain answers 403 regardless.
-        const blockscoutApiKey = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim();
-        if (blockscoutApiKey && url.hostname === 'api.blockscout.com') url.searchParams.set('apikey', blockscoutApiKey);
+        withBlockscoutKey(url, this.configService);
 
-        const response = await fetch(url.toString(), {
-          method: 'GET',
-          headers: { accept: 'application/json' },
-        });
-
-        if (!response.ok) {
-          const bodyText = await response.text();
-          variantError = `holders API HTTP ${response.status}${bodyText ? ` body=${bodyText.slice(0, 240)}` : ''}`;
-          continue;
+        try {
+          data = await fetchJsonWithRetry(url.toString(), { retries: 2 });
+        } catch (err) {
+          // A hard block applies to every variant — surface it so the caller can cool the base down.
+          if (isBlockedHttpError(err)) throw err;
+          // 400/404/422 → try the next query variant; transient errors were already retried.
+          if (err instanceof HttpStatusError && err.status >= 400 && err.status < 500) {
+            variantError = err.message;
+            continue;
+          }
+          throw err;
         }
-
-        data = await response.json();
         if (pageCount === 1) {
           firstPageVariant = variant;
           this.logger.debug(
