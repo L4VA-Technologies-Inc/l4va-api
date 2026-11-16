@@ -24,6 +24,7 @@ import { EvmKmsSigners } from './evm-kms-signers.service';
 import { EvmLiquidityController } from './evm-liquidity.controller';
 import { EvmLiquidityService } from './evm-liquidity.service';
 import { EvmLockTimePricingService } from './evm-lock-time-pricing.service';
+import { EvmLpExitService } from './evm-lp-exit.service';
 import { EvmMarketStatsService } from './evm-market-stats.service';
 import { EvmOpenCycleService } from './evm-open-cycle.service';
 import { EvmPauseService } from './evm-pause.service';
@@ -129,6 +130,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmPositionService,
     EvmSwapService,
     EvmTerminationPreflightService,
+    EvmLpExitService,
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,
@@ -161,6 +163,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmPositionService,
     EvmSwapService,
     EvmTerminationPreflightService,
+    EvmLpExitService,
     EvmTerminationService,
     EvmAdapterRegistryService,
     EvmPauseService,

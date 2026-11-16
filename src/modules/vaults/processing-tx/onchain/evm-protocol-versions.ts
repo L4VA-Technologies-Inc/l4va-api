@@ -26,6 +26,12 @@ export interface EvmProtocolVersion {
    */
   swapAdapterMultiPath?: boolean;
   lpAdapter: Address | null;
+  /**
+   * `LiquidityExitAdapter` approved (tag "swap") in this version's registry. It returns withdrawn
+   * v4 LP proceeds into the vault's custody through `Vault.swap`, so holders redeem them. One
+   * deployment serves every version; it must be approved in each registry. Unset until deployed.
+   */
+  lpExitAdapter?: Address | null;
   feeConverter: Address;
   feeController: Address;
 }
@@ -41,6 +47,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       batchDeployer: '0x55B3410aC168fEd2dB5C86BEE811255DF6e3700f',
       swapAdapter: '0xbA4fcCF341b91aEE7180A5Db242025141686EF76',
       lpAdapter: '0xdb4eF23bd896A247a1ac5bC70164855a273F21cb',
+      // LiquidityExitAdapter, deployed 2026-11-16 (tx 0x7b6c…409f), approved in the V8/V9/V10 registries.
+      lpExitAdapter: '0xa70A0A82C52e5a9ff519736fbbba553F81429E9e',
       feeConverter: '0x5C0cAd7eD8207a6F7318d84978DE8DD5c275e8b7',
       feeController: '0xd1b1A08FFa9dd57064990C700807c505a89a2fDD',
     },
@@ -53,6 +61,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       batchDeployer: '0xe4A0e9aa60D3212f8e5Fef08bC8B4F6a42D27003',
       swapAdapter: '0x443FD443f2b5caab405170C984E9D7529a8bD0D0',
       lpAdapter: '0x757bdb2b9f65A16a2FC41C4dA5aebd58FE652212',
+      // LiquidityExitAdapter, deployed 2026-11-16 (tx 0x7b6c…409f), approved in the V8/V9/V10 registries.
+      lpExitAdapter: '0xa70A0A82C52e5a9ff519736fbbba553F81429E9e',
       feeConverter: '0x61749c3d45d43EB5Fa057c570cDa459D2bd748AC',
       feeController: '0x42DE0Fc4dA5e6Fc9Bb217538060200039F436604',
     },
@@ -72,6 +82,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       swapAdapter: '0x558C2F0060f5888daD42c79C87b99008ef45C7bB',
       swapAdapterMultiPath: true,
       lpAdapter: '0x5B9b4279E31949DD367f4733db791A69aA1335E4',
+      // LiquidityExitAdapter, deployed 2026-11-16 (tx 0x7b6c…409f), approved in the V8/V9/V10 registries.
+      lpExitAdapter: '0xa70A0A82C52e5a9ff519736fbbba553F81429E9e',
       feeConverter: '0x29041c5BC568D0cD8b039267bD9B3427FFDbfD37',
       feeController: '0xBD7f80a08391200263449c61f411c05Ae5a7a562',
     },
@@ -160,6 +172,11 @@ export function vaultSwapAdapterIsMultiPath(vault: VaultVersionRef, fallbackMult
 /** The LP adapter of a vault's version. Same fallback rule as the swap adapter. */
 export function resolveVaultLpAdapter(vault: VaultVersionRef, fallback: Address | null): Address | null {
   return versionOf(vault)?.lpAdapter ?? fallback;
+}
+
+/** The LP exit adapter of a vault's version, else `fallback` (env `EVM_LP_EXIT_ADAPTER_ADDRESS`). */
+export function resolveVaultLpExitAdapter(vault: VaultVersionRef, fallback: Address | null): Address | null {
+  return versionOf(vault)?.lpExitAdapter ?? fallback;
 }
 
 /** Lower bound for a vault's log scans: its factory's deploy block, else `fallback`. */
