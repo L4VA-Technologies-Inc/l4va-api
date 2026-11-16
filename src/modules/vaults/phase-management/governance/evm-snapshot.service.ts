@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { erc20Abi, parseAbiItem, type Address } from 'viem';
@@ -51,6 +52,22 @@ export class EvmSnapshotService {
     private readonly configService: ConfigService,
     private readonly lpVoting: EvmLpVotingService
   ) {}
+
+  /**
+   * After VT is airdropped the holder set changes, so any earlier snapshot (e.g. one
+   * created on demand before the airdrop, with 0 holders) is stale. Take a fresh one
+   * right away instead of waiting for the daily sweep.
+   */
+  @OnEvent('evm.airdrop.confirmed', { async: true })
+  async handleAirdropConfirmed(payload: { vaultId: string }): Promise<void> {
+    try {
+      await this.createSnapshot(payload.vaultId);
+    } catch (err) {
+      this.logger.error(
+        `[EVM Snapshot] Post-airdrop snapshot failed for vault ${payload.vaultId}: ${(err as Error).message}`
+      );
+    }
+  }
 
   /**
    * Scan all ERC-20 Transfer events on the vault's VaultToken contract,

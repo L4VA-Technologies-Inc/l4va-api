@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { type Address, type Hex } from 'viem';
@@ -72,7 +73,8 @@ export class EvmAirdropOrchestrator {
     private readonly dataSource: DataSource,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
-    private readonly alerts: AlertsService
+    private readonly alerts: AlertsService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   // --------------------------------------------------------------------------
@@ -469,5 +471,9 @@ export class EvmAirdropOrchestrator {
     this.logger.log(
       `Airdrop batch confirmed: vault=${vaultAddress} count=${batch.length} tx=${result.hash} block=${result.receipt.blockNumber}`
     );
+
+    // VT just landed in holders' wallets — refresh the voting snapshot.
+    const vaultId = batch[0]?.vault_id;
+    if (vaultId) this.eventEmitter.emit('evm.airdrop.confirmed', { vaultId });
   }
 }
