@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios from 'axios';
 import { erc20Abi, type Address } from 'viem';
 
 import { EvmContractReader } from './evm-contract-reader.service';
 import { VAULT_ABI } from './vault.abi';
 
+import { fetchJsonWithRetry } from '@/common/http/http-retry';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 
 /**
@@ -132,8 +132,9 @@ export class EvmTerminationPreflightService {
     let pairs: Address[];
     try {
       const url = `https://api.dexscreener.com/tokens/v1/${this.dexScreenerChainId}/${vtAddress}`;
-      const response = await axios.get(url, { timeout: 10_000 });
-      const raw: any[] = Array.isArray(response.data) ? response.data : [];
+      // Transient failures (429/5xx/timeouts) are retried; a persistent failure still blocks below.
+      const data = await fetchJsonWithRetry<unknown>(url, { timeoutMs: 10_000, retries: 3 });
+      const raw: any[] = Array.isArray(data) ? data : [];
       const target = vtAddress.toLowerCase();
       pairs = raw
         .filter(p => p.baseToken?.address?.toLowerCase() === target || p.quoteToken?.address?.toLowerCase() === target)
