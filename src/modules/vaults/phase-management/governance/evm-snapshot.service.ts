@@ -561,24 +561,29 @@ export class EvmSnapshotService {
   }
 
   private resolveHoldersApiBaseUrls(): string[] {
-    const explicit = this.configService.get<string>('ROBINHOOD_HOLDERS_API_BASE_URL')?.trim();
-    if (explicit) {
-      return [explicit.replace(/\/$/, '')];
-    }
-
     const testnetBase = 'https://explorer.testnet.chain.robinhood.com/api/v2';
     const mainnetBase = 'https://robinhoodchain.blockscout.com/api/v2';
     const rpcUrl = this.configService.get<string>('ROBINHOOD_RPC_URL', '').toLowerCase();
-
-    if (rpcUrl.includes('testnet')) {
-      return [testnetBase, mainnetBase];
-    }
+    const isTestnet = rpcUrl.includes('testnet');
 
     // The Blockscout PRO API key only works on api.blockscout.com/<chainId>; the explorer
     // domain sits behind a Cloudflare challenge that rejects server requests (403).
-    const proBase = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim()
-      ? ['https://api.blockscout.com/4663/api/v2']
-      : [];
+    const proBase =
+      !isTestnet && this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim()
+        ? ['https://api.blockscout.com/4663/api/v2']
+        : [];
+
+    // An explicit base must not shadow the PRO base: pointing it at the explorer domain used to
+    // drop the PRO API entirely and push every snapshot into a full transfer replay.
+    const explicit = this.configService.get<string>('ROBINHOOD_HOLDERS_API_BASE_URL')?.trim();
+    if (explicit) {
+      return [...new Set([...proBase, explicit.replace(/\/$/, '')])];
+    }
+
+    if (isTestnet) {
+      return [testnetBase, mainnetBase];
+    }
+
     return [...proBase, mainnetBase, testnetBase];
   }
 
