@@ -202,6 +202,13 @@ export class EvmGovernanceFeeService {
       throw new BadRequestException(`Fee transaction ${hash} is on chain ${chainId}, expected ${this.chainId}`);
     }
 
+    // Atomic claim. `assertHashUnused` above is check-then-act and the RPC reads
+    // in between take seconds, so parallel requests with one hash could all pass
+    // it. The primary key on `evm_fee_payment_claims.tx_hash` lets exactly one
+    // through. Claimed only after every check passed, so a not-yet-visible or
+    // rejected payment can still be retried.
+    await this.claimHash(hash, actualFrom, value);
+
     this.logger.log(`Verified EVM governance fee ${hash}: ${value} wei from ${actualFrom} to ${actualTo}`);
 
     return {
@@ -253,6 +260,21 @@ export class EvmGovernanceFeeService {
 
     if (existing) {
       throw new BadRequestException(`Fee transaction ${hash} has already been used for another payment`);
+    }
+  }
+
+  /** Record `hash` as spent; a second claim of the same hash fails on the primary key. */
+  private async claimHash(hash: Hex, from: Address, value: bigint): Promise<void> {
+    try {
+      await this.transactionRepository.query(
+        `INSERT INTO "evm_fee_payment_claims" ("tx_hash", "from_address", "value_wei") VALUES ($1, $2, $3)`,
+        [hash, from.toLowerCase(), value.toString()]
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new BadRequestException(`Fee transaction ${hash} has already been used for another payment`);
+      }
+      throw error;
     }
   }
 }
