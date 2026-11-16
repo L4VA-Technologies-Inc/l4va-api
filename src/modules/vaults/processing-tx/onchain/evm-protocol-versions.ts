@@ -26,6 +26,12 @@ export interface EvmProtocolVersion {
    */
   swapAdapterMultiPath?: boolean;
   lpAdapter: Address | null;
+  /**
+   * `LiquidityExitAdapter` approved (tag "swap") in this version's registry. It returns withdrawn
+   * v4 LP proceeds into the vault's custody through `Vault.swap`, so holders redeem them. One
+   * deployment serves every version; it must be approved in each registry. Unset until deployed.
+   */
+  lpExitAdapter?: Address | null;
   feeConverter: Address;
   feeController: Address;
 }
@@ -160,6 +166,11 @@ export function vaultSwapAdapterIsMultiPath(vault: VaultVersionRef, fallbackMult
 /** The LP adapter of a vault's version. Same fallback rule as the swap adapter. */
 export function resolveVaultLpAdapter(vault: VaultVersionRef, fallback: Address | null): Address | null {
   return versionOf(vault)?.lpAdapter ?? fallback;
+}
+
+/** The LP exit adapter of a vault's version, else `fallback` (env `EVM_LP_EXIT_ADAPTER_ADDRESS`). */
+export function resolveVaultLpExitAdapter(vault: VaultVersionRef, fallback: Address | null): Address | null {
+  return versionOf(vault)?.lpExitAdapter ?? fallback;
 }
 
 /** Lower bound for a vault's log scans: its factory's deploy block, else `fallback`. */

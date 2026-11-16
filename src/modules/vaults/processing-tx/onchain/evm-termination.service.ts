@@ -5,6 +5,7 @@ import { keccak256, toBytes, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmLpExitService } from './evm-lp-exit.service';
 import { EvmTerminationPreflightService, type TerminationPreflightResult } from './evm-termination-preflight.service';
 import {
   computeTerminationRates,
@@ -25,7 +26,7 @@ import { ChainType, VaultStatus } from '@/types/vault.types';
 
 const NATIVE = '0x0000000000000000000000000000000000000000' as const;
 
-/** The slice of the Uniswap v4 LP adapter that the termination exit needs. */
+/** The slice of the Uniswap v4 LP adapter that termination reads. */
 const V4_LP_ADAPTER_ABI = [
   {
     type: 'function',
@@ -40,25 +41,6 @@ const V4_LP_ADAPTER_ABI = [
     stateMutability: 'view',
     inputs: [{ name: 'vault', type: 'address' }],
     outputs: [{ type: 'uint256' }],
-  },
-  {
-    type: 'function',
-    name: 'withdrawLiquidity',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'tokenId', type: 'uint256' },
-      { name: 'recipient', type: 'address' },
-    ],
-    outputs: [],
-  },
-  {
-    type: 'event',
-    name: 'LiquidityWithdrawn',
-    inputs: [
-      { name: 'vault', type: 'address', indexed: true },
-      { name: 'tokenId', type: 'uint256', indexed: true },
-      { name: 'recipient', type: 'address', indexed: false },
-    ],
   },
 ] as const;
 
@@ -98,6 +80,7 @@ export class EvmTerminationService {
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
     private readonly preflight: EvmTerminationPreflightService,
+    private readonly lpExit: EvmLpExitService,
     private readonly systemSettings: SystemSettingsService
   ) {}
 
@@ -133,9 +116,10 @@ export class EvmTerminationService {
       );
     }
 
-    // Protocol-owned v4 LP must leave the pool first, or the preflight blocks
-    // (redeemers would get a receipt whose VT leg dies with the vault).
-    await this.exitV4Liquidity(vaultAddress);
+    // Protocol-owned v4 LP must leave the pool first, or the preflight blocks. Its ETH goes back
+    // into the vault's custody and its VT to holders, so redeem pays the pool out to holders.
+    // Must run while the vault is still Locked: the pull-back goes through `Vault.swap`.
+    await this.exitV4Liquidity(vault);
 
     // Strict: this is the point of no return. `TerminationPreparing` has no
     // exit other than `beginTermination` — `openCycle` accepts only
@@ -182,57 +166,18 @@ export class EvmTerminationService {
   }
 
   /**
-   * Withdraw every v4 LP position the vault still has in a pool. The vault
-   * authority calls the adapter directly; proceeds go to the treasury because
-   * `Vault.receive` rejects ETH sent by the PoolManager. Assets that are not a
-   * v4 adapter (no `positionsOf`) are left to the preflight.
+   * Return every v4 LP position the vault still has in a pool to its holders: the pool's ETH
+   * re-enters the vault's custody (so `redeem` pays it out) and the pool's VT is handed to
+   * holders pro rata. See {@link EvmLpExitService}. Refuses, rather than routing the proceeds
+   * anywhere else, when no LiquidityExitAdapter is configured for the vault's version.
    */
-  private async exitV4Liquidity(vaultAddress: Address): Promise<void> {
-    const client = this.contractReader.publicClient;
-    const recipient = process.env.EVM_TREASURY_ADDRESS as Address | undefined;
-
-    for (const adapter of await this.lpPositionAssets(vaultAddress)) {
-      let tokenIds: readonly bigint[];
-      try {
-        tokenIds = (await client.readContract({
-          address: adapter,
-          abi: V4_LP_ADAPTER_ABI,
-          functionName: 'positionsOf',
-          args: [vaultAddress],
-        })) as readonly bigint[];
-      } catch {
-        continue; // not a v4 adapter
-      }
-      if (tokenIds.length === 0) continue;
-
-      const liquidity = (await client.readContract({
-        address: adapter,
-        abi: V4_LP_ADAPTER_ABI,
-        functionName: 'liquidityOf',
-        args: [vaultAddress],
-      })) as bigint;
-      if (liquidity === 0n) continue;
-
-      if (!recipient) {
-        throw new BadRequestException(
-          `Vault ${vaultAddress} has v4 LP in a pool; set EVM_TREASURY_ADDRESS to receive the withdrawn liquidity`
-        );
-      }
-
-      for (const tokenId of tokenIds) {
-        const result = await this.adminSigner.sendAndConfirm(
-          {
-            address: adapter,
-            abi: V4_LP_ADAPTER_ABI,
-            functionName: 'withdrawLiquidity',
-            args: [tokenId, recipient],
-          },
-          ['LiquidityWithdrawn']
-        );
-        this.logger.log(
-          `Termination LP exit: vault=${vaultAddress} adapter=${adapter} tokenId=${tokenId} → ${recipient} tx=${result.hash}`
-        );
-      }
+  private async exitV4Liquidity(vault: Vault): Promise<void> {
+    const r = await this.lpExit.exitIntoVault(vault);
+    if (r.withdrawnTokenIds.length || r.nativeReturned || r.vtReleased) {
+      this.logger.log(
+        `Termination LP exit: vault=${vault.contract_address} positions=${r.withdrawnTokenIds.join(',') || '-'} ` +
+          `native=${r.nativeReturned} as=${r.returnedAs ?? '-'} vt=${r.vtReleased} to ${r.vtRecipients} holders`
+      );
     }
   }
 
