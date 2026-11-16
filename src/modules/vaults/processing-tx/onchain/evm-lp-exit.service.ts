@@ -179,6 +179,13 @@ const VT_ABI = [
     inputs: [{ name: 'account', type: 'address' }],
     outputs: [{ type: 'bool' }],
   },
+  {
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
 ] as const;
 
 export interface LpExitResult {
@@ -257,6 +264,35 @@ export class EvmLpExitService {
       }
     }
     return [...adapters];
+  }
+
+  /**
+   * VT that can never be redeemed: what sits on the Uniswap v4 PoolManager of each of the
+   * vault's LP adapters, plus 0xdead. v4 seeding forfeits the part of a deposit that does not
+   * fit the position to the PoolManager (`clear`), so a vault that ever had LP keeps a little
+   * VT there forever, and `terminationOutstanding` never reaches 0.
+   */
+  async unredeemableVt(vaultAddress: Address, vt: Address): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    const holders = new Set<string>([DEAD.toLowerCase()]);
+    for (const adapter of await this.v4LpAdapters(vaultAddress)) {
+      const pm = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'poolManager',
+      })) as Address;
+      holders.add(pm.toLowerCase());
+    }
+    let total = 0n;
+    for (const holder of holders) {
+      total += (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [holder as Address],
+      })) as bigint;
+    }
+    return total;
   }
 
   /** Liquidity the vault still has in v4 pools, summed over its adapters. */
