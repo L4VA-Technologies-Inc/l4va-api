@@ -10,7 +10,7 @@ import { createPublicClient, defineChain, formatUnits, parseAbi, type Address } 
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
-import { VyfiService } from '../vyfi/vyfi.service';
+import { VyfiApiUnavailableError, VyfiService } from '../vyfi/vyfi.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
@@ -2191,6 +2191,11 @@ export class TaptoolsService {
 
       return lpTokenPrice;
     } catch (error: any) {
+      if (error instanceof VyfiApiUnavailableError) {
+        // Already logged once by VyfiService; the caller falls back to the cached DB price.
+        this.logger.debug(`Skipping VyFi LP price for ${lpTokenUnit}: ${error.message}`);
+        return null;
+      }
       this.logger.error(`Failed to calculate LP price from VyFi: ${error.message}`, error);
       return null;
     }
@@ -2451,9 +2456,7 @@ export class TaptoolsService {
         if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
           customPrices.set(whitelistItem.policy_id, lpPrice);
         } else {
-          this.logger.debug(
-            `Failed to calculate LP price for ${whitelistItem.policy_id} - asset may not be deposited yet`
-          );
+          this.logger.debug(`LP price unavailable for ${whitelistItem.policy_id}; using cached DB price if present`);
         }
       }
     }

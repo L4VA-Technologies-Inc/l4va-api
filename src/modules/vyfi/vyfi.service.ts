@@ -20,7 +20,30 @@ import { Vault } from '@/database/vault.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
-// VyFi API Response Types
+/**
+ * Thrown when the VyFi API itself is unreachable or returns a gateway error (502/503/504/429,
+ * network error, timeout). Distinct from "pool does not exist" so callers never confuse an
+ * outage with a missing pool.
+ */
+export class VyfiApiUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VyfiApiUnavailableError';
+  }
+}
+
+const VYFI_TRANSIENT_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+const VYFI_TRANSIENT_NETWORK_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN']);
+const VYFI_RETRY_DELAY_MS = 1_000;
+/** After a confirmed outage, skip VyFi calls for this long so one pricing pass does not hammer a dead API. */
+const VYFI_OUTAGE_COOLDOWN_MS = 2 * 60 * 1_000;
+
+function isTransientVyfiError(error: any): boolean {
+  const status = error?.response?.status;
+  if (status !== undefined) return VYFI_TRANSIENT_HTTP_STATUSES.has(status);
+  return VYFI_TRANSIENT_NETWORK_CODES.has(error?.code);
+}
+
 /**
  * Pool configuration stored as stringified JSON in VyFiPoolData.json field
  * Parse with: JSON.parse(poolData.json) as VyFiPoolConfig
@@ -85,6 +108,7 @@ const VYFI_CONSTANTS = {
 @Injectable()
 export class VyfiService {
   private readonly logger = new Logger(VyfiService.name);
+  private vyfiUnavailableUntil = 0;
   private readonly vyfiApiUrl = 'https://api-v3.vyfi.io';
   private readonly adminSKey: string;
   private readonly adminAddress: string;
@@ -141,20 +165,41 @@ export class VyfiService {
       v2: 'true',
     });
 
-    try {
-      const response = await firstValueFrom(this.httpService.get(`${url}?${queryParams.toString()}`));
-      return {
-        exists: true,
-        data: response.data,
-      };
-    } catch (error) {
-      if (error.response?.status === 500 || error.response?.status === 404) {
+    if (Date.now() < this.vyfiUnavailableUntil) {
+      throw new VyfiApiUnavailableError('VyFi API unavailable (recent outage, cooling down)');
+    }
+
+    const requestUrl = `${url}?${queryParams.toString()}`;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const response = await firstValueFrom(this.httpService.get(requestUrl));
         return {
-          exists: false,
-          error: 'Pool does not exist',
+          exists: true,
+          data: response.data,
         };
+      } catch (error) {
+        if (error.response?.status === 500 || error.response?.status === 404) {
+          return {
+            exists: false,
+            error: 'Pool does not exist',
+          };
+        }
+        if (!isTransientVyfiError(error)) {
+          throw new Error(`Failed to check VyFi pool: ${error.message}`);
+        }
+        if (attempt === 1) {
+          await new Promise(resolve => setTimeout(resolve, VYFI_RETRY_DELAY_MS));
+          continue;
+        }
+        // Concurrent callers may all hit this; only the first one logs.
+        if (Date.now() >= this.vyfiUnavailableUntil) {
+          this.logger.warn(
+            `VyFi API unavailable (${error.message}); pausing VyFi lookups for ${VYFI_OUTAGE_COOLDOWN_MS / 1000}s`
+          );
+        }
+        this.vyfiUnavailableUntil = Date.now() + VYFI_OUTAGE_COOLDOWN_MS;
+        throw new VyfiApiUnavailableError(`VyFi API unavailable: ${error.message}`);
       }
-      throw new Error(`Failed to check VyFi pool: ${error.message}`);
     }
   }
 
@@ -232,6 +277,7 @@ export class VyfiService {
 
       return poolData || null;
     } catch (error) {
+      if (error instanceof VyfiApiUnavailableError) throw error;
       this.logger.error(`Failed to get VyFi pool data: ${error.message}`);
       return null;
     }
