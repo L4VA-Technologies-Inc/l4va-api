@@ -837,6 +837,11 @@ export class TapToolsClient {
     return null;
   }
 
+  /** Recent completed ADA swaps for a Cardano token (DexHunter, mainnet only). */
+  async getTokenTrades(tokenUnit: string, limit = 40) {
+    return this.dexHunterPricingClient.getTokenTrades(tokenUnit, limit);
+  }
+
   /**
    * Fetch token total supply and decimals from Blockfrost.
    * Cached 60 min — supply is immutable for most Cardano tokens.
