@@ -763,6 +763,9 @@ export class TokensService {
    * `id` = vault id or token address.
    */
   private async getVaultTrades(id: string, limit: number) {
+    const cardanoUnit = await this.findCardanoVaultTokenUnit(id);
+    if (cardanoUnit) return this.getCardanoVaultTrades(id, cardanoUnit, limit);
+
     const evmToken = await this.findEvmVaultTokenAddress(id);
     if (!evmToken) return { id, trades: [] as Array<Record<string, unknown>> };
     const pairAddress = await this.findEvmPairAddress(evmToken);
@@ -958,6 +961,42 @@ export class TokensService {
     return { ...row, token_address: tokenAddress };
   }
 
+  /** Policy id + asset name of a Cardano vault's VT, only for mainnet vaults with a live LP. */
+  private async findCardanoVaultTokenUnit(id: string): Promise<string | null> {
+    if (this.configService.get<string>('CARDANO_NETWORK') !== 'mainnet') return null;
+    try {
+      const row = await this.marketService.getVaultTokenById(id);
+      if (row.chain_type !== 'cardano' || !row.has_active_lp) return null;
+      const unit = this.buildVaultCopyValue(row);
+      return /^[a-f0-9]{56,}$/i.test(unit) ? unit : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Cardano VT swaps across DEXes from DexHunter; prices converted to USD at the current ADA rate. */
+  private async getCardanoVaultTrades(id: string, unit: string, limit: number) {
+    try {
+      const [trades, { adaUsd }] = await Promise.all([
+        this.tapToolsClient.getTokenTrades(unit, limit),
+        this.getFxRates(),
+      ]);
+      return {
+        id,
+        pair_address: null,
+        trades: trades.map(trade => ({
+          ...trade,
+          price_usd: trade.price_ada * adaUsd,
+          volume_usd: trade.amount_ada * adaUsd,
+          tx_url: trade.tx_hash ? `https://cardanoscan.io/transaction/${trade.tx_hash}` : null,
+        })),
+      };
+    } catch (error) {
+      this.logger.error(`DexHunter trades failed for vault token ${unit}: ${error.message}`);
+      return { id, trades: [] as Array<Record<string, unknown>> };
+    }
+  }
+
   private async findEvmVaultTokenAddress(id: string): Promise<string | null> {
     try {
       return (await this.loadVaultTokenRow(id)).token_address;
@@ -1083,7 +1122,12 @@ export class TokensService {
       contract_address: row.contract_address ?? null,
       copy_value: copyValue,
       explorer_url: isEvmToken ? this.buildExplorerUrl('robinhood', copyValue) : null,
-      has_live_trades: isEvmToken,
+      // Cardano trades come from DexHunter, which only has mainnet data; testnet keeps the placeholder.
+      has_live_trades:
+        isEvmToken ||
+        (row.chain_type === 'cardano' &&
+          Boolean(row.has_active_lp) &&
+          this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'),
       chart_kind: isEvmToken ? 'usd' : 'nav',
       overview_fields: isEvmToken ? ['fdv', 'liquidity', 'mcap', 'holders'] : ['fdv', 'liquidity', 'mcap'],
       swap,
