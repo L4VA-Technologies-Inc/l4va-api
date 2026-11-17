@@ -8,6 +8,9 @@ import {
   type Hex,
   type Log,
   type TransactionReceipt,
+  BaseError,
+  ContractFunctionRevertedError,
+  toFunctionSelector,
 } from 'viem';
 
 import { EvmContractReader } from './evm-contract-reader.service';
@@ -37,6 +40,32 @@ export class TxRevertedError extends Error {
     super(`Transaction ${hash} reverted on-chain (status=${receipt.status})`);
     this.name = 'TxRevertedError';
   }
+}
+
+/**
+ * The vault's factory guardian froze it (V11+), so the vault rejects every
+ * authority call. Thrown from simulation — nothing was broadcast and no gas
+ * was spent. Not a failure of the operation itself: callers should leave their
+ * work retryable and pick it up once the guardian unfreezes the vault.
+ */
+export class VaultFrozenError extends Error {
+  constructor(
+    public readonly address: Address,
+    public readonly functionName: string
+  ) {
+    super(`Vault ${address} is frozen by the protocol guardian; ${functionName} was not sent`);
+    this.name = 'VaultFrozenError';
+  }
+}
+
+const VAULT_FROZEN_SELECTOR = toFunctionSelector('VaultFrozen()');
+
+/** True when a viem error is the vault's `VaultFrozen()` revert, decoded by name or by selector. */
+export function isVaultFrozenRevert(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  const reverted = err.walk(e => e instanceof ContractFunctionRevertedError);
+  if (!(reverted instanceof ContractFunctionRevertedError)) return false;
+  return reverted.data?.errorName === 'VaultFrozen' || reverted.signature === VAULT_FROZEN_SELECTOR;
 }
 
 export interface AdminTxResult {
@@ -127,6 +156,10 @@ export class EvmAdminSigner {
         value,
       });
     } catch (err) {
+      if (isVaultFrozenRevert(err)) {
+        this.logger.warn(`simulateContract(${functionName}) skipped: vault ${address} is frozen by the guardian`);
+        throw new VaultFrozenError(address, functionName);
+      }
       const message = (err as Error).message || String(err);
       this.logger.error(`simulateContract(${functionName}) reverted: ${message}`);
       throw err;

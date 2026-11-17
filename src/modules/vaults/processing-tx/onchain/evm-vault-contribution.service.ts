@@ -12,6 +12,7 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmContributionCapsService } from './evm-contribution-caps.service';
 import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmKmsSigners } from './evm-kms-signers.service';
+import { readVaultFrozen } from './evm-pause.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { VAULT_ABI } from './vault.abi';
 
@@ -213,6 +214,11 @@ export class EvmVaultContributionService {
       functionName: 'paused',
     })) as boolean;
     if (isPaused) throw new BadRequestException('Vault is paused — contributions are temporarily suspended');
+    if (await readVaultFrozen(this.contractReader.publicClient, vault.contract_address as Address)) {
+      throw new BadRequestException(
+        'This vault is temporarily frozen by the protocol guardian — contributions are suspended'
+      );
+    }
 
     // An acquire-expansion cycle ends on its governance duration, but the on-chain acquire
     // window stays open far longer. ETH sent after the DB snapshot would sit in no Merkle leaf
