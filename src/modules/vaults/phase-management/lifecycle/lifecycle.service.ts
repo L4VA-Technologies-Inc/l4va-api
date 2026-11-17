@@ -38,6 +38,7 @@ import {
   EvmLockTimePricingService,
   MissingPriceError,
 } from '@/modules/vaults/processing-tx/onchain/evm-lock-time-pricing.service';
+import { EvmLpExitService } from '@/modules/vaults/processing-tx/onchain/evm-lp-exit.service';
 import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
 import { EvmTerminationService } from '@/modules/vaults/processing-tx/onchain/evm-termination.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
@@ -106,7 +107,8 @@ export class LifecycleService {
     private readonly evmLockTimePricingService: EvmLockTimePricingService,
     private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
     private readonly evmTerminationService: EvmTerminationService,
-    private readonly indexVaultService: IndexVaultService
+    private readonly indexVaultService: IndexVaultService,
+    private readonly evmLpExitService: EvmLpExitService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -3578,9 +3580,26 @@ export class LifecycleService {
             continue;
           }
 
-          if (outstanding === 0n) {
+          // VT stuck on a v4 PoolManager (forfeited at LP seeding) or 0xdead can never be
+          // redeemed, so it must not hold the vault open. Finalizing is a status flip only:
+          // redemption stays open until the deadline either way.
+          let redeemable = outstanding;
+          if (outstanding > 0n) {
+            const vt = (await this.evmContractReader.publicClient.readContract({
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'vaultToken',
+            })) as `0x${string}`;
+            const stuck = await this.evmLpExitService.unredeemableVt(vaultAddress, vt);
+            redeemable = outstanding > stuck ? outstanding - stuck : 0n;
+          }
+
+          if (redeemable === 0n) {
             await this.evmTerminationService.finalizeTermination(vault.id);
-            this.logger.log(`EVM finalizeTermination submitted for vault ${vault.id}`);
+            this.logger.log(
+              `EVM finalizeTermination submitted for vault ${vault.id}` +
+                (outstanding > 0n ? ` (${outstanding} VT left is unredeemable: PoolManager/0xdead)` : '')
+            );
           }
 
           await this.handleEvmTerminationSweep(vault.id, vaultAddress);

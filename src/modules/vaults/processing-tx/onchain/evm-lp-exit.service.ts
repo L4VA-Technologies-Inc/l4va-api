@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios from 'axios';
-import { keccak256, toBytes, type Address, type Hex } from 'viem';
+import { DataSource } from 'typeorm';
+import { keccak256, parseAbiItem, toBytes, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
@@ -10,12 +10,24 @@ import { resolveVaultLpExitAdapter } from './evm-protocol-versions';
 import { EvmSwapService } from './evm-swap.service';
 import { VAULT_ABI } from './vault.abi';
 
+import {
+  fetchJsonWithRetry,
+  isBaseDown,
+  isBlockedHttpError,
+  markBaseDown,
+  resolveBlockscoutBases,
+  withBlockscoutKey,
+} from '@/common/http/http-retry';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 const NATIVE = '0x0000000000000000000000000000000000000000' as const;
 const DEAD = '0x000000000000000000000000000000000000dead' as const;
 /** Recipients per `releaseToken` transaction. */
 const RELEASE_CHUNK = 100;
+const LOG_CHUNK_BLOCKS = 10_000n;
+const TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
 
 /** The slice of `UniswapV4LiquidityAdapter` the exit reads and calls. */
 const V4_LP_ADAPTER_ABI = [
@@ -167,6 +179,13 @@ const VT_ABI = [
     inputs: [{ name: 'account', type: 'address' }],
     outputs: [{ type: 'bool' }],
   },
+  {
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
 ] as const;
 
 export interface LpExitResult {
@@ -206,7 +225,8 @@ export class EvmLpExitService {
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
     private readonly swapService: EvmSwapService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly dataSource: DataSource
   ) {}
 
   exitAdapterFor(vault: Vault): Address | null {
@@ -244,6 +264,35 @@ export class EvmLpExitService {
       }
     }
     return [...adapters];
+  }
+
+  /**
+   * VT that can never be redeemed: what sits on the Uniswap v4 PoolManager of each of the
+   * vault's LP adapters, plus 0xdead. v4 seeding forfeits the part of a deposit that does not
+   * fit the position to the PoolManager (`clear`), so a vault that ever had LP keeps a little
+   * VT there forever, and `terminationOutstanding` never reaches 0.
+   */
+  async unredeemableVt(vaultAddress: Address, vt: Address): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    const holders = new Set<string>([DEAD.toLowerCase()]);
+    for (const adapter of await this.v4LpAdapters(vaultAddress)) {
+      const pm = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'poolManager',
+      })) as Address;
+      holders.add(pm.toLowerCase());
+    }
+    let total = 0n;
+    for (const holder of holders) {
+      total += (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [holder as Address],
+      })) as bigint;
+    }
+    return total;
   }
 
   /** Liquidity the vault still has in v4 pools, summed over its adapters. */
@@ -386,7 +435,7 @@ export class EvmLpExitService {
       args: [vaultAddress, vt],
     })) as bigint;
     if (vtOwed > 0n) {
-      const balances = await this.fetchHolderBalances(vt, vault.chain_id);
+      const balances = await this.holderBalances(vault, vt);
       const excluded = new Set<string>(
         [exitAdapter, vaultAddress, NATIVE, DEAD, ...lpAdapters].map(a => a.toLowerCase())
       );
@@ -476,24 +525,85 @@ export class EvmLpExitService {
     );
   }
 
-  /** Current VT balances from the Blockscout holders API (paged). */
-  private async fetchHolderBalances(vt: Address, chainId: number | string | undefined): Promise<Map<string, bigint>> {
-    const apiKey = this.configService.get<string>('BLOCKSCOUT_API_KEY')?.trim();
-    const explicit = this.configService.get<string>('ROBINHOOD_HOLDERS_API_BASE_URL')?.trim();
-    const base =
-      explicit?.replace(/\/$/, '') ??
-      (Number(chainId) === 46630
-        ? 'https://explorer.testnet.chain.robinhood.com/api/v2'
-        : apiKey
-          ? 'https://api.blockscout.com/4663/api/v2'
-          : 'https://robinhoodchain.blockscout.com/api/v2');
+  /**
+   * Current VT balances. Blockscout first; on failure (e.g. Cloudflare 403 on mainnet)
+   * fall back to replaying VT Transfer logs from the vault's createVault block.
+   */
+  private async holderBalances(vault: Vault, vt: Address): Promise<Map<string, bigint>> {
+    try {
+      return await this.fetchHolderBalances(vt, vault.chain_id);
+    } catch (err) {
+      this.logger.warn(
+        `LP exit: holders API failed for VT ${vt} (${(err as Error).message}); falling back to Transfer replay`
+      );
+      return this.replayHolderBalances(vault, vt);
+    }
+  }
 
+  private async replayHolderBalances(vault: Vault, vt: Address): Promise<Map<string, bigint>> {
+    const client = this.contractReader.publicClient;
+    const createTx = await this.dataSource.getRepository(Transaction).findOne({
+      where: { vault_id: vault.id, type: TransactionType.createVault, status: TransactionStatus.confirmed },
+      order: { created_at: 'DESC' },
+    });
+    if (!createTx?.tx_hash) {
+      throw new Error(`Cannot replay VT holders for vault ${vault.id}: no confirmed createVault tx`);
+    }
+    const receipt = await client.getTransactionReceipt({ hash: createTx.tx_hash as Hex });
+    const latest = await client.getBlockNumber();
+
+    const balances = new Map<string, bigint>();
+    for (let from = receipt.blockNumber; from <= latest; from += LOG_CHUNK_BLOCKS) {
+      const to = from + LOG_CHUNK_BLOCKS - 1n > latest ? latest : from + LOG_CHUNK_BLOCKS - 1n;
+      const logs = await client.getLogs({ address: vt, event: TRANSFER_EVENT, fromBlock: from, toBlock: to });
+      for (const log of logs) {
+        const { from: src, to: dst, value } = log.args;
+        if (value === undefined) continue;
+        if (src && src !== NATIVE) {
+          const k = src.toLowerCase();
+          balances.set(k, (balances.get(k) ?? 0n) - value);
+        }
+        if (dst && dst !== NATIVE) {
+          const k = dst.toLowerCase();
+          balances.set(k, (balances.get(k) ?? 0n) + value);
+        }
+      }
+    }
+    for (const [k, v] of balances) if (v <= 0n) balances.delete(k);
+    return balances;
+  }
+
+  /**
+   * Current VT balances from the Blockscout holders API (paged), trying every configured base
+   * in order with retries. A base that hard-blocks (403) is put on cooldown.
+   */
+  private async fetchHolderBalances(vt: Address, chainId: number | string | undefined): Promise<Map<string, bigint>> {
+    const errors: string[] = [];
+    for (const base of resolveBlockscoutBases(this.configService, chainId)) {
+      if (isBaseDown(base)) {
+        errors.push(`${base}: on cooldown`);
+        continue;
+      }
+      try {
+        return await this.fetchHolderBalancesFrom(base, vt);
+      } catch (err) {
+        if (isBlockedHttpError(err)) markBaseDown(base);
+        errors.push(`${base}: ${(err as Error).message}`);
+      }
+    }
+    throw new Error(`All holders API bases failed: ${errors.join(' | ')}`);
+  }
+
+  private async fetchHolderBalancesFrom(base: string, vt: Address): Promise<Map<string, bigint>> {
     const balances = new Map<string, bigint>();
     let next: Record<string, unknown> | null = null;
     for (let page = 0; page < 500; page++) {
-      const params: Record<string, unknown> = { ...(next ?? {}) };
-      if (apiKey) params.apikey = apiKey;
-      const { data } = await axios.get(`${base}/tokens/${vt}/holders`, { params, timeout: 20_000 });
+      const url = withBlockscoutKey(new URL(`${base}/tokens/${vt}/holders`), this.configService);
+      for (const [k, v] of Object.entries(next ?? {})) if (v != null) url.searchParams.set(k, String(v));
+      const data = await fetchJsonWithRetry<{ items?: any[]; next_page_params?: Record<string, unknown> | null }>(
+        url.toString(),
+        { timeoutMs: 20_000 }
+      );
       for (const item of data.items ?? []) {
         const addr = String(item.address?.hash ?? '').toLowerCase();
         if (addr) balances.set(addr, BigInt(item.value));

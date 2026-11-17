@@ -34,6 +34,12 @@ export interface EvmProtocolVersion {
   lpExitAdapter?: Address | null;
   feeConverter: Address;
   feeController: Address;
+  /**
+   * V11+: the factory's guardian, who can freeze this version's vaults (`Vault.frozen()`) and is the
+   * only one able to replace a vault's authority (`setAuthority`). A Safe on mainnet. Absent on
+   * V8–V10, whose vaults have no freeze and hand authority over with propose/accept.
+   */
+  guardian?: Address;
 }
 
 export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
@@ -87,6 +93,27 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       feeConverter: '0x29041c5BC568D0cD8b039267bD9B3427FFDbfD37',
       feeController: '0xBD7f80a08391200263449c61f411c05Ae5a7a562',
     },
+    {
+      // STAGE stack with guardian/pauser emergency roles (vault-contract-solidity feat/vault-guardian),
+      // deployed 2026-11-17 with script/deploy-stage-v11.sh (deployments/robinhood-mainnet-stage-v11.json).
+      // Production keeps creating vaults on V10 until its EVM_FACTORY_ADDRESS is switched.
+      version: 11,
+      factory: '0xfB79Bf6a61950a04C64F1AD6Ef3b1809A21c2598',
+      deployBlock: 116436007n,
+      adapterRegistry: '0x7720D6FAA6cA32B0ef22f1B11B278F406A70eC03',
+      protocolFeeConfig: '0xeCF10601FE4e74ECe0FDE988E61bA89cE49B7aEf',
+      batchDeployer: '0x8FFA019881A295B473ce30570e91c74cC7587159',
+      // Built from the current UniversalRouterSwapAdapter, which accepts MULTI_PATH_EXACT_IN.
+      swapAdapter: '0xdE9ec3139C904E8DDbEA934a8520aFe5A654eA96',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0xc100Cc02999E485560e7F2ccDEe79555fb584157',
+      // Shared LiquidityExitAdapter; must be approved (tag "swap") in this registry before use.
+      lpExitAdapter: '0xa70A0A82C52e5a9ff519736fbbba553F81429E9e',
+      feeConverter: '0x3eA8128222520701c826edF24Cc5E71300F4a191',
+      feeController: '0x215A4d4B30A1F927e42aE4132b72B78F9Ae9Eb15',
+      // Safe 1.5.0, 2-of-3; also the pauser.
+      guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
+    },
   ],
   46630: [
     {
@@ -124,6 +151,23 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       lpAdapter: '0xAc2F594ED483e75497D69c18b3D717C38Aae291E',
       feeConverter: '0x8e7A854357437e8c7A312073f8260E74E7d730d8',
       feeController: '0x646E9EffDdcAEB11248aaCE9Cec528b3eca68AdB',
+    },
+    {
+      // Guardian/pauser emergency roles (vault-contract-solidity feat/vault-guardian), deployed
+      // 2026-11-17 with script/deploy-testnet-v11.sh. Test tokens, LP protocol, mock adapter and the
+      // V2 LP adapter are reused from V10; the LP adapter is not bound to a factory but must be
+      // approved in this registry. Testnet has no Safe: guardian and pauser are the admin EOA.
+      version: 11,
+      factory: '0x9795635535b11e09b561a67b87A175e516dfc680',
+      deployBlock: 154424047n,
+      adapterRegistry: '0x6552F8a786465b8d2Aef745D2002dA677dc17C2c',
+      protocolFeeConfig: '0x6baF082C43B90d1c3d51C03923B2AaD6e7f87ECc',
+      batchDeployer: '0xA07F335A85F6537b2138e3e0c96C7C6C25AAF6bf',
+      swapAdapter: '0xB2AE05133a096b57393DC36e83efe18Cd2f3cBd6',
+      lpAdapter: '0xAc2F594ED483e75497D69c18b3D717C38Aae291E',
+      feeConverter: '0xBdD98E3578056aAC2f9afFb27b1EED7Dfb03baec',
+      feeController: '0x978f6EFdDB9516A11fd0F994ACCD20664033e85c',
+      guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
     },
   ],
 };
