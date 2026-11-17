@@ -28,6 +28,16 @@ const DEAD = '0x000000000000000000000000000000000000dead' as const;
 const RELEASE_CHUNK = 100;
 const LOG_CHUNK_BLOCKS = 10_000n;
 const TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+const LIQUIDITY_WITHDRAWN_EVENT = parseAbiItem(
+  'event LiquidityWithdrawn(address indexed vault, uint256 indexed tokenId, address indexed recipient)'
+);
+const ASSIGNED_EVENT = parseAbiItem(
+  'event Assigned(address indexed vault, uint256 nativeAmount, address indexed token, uint256 tokenAmount)'
+);
+/** One exit at a time across every vault and instance: the exit adapter is shared. */
+const LP_EXIT_LOCK_KEY = 'l4va:evm-lp-exit';
+/** Unassigned native below this is swap-leg dust (1 wei per exit), not worth a history scan. */
+const NATIVE_DUST_WEI = 1_000_000_000n;
 
 /** The slice of `UniswapV4LiquidityAdapter` the exit reads and calls. */
 const V4_LP_ADAPTER_ABI = [
@@ -92,8 +102,20 @@ const POSM_ABI = [
 
 /** `LiquidityExitAdapter` (vault-contract-solidity/src/adapters/LiquidityExitAdapter.sol). */
 export const LP_EXIT_ADAPTER_ABI = [
-  { type: 'function', name: 'weth', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
-  { type: 'function', name: 'owner', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  {
+    type: 'function',
+    name: 'weth',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'owner',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
   {
     type: 'function',
     name: 'unassignedNative',
@@ -309,8 +331,31 @@ export class EvmLpExitService {
     return total;
   }
 
-  /** Runs (or resumes) steps 1–4. A no-op for a vault with no LP and nothing earmarked. */
+  /**
+   * Runs (or resumes) steps 1–4. A no-op for a vault with no LP and nothing earmarked.
+   *
+   * The LiquidityExitAdapter is shared by every vault and LP proceeds arrive on it untagged, so
+   * exits are serialized (cluster-wide advisory lock) and each vault is assigned only the native
+   * its own withdrawals brought in — never whatever happens to be unassigned on the adapter.
+   */
   async exitIntoVault(vault: Vault): Promise<LpExitResult> {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [LP_EXIT_LOCK_KEY]);
+      try {
+        return await this.exitIntoVaultLocked(vault);
+      } finally {
+        await runner
+          .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [LP_EXIT_LOCK_KEY])
+          .catch(() => undefined);
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  private async exitIntoVaultLocked(vault: Vault): Promise<LpExitResult> {
     const client = this.contractReader.publicClient;
     const vaultAddress = vault.contract_address as Address;
     const result: LpExitResult = {
@@ -339,6 +384,14 @@ export class EvmLpExitService {
       functionName: 'vaultToken',
     })) as Address;
 
+    // Native already sitting unassigned before this run belongs to no one we can name yet.
+    const unassignedNativeBefore = (await client.readContract({
+      address: exitAdapter,
+      abi: LP_EXIT_ADAPTER_ABI,
+      functionName: 'unassignedNative',
+    })) as bigint;
+    const withdrawBlocks = new Set<bigint>();
+
     // ---- 1. withdraw every live position into the exit adapter -------------
     for (const adapter of lpAdapters) {
       const tokenIds = (await client.readContract({
@@ -364,10 +417,16 @@ export class EvmLpExitService {
         if (liq === 0n) continue; // already withdrawn (burned)
 
         const tx = await this.adminSigner.sendAndConfirm(
-          { address: adapter, abi: V4_LP_ADAPTER_ABI, functionName: 'withdrawLiquidity', args: [tokenId, exitAdapter] },
+          {
+            address: adapter,
+            abi: V4_LP_ADAPTER_ABI,
+            functionName: 'withdrawLiquidity',
+            args: [tokenId, exitAdapter],
+          },
           ['LiquidityWithdrawn']
         );
         result.withdrawnTokenIds.push(tokenId);
+        if (tx.receipt?.blockNumber != null) withdrawBlocks.add(BigInt(tx.receipt.blockNumber));
         this.logger.log(`LP exit: vault=${vaultAddress} tokenId=${tokenId} → exitAdapter ${exitAdapter} tx=${tx.hash}`);
       }
     }
@@ -386,17 +445,42 @@ export class EvmLpExitService {
         args: [vt],
       }) as Promise<bigint>,
     ]);
-    if (freeNative > 0n || freeVt > 0n) {
+    // Native: what this run's withdrawals added, plus what earlier withdrawals of THIS vault
+    // left unassigned (a crashed run) — attributed from chain history. Never the rest: it may be
+    // another vault's pool proceeds. VT needs no attribution: the token is this vault's own.
+    const thisRun = freeNative > unassignedNativeBefore ? freeNative - unassignedNativeBefore : 0n;
+    let leftover = 0n;
+    if (unassignedNativeBefore > NATIVE_DUST_WEI) {
+      try {
+        leftover = await this.unassignedNativeOf(vaultAddress, exitAdapter, lpAdapters, withdrawBlocks);
+      } catch (err) {
+        // Unknown owner → leave it on the adapter. A later run (or an operator `assign`) settles it.
+        this.logger.warn(
+          `LP exit: could not attribute ${unassignedNativeBefore} wei left unassigned on ${exitAdapter} ` +
+            `(${(err as Error).message}); not assigning it to ${vaultAddress}`
+        );
+      }
+    }
+    const leftoverAvailable = freeNative - thisRun;
+    const nativeToAssign = thisRun + (leftover < leftoverAvailable ? leftover : leftoverAvailable);
+    if (freeNative > nativeToAssign) {
+      this.logger.warn(
+        `LP exit: ${freeNative - nativeToAssign} wei unassigned on ${exitAdapter} is not attributable to ` +
+          `${vaultAddress}; leaving it for its own vault`
+      );
+    }
+
+    if (nativeToAssign > 0n || freeVt > 0n) {
       const tx = await this.adminSigner.sendAndConfirm(
         {
           address: exitAdapter,
           abi: LP_EXIT_ADAPTER_ABI,
           functionName: 'assign',
-          args: [vaultAddress, freeNative, vt, freeVt],
+          args: [vaultAddress, nativeToAssign, vt, freeVt],
         },
         ['Assigned']
       );
-      this.logger.log(`LP exit: assigned native=${freeNative} vt=${freeVt} to ${vaultAddress} tx=${tx.hash}`);
+      this.logger.log(`LP exit: assigned native=${nativeToAssign} vt=${freeVt} to ${vaultAddress} tx=${tx.hash}`);
     }
 
     // ---- 3. pull native into the vault's custody -----------------------------
@@ -526,6 +610,81 @@ export class EvmLpExitService {
   }
 
   /**
+   * Native that this vault's past withdrawals brought onto the exit adapter and that was never
+   * assigned to it: Σ adapter balance increase in each block holding one of its
+   * `LiquidityWithdrawn(vault, *, exitAdapter)` events, minus Σ `Assigned(vault).nativeAmount`.
+   * Blocks withdrawn in the current run are skipped (counted by the caller). Exits are serialized,
+   * so a block's balance change is that withdrawal's. Throws if history cannot be read (e.g. a
+   * non-archive RPC); the caller then assigns none of it.
+   */
+  private async unassignedNativeOf(
+    vaultAddress: Address,
+    exitAdapter: Address,
+    lpAdapters: Address[],
+    skipBlocks: Set<bigint>
+  ): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    const fromBlock = await this.vaultCreationBlock(vaultAddress);
+    const latest = await client.getBlockNumber();
+
+    const blocks = new Set<bigint>();
+    let assigned = 0n;
+    for (let from = fromBlock; from <= latest; from += LOG_CHUNK_BLOCKS) {
+      const to = from + LOG_CHUNK_BLOCKS - 1n > latest ? latest : from + LOG_CHUNK_BLOCKS - 1n;
+      for (const adapter of lpAdapters) {
+        const logs = await client.getLogs({
+          address: adapter,
+          event: LIQUIDITY_WITHDRAWN_EVENT,
+          args: { vault: vaultAddress, recipient: exitAdapter },
+          fromBlock: from,
+          toBlock: to,
+        });
+        for (const log of logs)
+          if (log.blockNumber != null && !skipBlocks.has(log.blockNumber)) blocks.add(log.blockNumber);
+      }
+      const assignedLogs = await client.getLogs({
+        address: exitAdapter,
+        event: ASSIGNED_EVENT,
+        args: { vault: vaultAddress },
+        fromBlock: from,
+        toBlock: to,
+      });
+      for (const log of assignedLogs) assigned += log.args.nativeAmount ?? 0n;
+    }
+
+    let received = 0n;
+    for (const block of blocks) {
+      const [after, before] = await Promise.all([
+        client.getBalance({ address: exitAdapter, blockNumber: block }),
+        client.getBalance({ address: exitAdapter, blockNumber: block - 1n }),
+      ]);
+      const delta = BigInt(after) - BigInt(before);
+      if (delta > 0n) received += delta;
+    }
+    return received > assigned ? received - assigned : 0n;
+  }
+
+  /** Block of the vault's createVault tx — the lower bound for its log scans. */
+  private async vaultCreationBlock(vaultAddress: Address): Promise<bigint> {
+    const createTx = await this.dataSource
+      .getRepository(Transaction)
+      .createQueryBuilder('t')
+      .innerJoin('t.vault', 'v')
+      .where('LOWER(v.contract_address) = :addr', {
+        addr: vaultAddress.toLowerCase(),
+      })
+      .andWhere('t.type = :type', { type: TransactionType.createVault })
+      .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+      .orderBy('t.created_at', 'DESC')
+      .getOne();
+    if (!createTx?.tx_hash) throw new Error(`No confirmed createVault tx for vault ${vaultAddress}`);
+    const receipt = await this.contractReader.publicClient.getTransactionReceipt({
+      hash: createTx.tx_hash as Hex,
+    });
+    return receipt.blockNumber;
+  }
+
+  /**
    * Current VT balances. Blockscout first; on failure (e.g. Cloudflare 403 on mainnet)
    * fall back to replaying VT Transfer logs from the vault's createVault block.
    */
@@ -543,19 +702,30 @@ export class EvmLpExitService {
   private async replayHolderBalances(vault: Vault, vt: Address): Promise<Map<string, bigint>> {
     const client = this.contractReader.publicClient;
     const createTx = await this.dataSource.getRepository(Transaction).findOne({
-      where: { vault_id: vault.id, type: TransactionType.createVault, status: TransactionStatus.confirmed },
+      where: {
+        vault_id: vault.id,
+        type: TransactionType.createVault,
+        status: TransactionStatus.confirmed,
+      },
       order: { created_at: 'DESC' },
     });
     if (!createTx?.tx_hash) {
       throw new Error(`Cannot replay VT holders for vault ${vault.id}: no confirmed createVault tx`);
     }
-    const receipt = await client.getTransactionReceipt({ hash: createTx.tx_hash as Hex });
+    const receipt = await client.getTransactionReceipt({
+      hash: createTx.tx_hash as Hex,
+    });
     const latest = await client.getBlockNumber();
 
     const balances = new Map<string, bigint>();
     for (let from = receipt.blockNumber; from <= latest; from += LOG_CHUNK_BLOCKS) {
       const to = from + LOG_CHUNK_BLOCKS - 1n > latest ? latest : from + LOG_CHUNK_BLOCKS - 1n;
-      const logs = await client.getLogs({ address: vt, event: TRANSFER_EVENT, fromBlock: from, toBlock: to });
+      const logs = await client.getLogs({
+        address: vt,
+        event: TRANSFER_EVENT,
+        fromBlock: from,
+        toBlock: to,
+      });
       for (const log of logs) {
         const { from: src, to: dst, value } = log.args;
         if (value === undefined) continue;
@@ -600,10 +770,10 @@ export class EvmLpExitService {
     for (let page = 0; page < 500; page++) {
       const url = withBlockscoutKey(new URL(`${base}/tokens/${vt}/holders`), this.configService);
       for (const [k, v] of Object.entries(next ?? {})) if (v != null) url.searchParams.set(k, String(v));
-      const data = await fetchJsonWithRetry<{ items?: any[]; next_page_params?: Record<string, unknown> | null }>(
-        url.toString(),
-        { timeoutMs: 20_000 }
-      );
+      const data = await fetchJsonWithRetry<{
+        items?: any[];
+        next_page_params?: Record<string, unknown> | null;
+      }>(url.toString(), { timeoutMs: 20_000 });
       for (const item of data.items ?? []) {
         const addr = String(item.address?.hash ?? '').toLowerCase();
         if (addr) balances.set(addr, BigInt(item.value));
