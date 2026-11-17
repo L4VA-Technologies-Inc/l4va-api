@@ -287,6 +287,8 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [{ type: 'address' }],
   },
+  // V8–V10 only: the authority hands itself over. Removed in V11, where only the
+  // factory guardian (Safe) can replace the authority (`setAuthority`).
   {
     type: 'function',
     stateMutability: 'view',
@@ -308,6 +310,36 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [],
   },
+
+  // --- Guardian freeze (V11+) -----------------------------------------------
+  // The guardian/pauser roles live on the factory. A frozen vault rejects every
+  // authority call (revert VaultFrozen) and new contributions / allocation and
+  // distribution claims; refunds, redeem and unpaid/owed pulls keep working.
+  // Older vaults have no `frozen()` — read it with EvmPauseService.isFrozen.
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'frozen',
+    inputs: [],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'function',
+    stateMutability: 'view',
+    name: 'guardianPaused',
+    inputs: [],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'event',
+    name: 'GuardianPauseSet',
+    inputs: [
+      { name: 'by', type: 'address', indexed: true },
+      { name: 'paused', type: 'bool', indexed: false },
+    ],
+  },
+  { type: 'error', name: 'VaultFrozen', inputs: [] },
+  { type: 'error', name: 'NotAuthority', inputs: [{ name: 'caller', type: 'address' }] },
 
   // --- Fees (V4) ------------------------------------------------------------
   {
