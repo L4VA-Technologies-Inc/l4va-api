@@ -102,7 +102,10 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       deployBlock: 116436007n,
       adapterRegistry: '0x7720D6FAA6cA32B0ef22f1B11B278F406A70eC03',
       protocolFeeConfig: '0xeCF10601FE4e74ECe0FDE988E61bA89cE49B7aEf',
-      batchDeployer: '0x8FFA019881A295B473ce30570e91c74cC7587159',
+      // Current deployer (2026-11-17, tx 0x95a9…9ea6): Vault code with burnHeldVaultToken. The
+      // original V11 deployer 0x8FFA0198…7159 has no burn. Same factory, registry, adapters, fees;
+      // EvmLpExitService reads each vault's code to pick burn or release.
+      batchDeployer: '0xD350d4a6D50fdF2EEB94B88ba8F1df7581B01dd8',
       // Built from the current UniversalRouterSwapAdapter, which accepts MULTI_PATH_EXACT_IN.
       swapAdapter: '0xdE9ec3139C904E8DDbEA934a8520aFe5A654eA96',
       swapAdapterMultiPath: true,
@@ -162,7 +165,9 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       deployBlock: 154424047n,
       adapterRegistry: '0x6552F8a786465b8d2Aef745D2002dA677dc17C2c',
       protocolFeeConfig: '0x6baF082C43B90d1c3d51C03923B2AaD6e7f87ECc',
-      batchDeployer: '0xA07F335A85F6537b2138e3e0c96C7C6C25AAF6bf',
+      // Current deployer (2026-11-17, tx 0xb7f0…225a): Vault code with burnHeldVaultToken. The
+      // original V11 deployer 0xA07F335A…F6bf has no burn.
+      batchDeployer: '0xDe3E20f4B45f04f96B2eA03673d9736fe1E64f50',
       swapAdapter: '0xB2AE05133a096b57393DC36e83efe18Cd2f3cBd6',
       lpAdapter: '0xAc2F594ED483e75497D69c18b3D717C38Aae291E',
       feeConverter: '0xBdD98E3578056aAC2f9afFb27b1EED7Dfb03baec',
