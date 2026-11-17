@@ -164,6 +164,14 @@ export class EvmDistributionService {
    * correct action is to backfill from chain rather than open a second pot.
    */
   async executeDistribution(proposal: Proposal): Promise<EvmDistributionOpenResult> {
+    // Funds leave the vault here, so only a proposal that passed its vote may
+    // reach the contract, whatever path called us.
+    if (proposal.proposalType !== ProposalType.DISTRIBUTION || proposal.status !== ProposalStatus.PASSED) {
+      throw new BadRequestException(
+        `Proposal ${proposal.id} (${proposal.proposalType}, ${proposal.status}) is not a PASSED distribution proposal`
+      );
+    }
+
     const vault = await this.requireEvmVault(proposal.vaultId);
     const vaultAddress = vault.contract_address as Address;
 

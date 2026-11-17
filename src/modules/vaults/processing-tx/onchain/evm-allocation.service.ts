@@ -191,6 +191,23 @@ export class EvmAllocationService {
       );
     }
 
+    // Every on-chain contribution must be indexed before allocating. The native
+    // check below only covers ETH: an ERC-20 / NFT contribution that landed at
+    // the end of the window and is not in the DB yet would be left out of the
+    // root, and once the cycle locks it can no longer be refunded — the
+    // contributor would lose the asset for 0 VT. Defer until the indexer
+    // (or the contribution backfill sweep) catches up; the caller retries.
+    const [onChainTotal, indexedTotal] = await Promise.all([
+      this.contractReader.totalContributions(vault.contract_address as Address),
+      this.contribsRepository.count({ where: { vault_id: vaultId } }),
+    ]);
+    if (onChainTotal !== BigInt(indexedTotal)) {
+      throw new BadRequestException(
+        `Vault ${vaultId} cycle ${cycleId}: ${onChainTotal} contribution(s) on-chain but ${indexedTotal} indexed — ` +
+          `refusing to allocate until every contribution is indexed`
+      );
+    }
+
     // Load active contributions for this vault + cycle. Only Solidity-Active
     // contributions feed the allocation (refunded / cancelled ones are OUT).
     const contributions = await this.contribsRepository.find({

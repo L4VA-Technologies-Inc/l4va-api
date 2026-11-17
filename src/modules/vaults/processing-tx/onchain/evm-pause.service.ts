@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { type Address, type Hex } from 'viem';
+import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
@@ -11,6 +11,32 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { EvmReconciliationStatus, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ChainType } from '@/types/vault.types';
+
+/**
+ * True while the factory guardian has frozen the vault (V11+: its own freeze or
+ * the factory-wide one). A frozen vault rejects every authority call and new
+ * contributions / allocation and distribution claims until the guardian
+ * unfreezes it. Vaults from before V11 have no `frozen()` and read as not frozen;
+ * RPC failures are thrown, never read as "not frozen".
+ */
+export async function readVaultFrozen(
+  publicClient: { readContract: (args: any) => Promise<unknown> },
+  vaultAddress: Address
+): Promise<boolean> {
+  try {
+    return (await publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'frozen',
+    })) as boolean;
+  } catch (err) {
+    const missing =
+      err instanceof BaseError &&
+      err.walk(e => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError) !== null;
+    if (missing) return false;
+    throw err;
+  }
+}
 
 @Injectable()
 export class EvmPauseService {
@@ -66,6 +92,11 @@ export class EvmPauseService {
       TransactionType.evmPause,
       'EmergencyRecovered'
     );
+  }
+
+  /** See `readVaultFrozen`. */
+  isFrozen(vaultAddress: Address): Promise<boolean> {
+    return readVaultFrozen(this.contractReader.publicClient, vaultAddress);
   }
 
   isPaused(vaultAddress: Address): Promise<boolean> {

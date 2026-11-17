@@ -28,6 +28,7 @@ import { GovernanceFeeService } from './governance-fee.service';
 import GovernanceService from './governance.service';
 
 import { Vault } from '@/database/vault.entity';
+import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
@@ -257,11 +258,12 @@ export class GovernanceController {
   }
 
   @Post('proposals/:proposalId/distribution/retry')
-  @UseGuards(AuthGuard)
+  @UseGuards(AdminGuard)
   @ApiOperation({
-    summary: 'Retry opening a stalled EVM distribution',
+    summary: '[admin] Retry opening a stalled EVM distribution',
     description:
-      'Safe to call repeatedly: the on-chain execution key means a submission that already landed is adopted rather than duplicated.',
+      'Service-token only. Accepts only a PASSED distribution proposal whose execution failed. Safe to call repeatedly: ' +
+      'the on-chain execution key means a submission that already landed is adopted rather than duplicated.',
   })
   async retryDistribution(@Param('proposalId', ParseUUIDPipe) proposalId: string): Promise<{ success: boolean }> {
     const success = await this.evmGovernanceExecutionService.retryDistribution(proposalId);

@@ -116,6 +116,8 @@ export class GovernanceService {
   private readonly isMainnet: boolean;
   private isDailySnapshotJobRunning = false;
   private readonly votingPowerCache: NodeCache;
+  /** vaultId → epoch ms before which a failed on-demand EVM snapshot is not retried. */
+  private readonly evmOnDemandSnapshotRetryAt = new Map<string, number>();
   private readonly proposalCreationCache: NodeCache;
   private readonly assetMetadataCache: NodeCache;
   private readonly poolAddress: string;
@@ -4617,10 +4619,17 @@ export class GovernanceService {
           where: { id: vaultId },
           select: ['id', 'chain_type', 'vault_status'],
         });
-        if (vaultForChainCheck?.chain_type === ChainType.robinhood) {
+        const retryAt = this.evmOnDemandSnapshotRetryAt.get(vaultId) ?? 0;
+        if (vaultForChainCheck?.chain_type === ChainType.robinhood && Date.now() >= retryAt) {
           try {
             snapshot = await this.evmSnapshotService.createSnapshot(vaultId);
-          } catch {
+            this.evmOnDemandSnapshotRetryAt.delete(vaultId);
+          } catch (error) {
+            // Back off: every voting-power poll otherwise re-runs the holders API + replay.
+            this.evmOnDemandSnapshotRetryAt.set(vaultId, Date.now() + 10 * 60 * 1000);
+            this.logger.warn(
+              `[EVM Snapshot] On-demand snapshot failed for vault ${vaultId} (retry in 10m): ${(error as Error).message}`
+            );
             // Fall through to the NotFoundException below.
           }
         }

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -23,8 +23,8 @@ import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { IndexSwapRouteService } from '@/modules/vaults/index-vault/index-swap-route.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
-import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
-import { VaultStatus } from '@/types/vault.types';
+import { MarketplaceAction, ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
 
@@ -659,16 +659,52 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   /**
    * Operator entry point for a distribution that failed to open. Safe to call
    * repeatedly — the on-chain execution key makes a duplicate impossible.
+   *
+   * Only a DISTRIBUTION proposal that passed its vote and whose execution
+   * already failed may be retried. Without these checks a holder could create a
+   * proposal and open the distribution immediately, skipping the vote (or open
+   * a proposal the vote rejected).
    */
   async retryDistribution(proposalId: string): Promise<boolean> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
     if (!proposal) {
-      this.logger.error(`retryDistribution: proposal ${proposalId} not found`);
-      return false;
+      throw new NotFoundException(`Proposal ${proposalId} not found`);
     }
-    return this.executeDistribution(proposal);
+    if (proposal.proposalType !== ProposalType.DISTRIBUTION) {
+      throw new BadRequestException(`Proposal ${proposalId} is not a distribution proposal`);
+    }
+    if (proposal.status !== ProposalStatus.PASSED) {
+      throw new BadRequestException(
+        `Proposal ${proposalId} is ${proposal.status}; only PASSED proposals whose execution failed can be retried`
+      );
+    }
+    if (!proposal.metadata?.executionError) {
+      throw new BadRequestException(`Proposal ${proposalId} has no failed execution to retry`);
+    }
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: proposal.vaultId },
+      select: ['id', 'chain_type'],
+    });
+    if (vault?.chain_type !== ChainType.robinhood) {
+      throw new BadRequestException(`Proposal ${proposalId} does not belong to an EVM vault`);
+    }
+
+    const success = await this.executeDistribution(proposal);
+    if (!success) return false;
+
+    // Mirror GovernanceExecutionService.executePassedProposal: the cron only
+    // picks up PASSED proposals, so leaving it PASSED would re-run it.
+    const fresh = await this.proposalRepository.findOne({ where: { id: proposalId } });
+    const metadata = { ...(fresh?.metadata ?? proposal.metadata) };
+    delete metadata.executionError;
+    await this.proposalRepository.update(
+      { id: proposalId, status: ProposalStatus.PASSED },
+      { status: ProposalStatus.EXECUTED, executionDate: new Date(), metadata }
+    );
+    return true;
   }
 
   /**
