@@ -37,8 +37,16 @@ export enum DistributionBatchStatus {
 }
 
 /**
- * Distribution batch information stored in proposal metadata
- * Note: txHash is NOT stored here - it's stored in the Transaction entity
+ * Distribution batch information stored in proposal metadata.
+ *
+ * Status lifecycle:
+ *   PENDING / RETRY_PENDING → PROCESSING → COMPLETED
+ *                                        ↘ RETRY_PENDING (node definitively rejected the tx)
+ *                                        ↘ FAILED        (rejected MAX_RETRY_ATTEMPTS times)
+ *
+ * A batch in PROCESSING with a `txHash` may already be on chain: it is never
+ * rebuilt, only checked on chain or resubmitted as the exact same `signedTx`
+ * (same inputs, so it can land at most once).
  */
 export interface DistributionBatch {
   batchId: string;
@@ -49,6 +57,10 @@ export interface DistributionBatch {
   status: DistributionBatchStatus;
   claimIds: string[];
   transactionId?: string; // Reference to Transaction entity
+  /** Hash of the signed tx, persisted BEFORE it is submitted. */
+  txHash?: string;
+  /** The exact signed tx (hex), persisted before submission; cleared once the batch is completed. */
+  signedTx?: string;
   retryCount: number;
   lastAttempt?: string;
   error?: string;
@@ -59,6 +71,12 @@ export interface DistributionBatch {
  * Simplified version - doesn't store redundant data that can be fetched from related entities
  */
 export interface DistributionMetadata {
+  /**
+   * 2 = batches persist `txHash`/`signedTx` before submission, so an unfinished
+   * batch can be resumed safely. Plans without it were written by older code
+   * that could submit without recording the tx; they are never auto-resumed.
+   */
+  planVersion?: number;
   totalLovelaceToDistribute: string;
   totalRecipients: number;
   lovelacePerHolder: string; // Average, actual amounts may vary based on VT proportion

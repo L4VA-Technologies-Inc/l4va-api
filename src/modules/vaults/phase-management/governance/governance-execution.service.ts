@@ -4,10 +4,11 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, Not, Repository } from 'typeorm';
+import { Between, DataSource, In, Not, Repository } from 'typeorm';
 
-import { DistributionService } from './distribution.service';
+import { DistributionService, UNFINISHED_BATCH_STATUSES } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
+import { DistributionBatch } from './dto/distribution.dto';
 import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
@@ -78,7 +79,8 @@ export class GovernanceExecutionService {
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
     private readonly alertsService: AlertsService,
-    private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService
+    private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService,
+    private readonly dataSource: DataSource
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.VOTE_REMINDER_WINDOW_MS = this.isMainnet ? 6 * 60 * 60 * 1000 : 2 * 60 * 1000;
@@ -304,93 +306,108 @@ export class GovernanceExecutionService {
   @Cron(CronExpression.EVERY_5_MINUTES)
   async retryPassedProposals(): Promise<void> {
     try {
-      // Find all proposals in PASSED status with metadata for retry tracking
       const passedProposals = await this.proposalRepository.find({
         where: { status: ProposalStatus.PASSED },
-        select: ['id', 'title', 'vaultId', 'metadata', 'proposalType'],
+        select: ['id'],
       });
 
-      if (passedProposals.length === 0) {
-        return;
-      }
-
-      for (const proposal of passedProposals) {
+      for (const { id } of passedProposals) {
         try {
-          // Special handling for DISTRIBUTION proposals with pending batch retries
-          if (proposal.proposalType === ProposalType.DISTRIBUTION && proposal.metadata?.distribution?.batches) {
-            const hasPendingRetries = proposal.metadata.distribution.batches.some(
-              (b: any) => b.status === 'retry_pending'
-            );
-
-            if (hasPendingRetries) {
-              this.logger.log(`Retrying pending distribution batches for proposal ${proposal.id}`);
-              const result = await this.distributionService.retryFailedBatches(proposal.id);
-
-              if (result.retriedCount > 0) {
-                this.logger.log(
-                  `Retried ${result.retriedCount} batches for proposal ${proposal.id}: ` +
-                    `${result.successCount} succeeded, ${result.stillFailedCount} still failed`
-                );
-
-                // Check if all batches are now complete
-                const status = await this.distributionService.getDistributionStatus(proposal.id);
-                if (status.status === 'completed') {
-                  await this.proposalRepository.update(
-                    { id: proposal.id },
-                    { status: ProposalStatus.EXECUTED, executionDate: new Date() }
-                  );
-                  this.logger.log(`Distribution proposal ${proposal.id} fully completed, marked as EXECUTED`);
-                }
-              }
-              continue; // Skip normal retry logic for distribution proposals with pending batches
-            }
+          // A proposal that is executing right now (first run after the vote, a
+          // manual retry, or another replica's cron) is skipped, not run twice.
+          const lock = await this.withExecutionLock(id, () => this.retryPassedProposalLocked(id));
+          if (!lock.acquired) {
+            this.logger.debug(`Proposal ${id} is being executed by another run, retry skipped`);
           }
-
-          const retryInfo = proposal.metadata?._executionRetry;
-          const retryCount = retryInfo?.count || 0;
-          const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
-
-          // Check if max retries exceeded
-          if (retryCount >= this.MAX_EXECUTION_RETRIES) {
-            continue;
-          }
-
-          // Calculate exponential backoff: base * 2^retryCount minutes
-          const backoffMinutes = this.RETRY_BACKOFF_MINUTES * Math.pow(2, retryCount);
-          const nextRetryTime = lastRetryAt ? new Date(lastRetryAt.getTime() + backoffMinutes * 60 * 1000) : new Date(); // First retry, execute immediately
-
-          // Check if enough time has passed since last retry
-          if (lastRetryAt && new Date() < nextRetryTime) {
-            this.logger.debug(
-              `Proposal ${proposal.id} is in backoff period. Next retry at ${nextRetryTime.toISOString()}`
-            );
-            continue;
-          }
-
-          this.logger.log(
-            `Retrying execution for PASSED proposal ${proposal.id} (${proposal.title}) - Attempt ${retryCount + 1}/${this.MAX_EXECUTION_RETRIES}`
-          );
-
-          // Update retry tracking in metadata before execution
-          const updatedMetadata = {
-            ...proposal.metadata,
-            _executionRetry: {
-              count: retryCount + 1,
-              lastAttempt: new Date().toISOString(),
-            },
-          };
-
-          await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
-
-          await this.executePassedProposal(proposal.id);
         } catch (error) {
-          this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
+          this.logger.error(`Error retrying execution for proposal ${id}: ${error.message}`, error.stack);
           // Continue with next proposal - retry count already incremented
         }
       }
     } catch (error) {
       this.logger.error(`Error in retryPassedProposals: ${error.message}`, error.stack);
     }
+  }
+
+  /** One retry-cron pass over one proposal. Must only be called while holding its execution lock. */
+  private async retryPassedProposalLocked(proposalId: string): Promise<void> {
+    // Re-read under the lock: the run that held it may have just finished the
+    // proposal or written batch state that the cron's list query predates.
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId, status: ProposalStatus.PASSED },
+      select: ['id', 'title', 'vaultId', 'metadata', 'proposalType'],
+    });
+    if (!proposal) return;
+
+    // DISTRIBUTION proposals with unfinished batches (queued for retry, or sent
+    // with an outcome still to be confirmed on chain) are resumed batch by batch.
+    // This does not use the proposal retry budget below: in-flight batches must
+    // keep being checked until the chain settles them.
+    if (proposal.proposalType === ProposalType.DISTRIBUTION && proposal.metadata?.distribution?.batches) {
+      const hasUnfinishedBatches = proposal.metadata.distribution.batches.some((b: DistributionBatch) =>
+        UNFINISHED_BATCH_STATUSES.includes(b.status)
+      );
+
+      if (hasUnfinishedBatches) {
+        this.logger.log(`Resuming unfinished distribution batches for proposal ${proposal.id}`);
+        const result = await this.distributionService.retryFailedBatches(proposal.id);
+
+        if (result.retriedCount > 0) {
+          this.logger.log(
+            `Retried ${result.retriedCount} batches for proposal ${proposal.id}: ` +
+              `${result.successCount} succeeded, ${result.stillFailedCount} still failed`
+          );
+
+          // Check if all batches are now complete
+          const status = await this.distributionService.getDistributionStatus(proposal.id);
+          if (status.status === 'completed') {
+            await this.proposalRepository.update(
+              { id: proposal.id },
+              { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+            );
+            this.logger.log(`Distribution proposal ${proposal.id} fully completed, marked as EXECUTED`);
+          }
+        }
+        return; // Skip normal retry logic for distribution proposals with unfinished batches
+      }
+    }
+
+    const retryInfo = proposal.metadata?._executionRetry;
+    const retryCount = retryInfo?.count || 0;
+    const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
+
+    // Check if max retries exceeded
+    if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+      return;
+    }
+
+    // Calculate exponential backoff: base * 2^retryCount minutes
+    const backoffMinutes = this.RETRY_BACKOFF_MINUTES * Math.pow(2, retryCount);
+    const nextRetryTime = lastRetryAt ? new Date(lastRetryAt.getTime() + backoffMinutes * 60 * 1000) : new Date(); // First retry, execute immediately
+
+    // Check if enough time has passed since last retry
+    if (lastRetryAt && new Date() < nextRetryTime) {
+      this.logger.debug(`Proposal ${proposal.id} is in backoff period. Next retry at ${nextRetryTime.toISOString()}`);
+      return;
+    }
+
+    this.logger.log(
+      `Retrying execution for PASSED proposal ${proposal.id} (${proposal.title}) - Attempt ${retryCount + 1}/${this.MAX_EXECUTION_RETRIES}`
+    );
+
+    // Update retry tracking in metadata before execution
+    const updatedMetadata = {
+      ...proposal.metadata,
+      _executionRetry: {
+        count: retryCount + 1,
+        lastAttempt: new Date().toISOString(),
+      },
+    };
+
+    await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
+
+    // Already holding the lock: call the locked body directly.
+    await this.executePassedProposalLocked(proposal.id);
   }
 
   async activateProposal(proposalId: string): Promise<void> {
@@ -581,10 +598,16 @@ export class GovernanceExecutionService {
         },
       };
 
-      await this.proposalRepository.update(
-        { id: proposalId },
+      // Conditional on ACTIVE: two schedules can fire processProposal for the same
+      // proposal, and only one of them may move it to PASSED and execute it.
+      const transition = await this.proposalRepository.update(
+        { id: proposalId, status: ProposalStatus.ACTIVE },
         { status: ProposalStatus.PASSED, metadata: updatedMetadata }
       );
+      if (!transition.affected) {
+        this.logger.warn(`Proposal ${proposal.id}: already moved out of ACTIVE by another run, not executing`);
+        return;
+      }
 
       this.logger.log(
         `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
@@ -655,10 +678,52 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Execute a PASSED proposal
-   * Retrieves proposals from PASSED status and executes them
+   * Runs `fn` while holding a Postgres session advisory lock for this proposal,
+   * or returns `{ acquired: false }` at once if another run holds it.
+   *
+   * Executing a proposal moves money (treasury payouts, swaps, LP exits), and it
+   * is triggered from more than one place: right after the vote passes, from
+   * the retry cron, and from manual retry endpoints. Without this lock two of
+   * them could execute the same proposal at the same time. The lock lives in
+   * Postgres, so it holds across API replicas and is released by the server if
+   * the process dies mid-execution.
+   */
+  private async withExecutionLock<T>(
+    proposalId: string,
+    fn: () => Promise<T>
+  ): Promise<{ acquired: false } | { acquired: true; result: T }> {
+    const key = `proposal-execution:${proposalId}`;
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      const [{ locked }] = await runner.query('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [key]);
+      if (!locked) return { acquired: false };
+      try {
+        return { acquired: true, result: await fn() };
+      } finally {
+        await runner.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]).catch(error => {
+          this.logger.error(`Failed to release execution lock for proposal ${proposalId}: ${error.message}`);
+        });
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /**
+   * Execute a PASSED proposal. Skips (does nothing) if another run is already
+   * executing it; the status is re-read under the lock, so a proposal that
+   * another run has just finished is not executed again.
    */
   async executePassedProposal(proposalId: string): Promise<void> {
+    const lock = await this.withExecutionLock(proposalId, () => this.executePassedProposalLocked(proposalId));
+    if (!lock.acquired) {
+      this.logger.log(`Proposal ${proposalId} is already being executed by another run, skipping`);
+    }
+  }
+
+  /** Must only be called while holding {@link withExecutionLock} for this proposal. */
+  private async executePassedProposalLocked(proposalId: string): Promise<void> {
     let proposal: Proposal | null = null;
 
     try {
@@ -2320,13 +2385,16 @@ export class GovernanceExecutionService {
         // Check if there are pending retries
         const status = await this.distributionService.getDistributionStatus(proposal.id);
 
-        if (status.pendingRetry > 0) {
+        // Batches still to be sent or whose submission is not yet confirmed keep the
+        // proposal PASSED, so the retry cron resumes them (under the execution lock).
+        // Marking it EXECUTED here would strand those holders: the cron only looks
+        // at PASSED proposals.
+        if (status.unresolvedBatches > 0) {
           this.logger.warn(
-            `Distribution proposal ${proposal.id} has ${status.pendingRetry} batches pending retry. ` +
-              `Will be retried automatically.`
+            `Distribution proposal ${proposal.id} has ${status.unresolvedBatches} unfinished batch(es) ` +
+              `(${status.pendingRetry} pending retry). Will be resumed automatically.`
           );
-          // Don't fail the proposal if there are pending retries
-          return true;
+          return false;
         }
 
         if (status.failedBatches > 0 && status.completedBatches > 0) {
