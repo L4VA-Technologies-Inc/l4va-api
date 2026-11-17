@@ -187,9 +187,11 @@ export class EvmWebhookService {
    * signing key and sends the hex digest in the `x-alchemy-signature` header.
    */
   private verifySignature(rawBody: string, signatureHeader: string): void {
+    // Fail closed: without a signing key nothing can prove a request came from Alchemy, so the
+    // webhook is off. Its work is covered from chain data anyway — the per-minute vault event
+    // indexer, the contribution /confirm receipt path, backfill and the transaction health check.
     if (!this.signingKey) {
-      this.logger.warn('ALCHEMY_WEBHOOK_SIGNING_KEY is not configured — skipping signature verification');
-      return;
+      throw new UnauthorizedException('EVM webhook disabled: ALCHEMY_WEBHOOK_SIGNING_KEY is not configured');
     }
 
     const digest = createHmac('sha256', this.signingKey).update(rawBody, 'utf8').digest('hex');
