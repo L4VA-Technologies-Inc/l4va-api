@@ -25,7 +25,7 @@ import {
   WalletVaultTimelineDto,
 } from './dto/rewards.dto';
 import { EvmSwapVerifier } from './services/evm-swap-verifier.service';
-import { RewardClaimProxy } from './services/reward-claim-proxy.service';
+import { RewardClaimProxy, type EvmDistributorClaimDto } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { Vault } from '@/database/vault.entity';
@@ -409,6 +409,18 @@ export class RewardsController {
     }
   ): Promise<SubmitClaimResponseDto> {
     return this.rewardClaimProxy.claimEvm(req.user.address, body);
+  }
+
+  /**
+   * GET /rewards/me/claims/evm-distributor
+   * Robinhood Chain claim via the L4VARewardsDistributor contract. Returns the
+   * arguments for `claim(account, cumulativeAmount, proof)`; the wallet sends the
+   * transaction. Replaces POST /rewards/me/claims/evm once the distributor is live.
+   */
+  @UseGuards(AuthGuard)
+  @Get('me/claims/evm-distributor')
+  async getEvmDistributorClaim(@Request() req: AuthRequest): Promise<EvmDistributorClaimDto> {
+    return this.rewardClaimProxy.getEvmDistributorClaim(req.user.address);
   }
 
   // ============================================================================

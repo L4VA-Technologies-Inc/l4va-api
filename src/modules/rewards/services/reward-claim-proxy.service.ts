@@ -36,6 +36,19 @@ import {
  * Used by l4va-api to fetch rewards data from the internal rewards service.
  * Acts as a thin adapter layer - l4va-rewards remains private/internal.
  */
+/** Arguments and amounts for claiming from `L4VARewardsDistributor` (amounts in token smallest unit). */
+export interface EvmDistributorClaimDto {
+  distributor: string;
+  chainId: number;
+  account: string;
+  tokenDecimals: number;
+  paused: boolean;
+  claimed: string;
+  claimable: string;
+  active: { root: string; cumulativeAmount: string; proof: string[] } | null;
+  pending: { root: string; cumulativeAmount: string; activatesAt: string } | null;
+}
+
 @Injectable()
 export class RewardClaimProxy {
   private readonly logger = new Logger(RewardClaimProxy.name);
@@ -349,6 +362,29 @@ export class RewardClaimProxy {
       };
     } catch (error: any) {
       throw this.mapRewardsClaimError(error, 'EVM claim failed');
+    }
+  }
+
+  /**
+   * Robinhood Chain claim via `L4VARewardsDistributor`: returns the arguments for
+   * `claim(account, cumulativeAmount, proof)`. The wallet (or a relayer) sends the
+   * transaction itself; the backend moves no funds. Amounts are in the token's
+   * smallest unit (`tokenDecimals`, 18 for L4VA on Robinhood).
+   */
+  async getEvmDistributorClaim(walletAddress: string): Promise<EvmDistributorClaimDto> {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      throw new BadRequestException('EVM claim is only available for Robinhood wallets');
+    }
+    try {
+      const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/evm-distributor/claims/${walletAddress}`;
+      const { data } = await firstValueFrom(
+        this.httpService.get<EvmDistributorClaimDto>(url, {
+          headers: { 'X-Internal-Service-Token': this.internalToken },
+        })
+      );
+      return data;
+    } catch (error: any) {
+      throw this.mapRewardsClaimError(error, 'Could not load EVM claim');
     }
   }
 
