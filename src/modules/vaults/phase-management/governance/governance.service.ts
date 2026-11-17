@@ -942,6 +942,12 @@ export class GovernanceService {
           break;
         }
 
+        // The checks below are Cardano-only (TapTools / VyFi / Blockfrost by policy unit).
+        // EVM vaults withdraw their own pool on close, so there is nothing to validate here.
+        if (vault.chain_type !== ChainType.cardano) {
+          break;
+        }
+
         // Check for unrecoverable LP pools before allowing termination
         if (!vault.script_hash || !vault.asset_vault_name) {
           this.logger.warn(

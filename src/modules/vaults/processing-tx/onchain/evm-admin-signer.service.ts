@@ -285,7 +285,11 @@ export class EvmAdminSigner {
    * Found → returned as broadcast. Not found → {@link TxBroadcastError}.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async signAndBroadcast(account: any, request: { to: Address; data?: Hex; value?: bigint }, label: string) {
+  private async signAndBroadcast(
+    account: any,
+    request: { to: Address; data?: Hex; value?: bigint },
+    label: string
+  ): Promise<Hex> {
     const prepared = await this.walletClient.prepareTransactionRequest({ account, chain: null, ...request });
     const serializedTransaction = (await account.signTransaction(prepared)) as Hex;
     const hash = keccak256(serializedTransaction);
