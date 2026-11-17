@@ -23,12 +23,13 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
+import { PriceService } from '@/modules/price/price.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetStatus, AssetType } from '@/types/asset.types';
 import { EvmDistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { IndexLegStatus, IndexRebalanceStatus } from '@/types/index-vault.types';
-import { RewardActivityType } from '@/types/rewards.types';
+import { RewardActivityType, RewardReversalType } from '@/types/rewards.types';
 import { ExpectedEventSpec, TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -93,7 +94,8 @@ export class EvmVaultEventReconciler {
     private readonly cycleCloseService: EvmCycleCloseService,
     private readonly transactionsService: TransactionsService,
     private readonly alerts: AlertsService,
-    private readonly rewardEventProducer: RewardEventProducer
+    private readonly rewardEventProducer: RewardEventProducer,
+    private readonly priceService: PriceService
   ) {}
 
   /** Process a batch of vault-emitted logs. Unknown events are ignored. */
@@ -453,21 +455,38 @@ export class EvmVaultEventReconciler {
       : inExpansion
         ? RewardActivityType.EXPANSION_ASSET_CONTRIBUTION
         : RewardActivityType.ASSET_CONTRIBUTION;
+    // One unit per contributed asset entry. An acquire is scored by its USD value (same scale as
+    // LP and Cardano acquires; l4va-rewards turns USD into points). Without a price the flag is
+    // left off and l4va-rewards counts one unit.
+    const acquireUsd = isAcquire ? await this.acquireUsdValue(BigInt(amount)) : null;
     await this.rewardEventProducer.indexEvent({
       walletAddress: wallet,
       vaultId: vault.id,
       eventType,
       txHash: log.txHash,
-      // One unit per contributed asset entry; an acquire counts its ETH in wei, as before.
-      units: isAcquire ? Number(amount) : 1,
+      units: acquireUsd ?? 1,
       metadata: {
         transaction_id: transaction.id,
         contribution_id: contributionId,
         kind,
         ...(isAcquire ? { amount } : {}),
+        ...(acquireUsd !== null ? { units_scale: 'usd' } : {}),
       },
       idempotencyKey: `${eventType}:${log.txHash}:${contributionId}`,
     });
+  }
+
+  /** USD value of `wei` at the current ETH/USD, or null without a price. */
+  private async acquireUsdValue(wei: bigint): Promise<number | null> {
+    try {
+      const ethUsd = await this.priceService.getEthPrice();
+      if (!(ethUsd > 0)) return null;
+      const usd = (Number(wei) / 1e18) * ethUsd;
+      return Number.isFinite(usd) && usd > 0 ? Math.round(usd * 1e6) / 1e6 : null;
+    } catch (err) {
+      this.logger.warn(`Acquire reward value: ETH price lookup failed (${(err as Error).message}); scoring 1 unit`);
+      return null;
+    }
   }
 
   /**
@@ -534,6 +553,7 @@ export class EvmVaultEventReconciler {
       );
     }
 
+    let cancelledNow = false;
     await this.dataSource.transaction(async manager => {
       const gate = await manager
         .createQueryBuilder()
@@ -549,6 +569,7 @@ export class EvmVaultEventReconciler {
         })
         .execute();
       if ((gate.affected ?? 0) === 0) return; // raced
+      cancelledNow = true;
 
       if (row.asset_id) {
         await manager.update(
@@ -573,6 +594,20 @@ export class EvmVaultEventReconciler {
         );
       }
     });
+
+    // Withdraw the reward the contribution earned. Without this a contribute → cancel loop keeps
+    // the reward while the funds come back, farming rewards for the price of gas.
+    if (cancelledNow) {
+      await this.rewardEventProducer.indexEvent({
+        walletAddress: row.contributor,
+        vaultId: vault.id,
+        eventType: RewardReversalType.CONTRIBUTION_CANCELLED,
+        txHash: log.txHash,
+        units: 0,
+        metadata: { contribution_id: contributionId },
+        idempotencyKey: `${RewardReversalType.CONTRIBUTION_CANCELLED}:${vault.id}:${contributionId}`,
+      });
+    }
 
     this.logger.log(
       `ContributionCancelled reconciled: contributionId=${contributionId} vault=${vault.id} ` +

@@ -3,12 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
-import { RewardActivityType } from '@/types/rewards.types';
+import { RewardActivityType, RewardReversalType } from '@/types/rewards.types';
 
 interface IndexEventInput {
   walletAddress: string;
   vaultId: string;
-  eventType: RewardActivityType;
+  eventType: RewardActivityType | RewardReversalType;
   txHash?: string;
   units?: number;
   metadata?: Record<string, any>;

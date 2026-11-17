@@ -16,6 +16,7 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { PriceService } from '@/modules/price/price.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
@@ -53,7 +54,8 @@ export class BlockchainWebhookService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>
+    private readonly transactionRepository: Repository<Transaction>,
+    private readonly priceService: PriceService
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -405,8 +407,12 @@ export class BlockchainWebhookService {
           },
         });
       } else if (transaction.type === TransactionType.acquire) {
-        // Acquire: use ADA amount as units (in lovelace)
-        const units = transaction.amount || 1;
+        // Acquire: scored by USD value (lovelace × ADA/USD), the same scale as LP and EVM acquires;
+        // l4va-rewards turns USD into points. Raw lovelace here made one acquire outweigh every
+        // other activity by orders of magnitude.
+        const adaUsd = await this.priceService.getAdaPrice().catch(() => 0);
+        const usd = adaUsd > 0 ? Math.round(((Number(transaction.amount) || 0) / 1e6) * adaUsd * 1e6) / 1e6 : 0;
+        const units = usd > 0 ? usd : 1;
 
         await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
@@ -417,6 +423,7 @@ export class BlockchainWebhookService {
           metadata: {
             transaction_id: transaction.id,
             amount: transaction.amount,
+            ...(usd > 0 ? { units_scale: 'usd' } : {}),
           },
         });
       }
