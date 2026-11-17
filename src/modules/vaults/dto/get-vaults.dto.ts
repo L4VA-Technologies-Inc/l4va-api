@@ -13,6 +13,8 @@ export enum VaultFilter {
   contribution = 'contribution',
   expansion = 'expansion',
   acquire = 'acquire',
+  /** Acquire tab: upcoming (published) + acquire + expansion phases. */
+  acquiring = 'acquiring',
   published = 'published',
   draft = 'draft',
   failed = 'failed',
