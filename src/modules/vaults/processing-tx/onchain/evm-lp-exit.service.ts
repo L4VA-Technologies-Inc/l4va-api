@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
-import { keccak256, parseAbiItem, toBytes, type Address, type Hex } from 'viem';
+import { keccak256, parseAbiItem, toBytes, toFunctionSelector, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
@@ -38,6 +38,17 @@ const ASSIGNED_EVENT = parseAbiItem(
 const LP_EXIT_LOCK_KEY = 'l4va:evm-lp-exit';
 /** Unassigned native below this is swap-leg dust (1 wei per exit), not worth a history scan. */
 const NATIVE_DUST_WEI = 1_000_000_000n;
+/** `PUSH4 <selector>` of `Vault.burnHeldVaultToken()` as it appears in a V12+ vault's dispatcher. */
+const BURN_HELD_VT_DISPATCH = `63${toFunctionSelector('burnHeldVaultToken()').slice(2)}`;
+
+/**
+ * Whether runtime `code` dispatches `burnHeldVaultToken()` (V12+ vaults). Solidity compares the
+ * call's selector against a `PUSH4 <selector>` for every external function; the selector has no
+ * leading zero byte, so it is never shortened to `PUSH3`.
+ */
+export function vaultCodeBurnsHeldVt(code: Hex | undefined): boolean {
+  return !!code && code.toLowerCase().includes(BURN_HELD_VT_DISPATCH);
+}
 
 /** The slice of `UniswapV4LiquidityAdapter` the exit reads and calls. */
 const V4_LP_ADAPTER_ABI = [
@@ -217,6 +228,8 @@ export interface LpExitResult {
   returnedAs: Address | null;
   vtReleased: bigint;
   vtRecipients: number;
+  /** VT burned by the vault itself (V12+), instead of being released to holders. */
+  vtBurned: bigint;
 }
 
 /**
@@ -224,13 +237,16 @@ export interface LpExitResult {
  *
  * Deployed vaults cannot book ETH sent to them, so the position is withdrawn into
  * `LiquidityExitAdapter` and pulled back through `Vault.swap`, the one path that credits
- * `_nativeCustody`. The VT that comes out of the pool is handed to holders pro rata, which
- * gives the same redemption shares as burning it. Then `redeem` pays holders the pool's ETH.
+ * `_nativeCustody`. The VT that comes out of the pool must stop diluting holders: a V12+ vault
+ * burns it, an older vault hands it to holders pro rata (same redemption shares as burning it).
+ * Then `redeem` pays holders the pool's ETH.
  *
  *   1. authority: lpAdapter.withdrawLiquidity(tokenId, exitAdapter)   — per live position
  *   2. owner:     exitAdapter.assign(vault, unassignedNative, vt, unassignedVt)
  *   3. authority: vault.swap(1 base unit of a custody ERC-20 → ETH, or 1 wei ETH → WETH)
- *   4. owner:     exitAdapter.releaseToken(vault, vt, holders, amounts)  — chunked
+ *   4. V12+:      owner     exitAdapter.releaseToken(vault, vt, [vault], [owed])
+ *                 authority vault.burnHeldVaultToken()
+ *      older:     owner     exitAdapter.releaseToken(vault, vt, holders, amounts)  — chunked
  *
  * Every step is re-derived from chain state, so a crash at any point resumes on the next call.
  * The vault must be Locked or Active (`Vault.swap` gate): run it before
@@ -242,6 +258,8 @@ export interface LpExitResult {
 @Injectable()
 export class EvmLpExitService {
   private readonly logger = new Logger(EvmLpExitService.name);
+  /** Vault code never changes, so burn support is cached per address for the process lifetime. */
+  private readonly burnSupport = new Map<string, boolean>();
 
   constructor(
     private readonly contractReader: EvmContractReader,
@@ -364,6 +382,7 @@ export class EvmLpExitService {
       returnedAs: null,
       vtReleased: 0n,
       vtRecipients: 0,
+      vtBurned: 0n,
     };
 
     const lpAdapters = await this.v4LpAdapters(vaultAddress);
@@ -511,13 +530,47 @@ export class EvmLpExitService {
       );
     }
 
-    // ---- 4. hand the pool's VT to holders ------------------------------------
+    // ---- 4. retire the pool's VT ---------------------------------------------
     const vtOwed = (await client.readContract({
       address: exitAdapter,
       abi: LP_EXIT_ADAPTER_ABI,
       functionName: 'tokenOwed',
       args: [vaultAddress, vt],
     })) as bigint;
+
+    if (await this.vaultBurnsHeldVt(vaultAddress)) {
+      // V12+: the pool's VT goes to the vault in one call and is burned there. No holder list,
+      // no batches. A run that stopped between the two calls just burns what the vault holds.
+      if (vtOwed > 0n) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          {
+            address: exitAdapter,
+            abi: LP_EXIT_ADAPTER_ABI,
+            functionName: 'releaseToken',
+            args: [vaultAddress, vt, [vaultAddress], [vtOwed]],
+          },
+          ['TokenReleased']
+        );
+        this.logger.log(`LP exit: moved ${vtOwed} pool VT onto ${vaultAddress} for burning tx=${tx.hash}`);
+      }
+      const held = (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [vaultAddress],
+      })) as bigint;
+      if (held > 0n) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: vaultAddress, abi: VAULT_ABI, functionName: 'burnHeldVaultToken', args: [] },
+          ['HeldVaultTokenBurned']
+        );
+        result.vtBurned = held;
+        this.logger.log(`LP exit: burned ${held} VT held by ${vaultAddress} tx=${tx.hash}`);
+      }
+      return result;
+    }
+
+    // Older vaults cannot burn: hand the pool's VT to holders pro rata.
     if (vtOwed > 0n) {
       const balances = await this.holderBalances(vault, vt);
       const excluded = new Set<string>(
@@ -560,6 +613,18 @@ export class EvmLpExitService {
     }
 
     return result;
+  }
+
+  /** True when the vault's code has `burnHeldVaultToken()` (V12+). Read from bytecode: no call, no side effects. */
+  async vaultBurnsHeldVt(vaultAddress: Address): Promise<boolean> {
+    const key = vaultAddress.toLowerCase();
+    const cached = this.burnSupport.get(key);
+    if (cached !== undefined) return cached;
+    const code = await this.contractReader.publicClient.getCode({ address: vaultAddress });
+    if (!code || code === '0x') throw new Error(`No contract code at vault ${vaultAddress}`);
+    const supported = vaultCodeBurnsHeldVt(code);
+    this.burnSupport.set(key, supported);
+    return supported;
   }
 
   /**

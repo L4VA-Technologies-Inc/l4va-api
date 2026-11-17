@@ -24,6 +24,7 @@ import {
   WalletVaultDetailsDto,
   WalletVaultTimelineDto,
 } from './dto/rewards.dto';
+import { CardanoSwapVerifier } from './services/cardano-swap-verifier.service';
 import { EvmSwapVerifier } from './services/evm-swap-verifier.service';
 import { RewardClaimProxy, type EvmDistributorClaimDto } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
@@ -51,6 +52,7 @@ export class RewardsController {
     private readonly rewardClaimProxy: RewardClaimProxy,
     private readonly walletLinkService: WalletLinkService,
     private readonly evmSwapVerifier: EvmSwapVerifier,
+    private readonly cardanoSwapVerifier: CardanoSwapVerifier,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
   ) {}
@@ -59,13 +61,10 @@ export class RewardsController {
    * POST /rewards/widget-swap
    * Called by the frontend DexHunter widget onSuccess callback.
    *
-   * Only tracks swaps involving Vault Tokens (VT):
-   * - Extracts policy IDs from token_id_in/token_id_out
-   * - Queries vaults table to match against vault policy_ids
-   * - If VT is involved, indexes event with vault_id (vault-scoped)
-   * - Non-VT swaps are acknowledged but not indexed
-   *
-   * This ensures swap rewards are vault-centric and tied to specific vaults.
+   * Only the tx hash is taken from the body. The swap is verified on-chain (Cardano: Blockfrost,
+   * Robinhood: RPC receipt): the caller must have made the transaction and it must move a vault
+   * token to or from the caller's wallet. The event is always credited to the authenticated user
+   * and scoped to that vault; anything else is acknowledged but not indexed.
    */
   @UseGuards(AuthGuard)
   @Post('widget-swap')
@@ -83,79 +82,36 @@ export class RewardsController {
       return this.trackEvmWidgetSwap(req, body);
     }
 
-    const swaps: WidgetSwapItemData[] = Array.isArray(body?.data)
-      ? body.data
-      : body?.tx_hash
-        ? [body as WidgetSwapItemData]
-        : [];
+    // Cardano (DexHunter widget): nothing in the body is trusted beyond the tx hash. The swap is
+    // verified on-chain (Blockfrost) and always credited to the caller — same rules as Robinhood.
+    const txHash = body?.tx_hash ?? (Array.isArray(body?.data) ? body.data.find(s => s?.tx_hash)?.tx_hash : undefined);
+    if (!txHash) return { indexed: false, reason: 'no transaction hash found' };
 
-    // Find successful swap: if tx_hash exists, the swap was successful
-    // Also normalize field names for DexHunter compatibility (token_in/out → token_id_in/out)
-    const successfulSwap = swaps.find(swap => {
-      return !!swap?.tx_hash;
-    });
+    const swap = await this.cardanoSwapVerifier.verify(txHash, req.user.sub);
+    if (swap.ok === false) return { indexed: false, reason: swap.reason };
 
-    if (!successfulSwap) {
-      return { indexed: false, reason: 'no transaction hash found' };
-    }
-
-    // Normalize DexHunter field names for backward compatibility
-    const normalizedSwap = {
-      ...successfulSwap,
-      token_id_in: successfulSwap.token_id_in || (successfulSwap as any).token_in || '',
-      token_id_out: successfulSwap.token_id_out || (successfulSwap as any).token_out || '',
-    };
-
-    // Extract policy IDs from token units (first 56 characters)
-    const extractPolicyId = (tokenUnit: string): string | null => {
-      if (!tokenUnit || tokenUnit === '' || tokenUnit.toLowerCase() === 'lovelace') {
-        return null; // ADA has no policy ID
-      }
-      // Cardano policy IDs are 56 characters (28 bytes hex-encoded)
-      return tokenUnit.length >= 56 ? tokenUnit.substring(0, 56) : tokenUnit;
-    };
-
-    const policyIdIn = extractPolicyId(normalizedSwap.token_id_in);
-    const policyIdOut = extractPolicyId(normalizedSwap.token_id_out);
-
-    // Check if either token is a VT (matches a vault's policy_id)
-    const policyIds = [policyIdIn, policyIdOut].filter(Boolean);
-    if (policyIds.length === 0) {
-      return { indexed: false, reason: 'no vault tokens involved (ADA-only swap)' };
-    }
-
-    const vault: Pick<Vault, 'id' | 'script_hash' | 'name'> = await this.vaultRepository.findOne({
-      where: policyIds.map(policyId => ({ script_hash: policyId })),
-      select: ['id', 'script_hash', 'name'],
-    });
-
-    if (!vault) {
-      return { indexed: false, reason: 'no vault tokens involved' };
-    }
-
-    // Index VT swap event (vault-scoped)
+    const item = Array.isArray(body?.data) ? body.data.find(s => s?.tx_hash === txHash) : (body as WidgetSwapItemData);
     const event = await this.rewardEventProducer.indexEvent({
-      walletAddress: normalizedSwap.user_address || req.user.address,
-      vaultId: vault.id,
+      walletAddress: req.user.address,
+      vaultId: swap.vault.id,
       eventType: RewardActivityType.WIDGET_SWAP,
-      txHash: normalizedSwap.tx_hash,
+      txHash: txHash.toLowerCase(),
       units: 1,
       metadata: {
-        dex: normalizedSwap.dex,
-        tokenIn: normalizedSwap.token_id_in,
-        tokenOut: normalizedSwap.token_id_out,
-        amountIn: normalizedSwap.amount_in,
-        expectedOutput: normalizedSwap.expected_output,
-        vaultName: vault.name,
-        vaultPolicyId: vault.script_hash,
+        dex: item?.dex,
+        side: swap.side,
+        vtUnit: swap.vtUnit,
+        vtDelta: swap.vtDelta,
+        vaultName: swap.vault.name,
+        vaultPolicyId: swap.vault.script_hash,
       },
     });
 
     return {
       indexed: !!event,
       eventId: event?.id,
-      vaultId: vault.id,
-      vaultName: vault.name,
+      vaultId: swap.vault.id,
+      vaultName: swap.vault.name,
     };
   }
 

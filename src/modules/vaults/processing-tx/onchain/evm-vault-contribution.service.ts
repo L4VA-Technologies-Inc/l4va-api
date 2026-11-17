@@ -122,6 +122,12 @@ const CONTRIBUTION_TYPES = {
   ],
 } as const;
 
+/** Minimum ETH per acquire. Override with EVM_MIN_ACQUIRE_WEI; matches the UI's 0.001 ETH by default. */
+export function evmMinAcquireWei(): bigint {
+  const raw = process.env.EVM_MIN_ACQUIRE_WEI?.trim();
+  return raw && /^\d+$/.test(raw) ? BigInt(raw) : 10n ** 15n;
+}
+
 /**
  * V3 EVM contribution flow.
  *
@@ -142,6 +148,7 @@ const CONTRIBUTION_TYPES = {
  *     rows from `metadata`, and let the Alchemy webhook handle final
  *     status confirmation.
  */
+
 @Injectable()
 export class EvmVaultContributionService {
   private readonly logger = new Logger(EvmVaultContributionService.name);
@@ -305,6 +312,19 @@ export class EvmVaultContributionService {
         approval: this.buildApproval(kind, assetAddress, amount, tokenId),
         value: kind === EvmAssetKind.Native ? amount.toString() : '0',
       });
+    }
+
+    // Minimum acquire, enforced where the signature is issued (the UI minimum alone is bypassable
+    // through the API or the contract). Without it a 1-wei acquire earns a reward event, and a
+    // contribute→cancel loop farms them for the price of gas.
+    if (transaction.type === TransactionType.acquire) {
+      const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
+      const minWei = evmMinAcquireWei();
+      if (nativeWei < minWei) {
+        throw new BadRequestException(
+          `Minimum acquire is ${formatEther(minWei)} ETH (requested ${formatEther(nativeWei)} ETH)`
+        );
+      }
     }
 
     // The signatures are what let assets in, so the asset caps are enforced here, counted from the

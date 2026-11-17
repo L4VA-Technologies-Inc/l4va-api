@@ -11,6 +11,14 @@ export enum RewardActivityType {
   GOVERNANCE_VOTE = 'governance_vote',
 }
 
+/**
+ * Reversal outbox events — not scored activities. `contribution_cancelled`: a contribution was
+ * cancelled (refunded) on-chain, so l4va-rewards withdraws the reward event it produced.
+ */
+export enum RewardReversalType {
+  CONTRIBUTION_CANCELLED = 'contribution_cancelled',
+}
+
 export enum EpochStatus {
   ACTIVE = 'active',
   PROCESSING = 'processing',

@@ -167,16 +167,18 @@ export class EvmTerminationService {
 
   /**
    * Return every v4 LP position the vault still has in a pool to its holders: the pool's ETH
-   * re-enters the vault's custody (so `redeem` pays it out) and the pool's VT is handed to
-   * holders pro rata. See {@link EvmLpExitService}. Refuses, rather than routing the proceeds
-   * anywhere else, when no LiquidityExitAdapter is configured for the vault's version.
+   * re-enters the vault's custody (so `redeem` pays it out) and the pool's VT is burned (V12+)
+   * or handed to holders pro rata (older vaults). See {@link EvmLpExitService}. Refuses, rather
+   * than routing the proceeds anywhere else, when no LiquidityExitAdapter is configured for the
+   * vault's version.
    */
   private async exitV4Liquidity(vault: Vault): Promise<void> {
     const r = await this.lpExit.exitIntoVault(vault);
-    if (r.withdrawnTokenIds.length || r.nativeReturned || r.vtReleased) {
+    if (r.withdrawnTokenIds.length || r.nativeReturned || r.vtReleased || r.vtBurned) {
       this.logger.log(
         `Termination LP exit: vault=${vault.contract_address} positions=${r.withdrawnTokenIds.join(',') || '-'} ` +
-          `native=${r.nativeReturned} as=${r.returnedAs ?? '-'} vt=${r.vtReleased} to ${r.vtRecipients} holders`
+          `native=${r.nativeReturned} as=${r.returnedAs ?? '-'} ` +
+          (r.vtBurned ? `vt burned=${r.vtBurned}` : `vt=${r.vtReleased} to ${r.vtRecipients} holders`)
       );
     }
   }
