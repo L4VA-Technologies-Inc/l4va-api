@@ -697,6 +697,14 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [],
   },
+  // V12+: burns the VT the vault itself holds (the VT a withdrawn LP position returned).
+  {
+    type: 'function',
+    stateMutability: 'nonpayable',
+    name: 'burnHeldVaultToken',
+    inputs: [],
+    outputs: [{ name: 'burned', type: 'uint256' }],
+  },
   {
     type: 'function',
     stateMutability: 'nonpayable',
@@ -1152,6 +1160,11 @@ export const VAULT_ABI = [
     type: 'event',
     name: 'TerminationPrepared',
     inputs: [],
+  },
+  {
+    type: 'event',
+    name: 'HeldVaultTokenBurned',
+    inputs: [{ name: 'amount', type: 'uint256', indexed: false }],
   },
   {
     type: 'event',
