@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import {
   createWalletClient,
   decodeEventLog,
+  encodeFunctionData,
+  keccak256,
   type Abi,
   type Address,
   type Hex,
@@ -10,6 +12,8 @@ import {
   type TransactionReceipt,
   BaseError,
   ContractFunctionRevertedError,
+  HttpRequestError,
+  TimeoutError,
   toFunctionSelector,
 } from 'viem';
 
@@ -58,6 +62,33 @@ export class VaultFrozenError extends Error {
   }
 }
 
+/**
+ * `eth_sendRawTransaction` failed and the transaction was not found on any node afterwards.
+ * Carries the hash the transaction would have had, so it can still be looked up later: a node
+ * that accepted it silently may yet broadcast it.
+ */
+export class TxBroadcastError extends Error {
+  constructor(
+    public readonly hash: Hex,
+    public readonly cause: unknown
+  ) {
+    super(
+      `Broadcast of tx ${hash} failed and the tx is not on the node: ${(cause as Error)?.message ?? String(cause)}`
+    );
+    this.name = 'TxBroadcastError';
+  }
+}
+
+/** How long to look for a transaction whose broadcast timed out or lost its connection. */
+const BROADCAST_RECHECK_MS = 30_000;
+const BROADCAST_RECHECK_INTERVAL_MS = 3_000;
+
+/** Timeouts and HTTP / network failures: the node may have accepted the tx before the call failed. */
+function isTransportFailure(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  return !!err.walk(e => e instanceof TimeoutError || e instanceof HttpRequestError);
+}
+
 const VAULT_FROZEN_SELECTOR = toFunctionSelector('VaultFrozen()');
 
 /** True when a viem error is the vault's `VaultFrozen()` revert, decoded by name or by selector. */
@@ -89,8 +120,13 @@ export interface AdminTxResult {
  * refundContributions.
  *
  * Enforces the pattern from the plan:
- *   simulate → broadcast → wait for receipt → require success →
+ *   simulate → sign → broadcast → wait for receipt → require success →
  *     decode expected events → return {hash, receipt, decodedEvents}.
+ *
+ * The transaction is signed locally (KMS) and its hash is known before it is sent. A
+ * broadcast that times out or loses its connection is therefore not treated as a failure
+ * outright: the hash is looked up on chain first, and if the node took the transaction the
+ * flow carries on as if the call had returned.
  *
  * DB mutations happen in the caller inside a single transaction using the
  * returned decoded events. The webhook path may later re-process the same
@@ -165,16 +201,9 @@ export class EvmAdminSigner {
       throw err;
     }
 
-    // 2. Broadcast.
-    const hash = (await this.walletClient.writeContract({
-      account,
-      chain: null,
-      address,
-      abi,
-      functionName,
-      args,
-      value,
-    })) as Hex;
+    // 2. Sign and broadcast.
+    const data = encodeFunctionData({ abi, functionName, args } as Parameters<typeof encodeFunctionData>[0]);
+    const hash = await this.signAndBroadcast(account, { to: address, data, value }, functionName);
 
     this.logger.log(`Broadcast ${functionName} tx=${hash}`);
 
@@ -224,12 +253,7 @@ export class EvmAdminSigner {
   ): Promise<{ hash: Hex; receipt: TransactionReceipt }> {
     const timeoutMs = opts?.timeoutMs ?? 120_000;
 
-    const hash = (await this.walletClient.sendTransaction({
-      account: await this.signers.admin(),
-      chain: null,
-      to,
-      value,
-    })) as Hex;
+    const hash = await this.signAndBroadcast(await this.signers.admin(), { to, value }, 'native transfer');
 
     this.logger.log(`Broadcast native transfer ${value} wei to ${to} tx=${hash}`);
 
@@ -249,6 +273,52 @@ export class EvmAdminSigner {
     }
 
     return { hash, receipt };
+  }
+
+  /**
+   * Prepare (nonce, gas, fees from the primary RPC), sign locally and send. The hash is the
+   * keccak of the signed bytes, so it is known whatever happens to the send call.
+   *
+   * If `eth_sendRawTransaction` fails, the hash is looked up before giving up: a timeout or a
+   * dropped connection is retried as a lookup for up to {@link BROADCAST_RECHECK_MS}, any other
+   * error once (an "already known" / "nonce too low" can mean these very bytes already landed).
+   * Found → returned as broadcast. Not found → {@link TxBroadcastError}.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async signAndBroadcast(account: any, request: { to: Address; data?: Hex; value?: bigint }, label: string) {
+    const prepared = await this.walletClient.prepareTransactionRequest({ account, chain: null, ...request });
+    const serializedTransaction = (await account.signTransaction(prepared)) as Hex;
+    const hash = keccak256(serializedTransaction);
+
+    try {
+      await this.walletClient.sendRawTransaction({ serializedTransaction });
+      return hash;
+    } catch (err) {
+      const transport = isTransportFailure(err);
+      this.logger.warn(
+        `Broadcast of ${label} tx=${hash} nonce=${prepared.nonce} failed (${(err as Error).message.split('\n')[0]}); ` +
+          (transport ? `looking it up for ${BROADCAST_RECHECK_MS / 1000}s` : 'checking whether it landed')
+      );
+      if (await this.isTxKnown(hash, transport ? BROADCAST_RECHECK_MS : 0)) {
+        this.logger.warn(`Tx ${hash} (${label}) reached the node despite the failed broadcast call; continuing`);
+        return hash;
+      }
+      throw new TxBroadcastError(hash, err);
+    }
+  }
+
+  /** True once any configured node knows `hash` (pending or mined); polls until `waitMs` is spent. */
+  private async isTxKnown(hash: Hex, waitMs: number): Promise<boolean> {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      try {
+        if (await this.publicClient.getTransaction({ hash })) return true;
+      } catch {
+        // not found (or the read failed): keep looking until the deadline
+      }
+      if (Date.now() >= deadline) return false;
+      await new Promise(resolve => setTimeout(resolve, BROADCAST_RECHECK_INTERVAL_MS));
+    }
   }
 
   /** Public helper for reconciliation paths that only have a hash. */

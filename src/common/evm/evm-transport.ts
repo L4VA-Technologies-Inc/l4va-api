@@ -80,8 +80,14 @@ export function resolveEvmRpcUrls(config: ConfigLike, primary?: string | null): 
  */
 export function buildEvmWriteTransport(rpcUrl: string | null | undefined): Transport {
   if (!rpcUrl?.trim()) throw new Error('EVM_RPC_URL is not configured');
-  return http(normalize(rpcUrl));
+  // viem's default 10s is too short for eth_sendRawTransaction on a busy public node (stage hit it
+  // twice in a row on 2026-11-17). EvmAdminSigner signs locally and looks the hash up if a send
+  // still fails, so a slow node costs time, not a lost or duplicated tx.
+  return http(normalize(rpcUrl), { timeout: EVM_WRITE_TIMEOUT_MS });
 }
+
+/** Per-request timeout of the write transport (sending, nonce and fee reads for a tx). */
+export const EVM_WRITE_TIMEOUT_MS = 60_000;
 
 /**
  * viem transport over every configured RPC: a single `http` when only one URL exists, otherwise
