@@ -72,7 +72,23 @@ export class EvmMarketStatsService {
     await this.update(false);
   }
 
+  /**
+   * The 1-minute and 10-minute crons fire together on every :x0 minute; running both at once
+   * inserted the same market row twice (UQ_markets_contract_address). One pass at a time.
+   */
+  private running = false;
+
   private async update(onlyWithoutMarket: boolean): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      await this.runUpdate(onlyWithoutMarket);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async runUpdate(onlyWithoutMarket: boolean): Promise<void> {
     const query = this.vaultRepository
       .createQueryBuilder('v')
       .select(['v.id', 'v.name', 'v.ft_token_supply', 'v.total_assets_cost_ada'])
@@ -127,10 +143,16 @@ export class EvmMarketStatsService {
 
   private async upsertMarket(vaultId: string, data: Partial<Market>): Promise<void> {
     const existing = await this.marketRepository.findOne({ where: { vault_id: vaultId } });
-    await this.marketRepository.save(
-      existing
-        ? Object.assign(existing, data)
-        : this.marketRepository.create({ ...data, vault_id: vaultId, type: MarketType.vault_token })
-    );
+    if (existing) {
+      await this.marketRepository.save(Object.assign(existing, data));
+      return;
+    }
+    try {
+      await this.marketRepository.insert({ ...data, vault_id: vaultId, type: MarketType.vault_token });
+    } catch (error) {
+      // Another instance inserted the row between the read and the insert: update it instead.
+      if ((error as { code?: string }).code !== '23505') throw error;
+      await this.marketRepository.update({ vault_id: vaultId }, data);
+    }
   }
 }

@@ -2105,6 +2105,16 @@ export class VaultsService {
         case VaultFilter.acquire:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
           break;
+        case VaultFilter.acquiring:
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [
+              VaultStatus.published,
+              VaultStatus.acquire,
+              VaultStatus.expansion,
+              VaultStatus.acquire_expansion,
+            ],
+          });
+          break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
