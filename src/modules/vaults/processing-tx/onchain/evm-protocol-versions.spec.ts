@@ -17,6 +17,7 @@ describe('evm protocol versions', () => {
     expect(findEvmProtocolVersionByFactory(4663, '0x7Eb5c9F3FE05C8e924BC4d1792D8C0Eb07fccC05')?.version).toBe(8);
     expect(findEvmProtocolVersionByFactory(4663, '0xceC9F4A79e3FF744aF845b6379561c570dc54CCf')?.version).toBe(10);
     expect(findEvmProtocolVersionByFactory(4663, '0xfB79Bf6a61950a04C64F1AD6Ef3b1809A21c2598')?.version).toBe(11);
+    expect(findEvmProtocolVersionByFactory(4663, '0x2d100A23459df7AdEa1Cd369374B48Bda2cC1567')?.version).toBe(12);
     expect(findEvmProtocolVersionByFactory(46630, '0x6272107267D0d65031c0754cE7c61a10CC744771')?.version).toBe(10);
     expect(findEvmProtocolVersionByFactory(46630, '0x9795635535b11e09b561a67b87A175e516dfc680')?.version).toBe(11);
     expect(findEvmProtocolVersionByFactory(46630, '0xf933f971dd670648162b393f02f718e49c788ebb')).toBeNull();

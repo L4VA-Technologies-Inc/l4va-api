@@ -117,6 +117,26 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // Safe 1.5.0, 2-of-3; also the pauser.
       guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
     },
+    {
+      // PRODUCTION stack, fully separate from stage (vault-contract-solidity
+      // deployments/robinhood-mainnet-v12.json, script/deploy-mainnet-v12.sh, 2026-11-18).
+      // Vault code: guardian freeze + closeAcquireWindow + burnHeldVaultToken.
+      version: 12,
+      factory: '0x2d100A23459df7AdEa1Cd369374B48Bda2cC1567',
+      deployBlock: 117391239n,
+      adapterRegistry: '0x6Ba8C1628EF52665c5B275DB319a4F8Beb624f49',
+      protocolFeeConfig: '0x671F533142149d4e94fD1F850751D7AccfC268E7',
+      batchDeployer: '0x57d612979A18C33CBd9F62cfeefA21032222635C',
+      swapAdapter: '0x6269edF9d6FEB037B75036d9b28F7D26D84b08C7',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0x7A6DC9DF3230c7A00E02fc1801C8864e129E8E84',
+      // Production's own LiquidityExitAdapter (owner = prod admin), approved only in this registry.
+      lpExitAdapter: '0x4BD76625C80216A222b6C6c802Ad6db6D2d7A343',
+      feeConverter: '0x76301E2295928128DC22d57F3f162a9bd9b2bc43',
+      feeController: '0x1ccc58E15809d2819848D68A4f660087FE1B1C5e',
+      // L4VA Safe; also the pauser.
+      guardian: '0x4733002467440E5881b84D19aC31e5c546Be9945',
+    },
   ],
   46630: [
     {
