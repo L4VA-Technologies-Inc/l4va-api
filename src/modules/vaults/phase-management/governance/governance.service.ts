@@ -665,8 +665,13 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
-    const minVotingDuration = this.systemSettingsService.minVotingDuration;
-    const maxVotingDuration = this.systemSettingsService.maxVotingDuration;
+    const isEvmVote = vault.chain_type === ChainType.robinhood;
+    const minVotingDuration = isEvmVote
+      ? this.systemSettingsService.minVotingDurationEvm
+      : this.systemSettingsService.minVotingDuration;
+    const maxVotingDuration = isEvmVote
+      ? this.systemSettingsService.maxVotingDurationEvm
+      : this.systemSettingsService.maxVotingDuration;
 
     if (createProposalReq.duration < minVotingDuration) {
       throw new BadRequestException(
@@ -2068,9 +2073,22 @@ export class GovernanceService {
           }
           // Market price is not applied when an EVM acquire-expansion cycle is allocated: the
           // buyers would receive the vault's full VT supply again. Limit price only until it is.
+          const maxEvmExpansionDuration = this.systemSettingsService.maxAcquireExpansionDurationEvm;
+          if (acquireExpansionDuration > maxEvmExpansionDuration) {
+            throw new BadRequestException(
+              `Acquire expansion duration cannot exceed ${maxEvmExpansionDuration / 86400000} days on Robinhood vaults.`
+            );
+          }
+          // acquireExpansionMaxAda is stored in micro-units (ETH * 1e6) on Robinhood as well.
+          const maxEvmExpansionEth = this.systemSettingsService.maxAcquireExpansionEth;
+          if (!acquireExpansionNoMax && acquireExpansionMaxAda > maxEvmExpansionEth * 1_000_000) {
+            throw new BadRequestException(
+              `Maximum ETH for acquire expansion cannot exceed ${maxEvmExpansionEth.toLocaleString()} ETH.`
+            );
+          }
           if (acquireExpansionPriceType === 'market') {
             throw new BadRequestException(
-              'Market price is not available for acquire expansion on Robinhood vaults yet. Use a limit price.'
+              'Market price is not available for acquire expansion on Robinhood vaults yet. Use a fixed price.'
             );
           }
           if (acquireExpansionPriceType === 'limit') {

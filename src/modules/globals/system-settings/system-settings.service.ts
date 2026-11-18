@@ -182,7 +182,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   evm_termination_pool_data_max_age_seconds: 300,
   // Mirrors the contract's MIN_SWEEP_DELAY floor; the contract rejects less.
   evm_termination_sweep_delay_days: 90,
-  index_rebalance_min_cadence_days: 7,
+  index_rebalance_min_cadence_days: 1,
   index_rebalance_default_cadence_days: 30,
   index_rebalance_jitter_hours: 6,
   evm_termination_allow_waivers: false,
@@ -456,6 +456,24 @@ export class SystemSettingsService implements OnModuleInit {
 
   get maxVotingDuration(): number {
     return this.settings.max_voting_duration || 259200000; // 3 days default
+  }
+
+  /** Robinhood voting window: 48 hours (5 min on testnet) to 14 days. */
+  get minVotingDurationEvm(): number {
+    return this.isMainnet ? 172800000 : 300000;
+  }
+
+  get maxVotingDurationEvm(): number {
+    return 1209600000; // 14 days
+  }
+
+  /** Robinhood acquire expansion: same window as the acquire phase, capped at 100,000 ETH. */
+  get maxAcquireExpansionDurationEvm(): number {
+    return this.maxAcquireWindowDuration;
+  }
+
+  get maxAcquireExpansionEth(): number {
+    return 100000;
   }
 
   get minContributionDuration(): number {
