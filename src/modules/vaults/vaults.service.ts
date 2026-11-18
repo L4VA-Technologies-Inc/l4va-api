@@ -173,8 +173,8 @@ function normalizeMinAcquireThresholdForDb(
     if (value < 0.01) {
       throw new BadRequestException('For Robinhood vaults, minAcquireThreshold must be at least 0.01 ETH');
     }
-    if (value > 10000) {
-      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold cannot exceed 10000 ETH');
+    if (value > 100000) {
+      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold cannot exceed 100,000 ETH');
     }
     try {
       return parseEther(String(value)).toString();
@@ -594,6 +594,14 @@ export class VaultsService {
       // 0.1% proposal threshold is the Robinhood launch default; Cardano governance keeps its 0.5% floor.
       if (data.chainType !== ChainType.robinhood && Number(data.creationThreshold) < 0.5) {
         throw new BadRequestException('Proposal threshold must be at least 0.5% on Cardano');
+      }
+
+      // Robinhood launch range for the LP contribution.
+      if (data.chainType === ChainType.robinhood) {
+        const lp = Number(data.liquidityPoolContribution);
+        if (!Number.isFinite(lp) || lp < 5 || lp > 20) {
+          throw new BadRequestException('Liquidity pool contribution must be between 5% and 20% on Robinhood');
+        }
       }
 
       if (Number(data.tokensForAcquires) !== 0) {
