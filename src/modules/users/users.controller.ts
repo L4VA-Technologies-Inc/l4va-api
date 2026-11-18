@@ -27,6 +27,7 @@ import { mbMultiplication } from '../google_cloud/google_bucket/bucket.controlle
 
 import { GetPublicProfileParamDto } from './dto/get-public-profile-param.dto';
 import { LinkedWalletRes } from './dto/linked-wallet.res';
+import { OwnProfileRes } from './dto/own-profile.res';
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UploadImageRes } from './dto/upload-image.res';
@@ -106,7 +107,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Get('profile')
-  async getProfile(@Request() req: AuthRequest): Promise<PublicProfileRes> {
+  async getProfile(@Request() req: AuthRequest): Promise<OwnProfileRes> {
     const userId = req.user.sub;
     return this.usersService.getProfile(userId);
   }

@@ -7,6 +7,7 @@ import { transformImageToUrl } from '../../helpers';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { PriceService } from '../price/price.service';
 
+import { OwnProfileRes } from './dto/own-profile.res';
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ImageType } from './dto/upload-profile-image.dto';
@@ -120,7 +121,7 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  async getProfile(userId: string): Promise<PublicProfileRes> {
+  async getProfile(userId: string): Promise<OwnProfileRes> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links'],
@@ -198,7 +199,7 @@ export class UsersService {
 
     plainedUsers.gains = gainsPercentage;
 
-    return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
+    return plainToInstance(OwnProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
