@@ -215,7 +215,24 @@ export class SupportService implements OnModuleInit {
 
   private async markClosed(ticket: SupportTicket, notice: string): Promise<void> {
     const closedAt = new Date();
-    await this.ticketRepository.update(ticket.id, { status: SupportTicketStatus.closed, closed_at: closedAt });
+    const { discord_webhook_id: webhookId } = await this.ticketRepository
+      .createQueryBuilder('ticket')
+      .select('ticket.id')
+      .addSelect('ticket.discord_webhook_id')
+      .where('ticket.id = :id', { id: ticket.id })
+      .getOneOrFail();
+    await this.ticketRepository.update(ticket.id, {
+      status: SupportTicketStatus.closed,
+      closed_at: closedAt,
+      discord_webhook_id: null,
+      discord_webhook_token: null,
+    });
+    if (webhookId) {
+      // Best effort: the token is already gone from the DB; a deleted channel takes its webhook with it.
+      await this.discord
+        .deleteWebhook(webhookId)
+        .catch(error => this.logger.warn(`Webhook delete for ticket ${ticket.number} failed: ${error.message}`));
+    }
     await this.messageRepository.save(
       this.messageRepository.create({ ticket_id: ticket.id, author: SupportMessageAuthor.system, content: notice })
     );
