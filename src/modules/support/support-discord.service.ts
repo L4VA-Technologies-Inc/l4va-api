@@ -220,6 +220,12 @@ export class SupportDiscordService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Revokes a closed ticket's webhook so its stored token can no longer post into the channel. */
+  async deleteWebhook(webhookId: string): Promise<void> {
+    const client = await this.readyClient();
+    await client.deleteWebhook(webhookId, { reason: 'Support ticket closed' });
+  }
+
   async postNotice(channelId: string, text: string): Promise<void> {
     const client = await this.readyClient();
     const channel = await client.channels.fetch(channelId).catch(() => null);
