@@ -27,9 +27,10 @@ export interface EvmProtocolVersion {
   swapAdapterMultiPath?: boolean;
   lpAdapter: Address | null;
   /**
-   * `LiquidityExitAdapter` approved (tag "swap") in this version's registry. It returns withdrawn
-   * v4 LP proceeds into the vault's custody through `Vault.swap`, so holders redeem them. One
-   * deployment serves every version; it must be approved in each registry. Unset until deployed.
+   * V1 `LiquidityExitAdapter` approved (tag "swap") in this version's registry. It returns withdrawn
+   * v4 LP proceeds of V1 LP adapters into the vault's custody through `Vault.swap`. A V2 LP adapter
+   * (`UniswapV4LiquidityAdapterV2`) names its own `LiquidityExitAdapterV2` on-chain and does not use
+   * this field; `EvmLpExitService` tells the two apart per position. Unset until deployed.
    */
   lpExitAdapter?: Address | null;
   feeConverter: Address;

@@ -5,6 +5,7 @@ import { erc20Abi, zeroAddress, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { assertSwapAllowed } from './evm-swap-guard';
 import { VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
@@ -113,6 +114,21 @@ export class EvmSwapService {
   ): Promise<SwapResult> {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
+
+    // A guarded adapter (pool allowlist + daily cap) would revert this swap: refuse it before
+    // anything is signed. Nothing reached the chain, so callers may re-plan at once.
+    try {
+      await assertSwapAllowed(this.contractReader.publicClient, {
+        vault: vaultAddress,
+        adapter: params.adapter,
+        assetIn: params.assetIn,
+        amountIn: params.amountIn,
+        route: params.route,
+      });
+    } catch (err) {
+      this.logger.warn(`Swap refused for vault ${vaultAddress}: ${(err as Error).message}`);
+      throw new SwapNotBroadcastError(err);
+    }
 
     const adminTx = await this.transactionsRepository.save(
       this.transactionsRepository.create({

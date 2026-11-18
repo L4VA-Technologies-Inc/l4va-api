@@ -26,6 +26,7 @@ import {
   resolveVaultSwapAdapter,
   vaultSwapAdapterIsMultiPath,
 } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
+import { disallowedPool } from '@/modules/vaults/processing-tx/onchain/evm-swap-guard';
 import { EvmSwapService, type SwapParams } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
 import { UNISWAP_V3_ROBINHOOD } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 
@@ -508,6 +509,17 @@ export class IndexSwapRouteService {
 
     // The testnet fixed-rate adapter ignores routes; there is nothing more to prove.
     if (this.kind !== SwapAdapterKind.universalRouter) return { status: 'ok', buy, sell, checkedAt };
+
+    // A guarded adapter only trades through pools the Safe allowlisted.
+    const client = this.contractReader.publicClient;
+    const [buyPool, sellPool] = await Promise.all([
+      disallowedPool(client, adapter, buyQuote.route),
+      disallowedPool(client, adapter, sellQuote.route),
+    ]);
+    if (buyPool || sellPool) {
+      const reason = `the Uniswap route uses a pool not yet approved for vault trading (${buyPool ?? sellPool})`;
+      return verdict('no_route', reason, buy, { status: 'no_route', reason, checkedAt });
+    }
 
     const trip = await this.simulateRoundTrip(adapter, asset, this.probeNative, buyQuote.route, sellQuote.route);
     if (trip.kind === 'unavailable') return verdict('unavailable', trip.reason, buy, sell);
