@@ -166,6 +166,27 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // L4VA Safe; also the pauser.
       guardian: '0x4733002467440E5881b84D19aC31e5c546Be9945',
     },
+    {
+      // V13 STAGE (vault-contract-solidity feat/v13, script/deploy-stage-v13.sh, 2026-11-19): own
+      // stack, stage keys. Registry + ProtocolFeeConfig roles are on the stage Safe, not the
+      // backend key (audit F-08/F-09). Guarded swap adapter (pool allowlist + daily cap, owner =
+      // Safe); the stack's unguarded swap adapter and V1 LP adapter are revoked. Delays 24 h.
+      version: 13,
+      stack: 'stage',
+      codeVersion: 13,
+      factory: '0x6d54065a3aC9C0964a92101F7C07453C952eDcD6',
+      deployBlock: 118439792n,
+      adapterRegistry: '0x898902514c2f6F72106Dbec5E633453e2E9f6c84',
+      protocolFeeConfig: '0xc918dFC5e642A95Bc1a6066867dCEEe0d8fB6314',
+      batchDeployer: '0x91977Fe65faAFAf8b7Ccbfa41468899bA17821bD',
+      swapAdapter: '0xA5eCf4BAE51882337e929F0309BD09c50F96E77E',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0xB791F82Dc709ee65A0a319E197457dF1F887322c',
+      lpExitAdapter: '0xB292b476049584a00880d20E444ffe374953D411',
+      feeConverter: '0xc32a0b4eF83a67148D100DcE93425afdc5a72383',
+      feeController: '0xaeb6B894Af6722020052cCaD25DBd81E77d69443',
+      guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
+    },
   ],
   46630: [
     {
@@ -248,6 +269,26 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       lpAdapter: '0xfa64379745F6aACE931AA08103a155F48E5b7dAA',
       feeConverter: '0x3c2726d1c42aF641171b4454492F42985EcAaAF7',
       feeController: '0x606E8b94f1cEF179661f28D7c220ce03A724fCe9',
+      guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
+    },
+    {
+      // V13 with the audit fixes (2026-11-19, script/deploy-testnet-v13.sh): FixedPrice removed,
+      // FromSale on the Cardano math with a delayed, cancellable rate. Replaces id 13 for new
+      // vaults (13 stays for vaults created on it). No testnet Safe: registry/fee roles stay on
+      // the admin key here. Fixed-rate testnet swap adapter; delays 1 h; verifier = Dave.
+      version: 14,
+      stack: 'testnet',
+      codeVersion: 13,
+      factory: '0x26A696583E461382723ABe5Ec47a999882d0Ce53',
+      deployBlock: 155562270n,
+      adapterRegistry: '0x9e47184b2C83fB4B285301B990330D0c91c1297b',
+      protocolFeeConfig: '0xd01ca9faC35F7E05Ea3a442d37797624B486292D',
+      batchDeployer: '0x199C2A70762Bd5513313deEdEbAaD1A9dC3C3eE4',
+      swapAdapter: '0x2f48C9b2C0b9ED5158fd70985DA9e4588A884796',
+      lpAdapter: '0x7315114E4F7611b038198B38b0E21dd7e5260033',
+      lpExitAdapter: '0x9d22025DF262F6cd123BaeaD420D4654fA2D68Be',
+      feeConverter: '0xc2c5B0264D8B9f67c56174366465331E56932646',
+      feeController: '0x5edf35Bc35149bDBa1D073CC42f844b25E5A9d97',
       guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
     },
   ],
