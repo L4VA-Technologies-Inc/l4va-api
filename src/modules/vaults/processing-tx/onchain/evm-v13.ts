@@ -375,3 +375,90 @@ export const toV13CycleView = (r: readonly unknown[]): V13CycleView => ({
   rootCancelled: r[6] as boolean,
   rootApproved: r[7] as boolean,
 });
+
+// -----------------------------------------------------------------------------
+// Status reads for the API (cached: vault and proposal pages poll)
+// -----------------------------------------------------------------------------
+
+type V13ReadClient = { readContract: (args: any) => Promise<unknown> };
+
+const STATUS_TTL_MS = 30_000;
+const statusCache = new Map<string, { at: number; value: unknown }>();
+
+async function cachedRead<T>(key: string, read: () => Promise<T>): Promise<T> {
+  const hit = statusCache.get(key);
+  if (hit && Date.now() - hit.at < STATUS_TTL_MS) return hit.value as T;
+  const value = await read();
+  statusCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** Where a closed V13 cycle's allocation root stands, for the vault page. */
+export interface V13RootStatus {
+  cycleId: string;
+  /** Unix seconds; claims of the root's leaves open then (0 = the cycle is not closed). */
+  rootActivatesAt: number;
+  rootApproved: boolean;
+  rootCancelled: boolean;
+  /** Root closed, not cancelled, not open yet. */
+  rootPending: boolean;
+}
+
+export async function readV13RootStatus(
+  client: V13ReadClient,
+  vaultAddress: string,
+  cycleId: bigint
+): Promise<V13RootStatus> {
+  return cachedRead(`root:${vaultAddress.toLowerCase()}:${cycleId}`, async () => {
+    const view = toV13CycleView(
+      (await client.readContract({
+        address: vaultAddress,
+        abi: VAULT_V13_ABI,
+        functionName: 'cycleV13',
+        args: [cycleId],
+      })) as readonly unknown[]
+    );
+    const activatesAt = Number(view.rootActivatesAt);
+    return {
+      cycleId: cycleId.toString(),
+      rootActivatesAt: activatesAt,
+      rootApproved: view.rootApproved,
+      rootCancelled: view.rootCancelled,
+      rootPending: activatesAt > 0 && !view.rootCancelled && !v13RootOpen(view),
+    };
+  });
+}
+
+/** A V13 distribution's timing, for the proposal page. */
+export interface V13DistributionTiming {
+  /** Unix seconds: claims open (earlier if approved). */
+  activatesAt: number;
+  /** Unix seconds: claims close. */
+  deadline: number;
+  approved: boolean;
+  cancelled: boolean;
+  pending: boolean;
+}
+
+export async function readV13DistributionTiming(
+  client: V13ReadClient,
+  vaultAddress: string,
+  distributionId: bigint
+): Promise<V13DistributionTiming> {
+  return cachedRead(`dist:${vaultAddress.toLowerCase()}:${distributionId}`, async () => {
+    const d = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_V13_ABI,
+      functionName: 'getDistribution',
+      args: [distributionId],
+    })) as { activatesAt: bigint; deadline: bigint; approved: boolean; cancelled: boolean };
+    const activatesAt = Number(d.activatesAt);
+    return {
+      activatesAt,
+      deadline: Number(d.deadline),
+      approved: d.approved,
+      cancelled: d.cancelled,
+      pending: !d.cancelled && !d.approved && activatesAt * 1000 > Date.now(),
+    };
+  });
+}

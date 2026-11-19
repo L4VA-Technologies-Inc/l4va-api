@@ -60,6 +60,7 @@ import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.se
 import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
 import { buildOperationId } from './processing-tx/onchain/evm-position.service';
 import { findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
+import { readV13RootStatus, vaultIsV13, type V13RootStatus } from './processing-tx/onchain/evm-v13';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
@@ -413,6 +414,8 @@ export class VaultsService {
     deadline?: number;
     evmVaultConfig?: Record<string, unknown>;
     evmFactoryAddress?: string;
+    /** 13 when `evmVaultConfig` must be sent with the V13 factory ABI. */
+    evmConfigVersion?: number;
   }> {
     let newVault: Vault | null = null;
     try {
@@ -866,6 +869,7 @@ export class VaultsService {
           deadline: payload.deadline,
           evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
           evmFactoryAddress: payload.factoryAddress,
+          ...(payload.configVersion ? { evmConfigVersion: payload.configVersion } : {}),
         };
       }
 
@@ -1589,7 +1593,21 @@ export class VaultsService {
       projectedFdvAda = fdv;
     }
 
+    // V13: contributors' VT from the latest closed cycle unlocks after the allocation delay.
+    let evmV13: V13RootStatus | undefined;
+    if (vault.chain_type === ChainType.robinhood && vaultIsV13(vault) && vault.contract_address) {
+      evmV13 = await readV13RootStatus(
+        this.evmContractReader.publicClient,
+        vault.contract_address,
+        BigInt(vault.evm_current_cycle_id ?? 1)
+      ).catch(err => {
+        this.logger.warn(`V13 root status for vault ${vault.id}: ${(err as Error).message}`);
+        return undefined;
+      });
+    }
+
     const additionalData = {
+      evmV13,
       maxContributeAssets: Number(vault.max_contribute_assets),
       requireReservedCostUsd,
       requireReservedCostAda,
