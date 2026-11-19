@@ -119,11 +119,12 @@ const V13_ENTRIES = [
           u256('released'),
           { name: 'openedAt', type: 'uint64' },
           { name: 'deadline', type: 'uint64' },
-          { name: 'swept', type: 'bool' },
+          // V13 inserted these before `swept` (order as in Vault.DistributionData).
           { name: 'activatesAt', type: 'uint64' },
           { name: 'cancelled', type: 'bool' },
           { name: 'approved', type: 'bool' },
           addr('lpSource'),
+          { name: 'swept', type: 'bool' },
         ],
       },
     ]

@@ -192,7 +192,7 @@ export class EvmDistributionService {
         `Proposal ${proposal.id}: execution key ${executionKey} already opened distribution ${existingId} on-chain. ` +
           `Backfilling from chain instead of opening a second distribution.`
       );
-      const onchain = await this.readDistribution(vaultAddress, existingId);
+      const onchain = await this.readDistribution(vault, existingId);
       return {
         distributionId: String(existingId),
         txHash: null,
@@ -365,7 +365,7 @@ export class EvmDistributionService {
         this.buildExecutionKey(proposal.vaultId, proposal.id)
       );
       if (id === 0n) return 0; // not opened (yet)
-      const onchain = await this.readDistribution(vaultAddress, id);
+      const onchain = await this.readDistribution(vault, id);
       dist = {
         distributionId: String(id),
         asset: onchain.asset,
@@ -532,7 +532,7 @@ export class EvmDistributionService {
         .where('p.vault_id = :vaultId', { vaultId })
         .andWhere(`p.metadata->'evmDistribution'->>'distributionId' = :id`, { id: distributionId })
         .getOne();
-      const onchain = await this.readDistribution(vaultAddress, id);
+      const onchain = await this.readDistribution(vault, id);
       const snapshot = proposal ? await this.snapshotForTimepoint(proposal, BigInt(onchain.timepoint)) : null;
       const tree = proposal && snapshot ? await this.treeForDistribution(proposal, vaultAddress, id, snapshot) : null;
       const entry = tree?.entries.get(holder.toLowerCase());
@@ -660,10 +660,11 @@ export class EvmDistributionService {
     })) as bigint;
   }
 
-  private async readDistribution(vaultAddress: Address, distributionId: bigint) {
+  private async readDistribution(vault: Vault, distributionId: bigint) {
     return (await this.contractReader.publicClient.readContract({
-      address: vaultAddress,
-      abi: VAULT_ABI,
+      address: vault.contract_address as Address,
+      // V13 reorders the struct's tail; its own ABI decodes it.
+      abi: vaultIsV13(vault) ? VAULT_V13_ABI : VAULT_ABI,
       functionName: 'getDistribution',
       args: [distributionId],
     })) as {

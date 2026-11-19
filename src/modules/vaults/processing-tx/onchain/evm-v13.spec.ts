@@ -35,6 +35,25 @@ describe('V13 ABI matches the compiled contracts (forge inspect methodIdentifier
     expect(toFunctionSelector(fn(name))).toBe(selector);
   });
 
+  // Selectors only cover inputs; a struct whose fields moved still decodes into the wrong slots.
+  it.each([
+    [
+      'getDistribution',
+      '((address,uint48,uint256,uint256,uint256,uint256,uint64,uint64,uint64,bool,bool,address,bool))',
+    ],
+    ['cycleV13', '(uint256,uint256,uint256,uint256,uint256,uint64,bool,bool)'],
+    ['economics', '((uint256,uint16,uint16,uint8,uint256,uint16))'],
+    ['onchainEntitlement', '(uint256,bool)'],
+    ['lpSlice', '(uint256,uint256)'],
+    ['lpSliceTokens', '(address[])'],
+  ])('%s outputs', (name, types) => {
+    const t = (p: { type: string; components?: readonly unknown[] }): string =>
+      p.type.startsWith('tuple')
+        ? `(${(p.components as { type: string }[]).map(t).join(',')})${p.type.slice(5)}`
+        : p.type;
+    expect(`(${fn(name).outputs.map(t).join(',')})`).toBe(types);
+  });
+
   it('has no Merkle distribution entries and one openCycle', () => {
     const names = VAULT_V13_ABI.filter(e => e.type === 'function').map(e => (e as AbiFunction).name);
     expect(names).not.toContain('openDistributionMerkle');
