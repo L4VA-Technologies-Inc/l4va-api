@@ -1,13 +1,13 @@
-import { earliestEvmDeployBlock } from './evm-protocol-versions';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { IsNull, Not, Repository } from 'typeorm';
-import type { Address } from 'viem';
+import { isAddress, type Address } from 'viem';
 
 import { EvmContractReader } from './evm-contract-reader.service';
+import { earliestEvmDeployBlock } from './evm-protocol-versions';
 import { EvmVaultEventReconciler, type VaultLogInput } from './evm-vault-event-reconciler.service';
 
 import { Vault } from '@/database/vault.entity';
@@ -72,7 +72,10 @@ export class EvmVaultEventIndexerService {
       where: { chain_type: ChainType.robinhood, contract_address: Not(IsNull()) },
       select: ['id', 'contract_address'],
     });
-    const addresses = vaults.map(v => v.contract_address!.toLowerCase() as Address);
+    // Drafts can hold '' rather than NULL; one empty entry makes the RPC reject the whole getLogs.
+    const addresses = vaults
+      .map(v => v.contract_address!.trim().toLowerCase())
+      .filter((a): a is Address => isAddress(a, { strict: false }));
     if (addresses.length === 0) return;
 
     const latest = await this.contractReader.publicClient.getBlockNumber();
