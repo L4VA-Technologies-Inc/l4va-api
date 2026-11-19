@@ -195,6 +195,23 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       feeController: '0x978f6EFdDB9516A11fd0F994ACCD20664033e85c',
       guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
     },
+    {
+      // V13 (vault-contract-solidity feat/v13, script/deploy-testnet-v13.sh, 2026-11-19): vault
+      // economics fixed at creation, contract-computed allocations, 1 h review windows on roots and
+      // distributions (testnet setting), verifier = the Dave test wallet. Fixed-rate testnet swap
+      // adapter; Uniswap v4 LP adapter V2 with its own exit adapter (0x1451…89f2).
+      version: 13,
+      factory: '0x1a5BC0EFbF5a031e821e472b23148A4F067c47b1',
+      deployBlock: 155352797n,
+      adapterRegistry: '0xBA94A5378543D3Cf3854722090B9075cD9862C4f',
+      protocolFeeConfig: '0x6347e3C741dB95a6CdaB4FE445f58C464b108727',
+      batchDeployer: '0xAa2d2CC95B9aE3f439E0E8424227EbA4e9032A4e',
+      swapAdapter: '0x4bB3777d7c2968dF3EAE1ec148fb10Fa910C7De4',
+      lpAdapter: '0xfa64379745F6aACE931AA08103a155F48E5b7dAA',
+      feeConverter: '0x3c2726d1c42aF641171b4454492F42985EcAaAF7',
+      feeController: '0x606E8b94f1cEF179661f28D7c220ce03A724fCe9',
+      guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
+    },
   ],
 };
 
