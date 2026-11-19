@@ -510,13 +510,15 @@ export class EvmVaultSignerService {
     // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
     // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
     const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
-    // An acquire-only vault can schedule its acquire window for a later date; the
-    // contract keeps acquisitions closed until then. A date already past opens now.
+    // The acquire window follows the asset window: the contract only accepts native buys inside
+    // it, so a window starting now would close before the vault ever reaches its acquire phase.
+    // Acquire-only vaults (no asset window) open now. A custom date opens it then, never earlier.
     const scheduledStart =
-      data.isAcquireOnly && data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
+      data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
         ? BigInt(Math.floor(toEpochMs(data.acquireOpenWindowTime) / 1000))
         : 0n;
-    const acquireStart = scheduledStart > now ? scheduledStart : now;
+    const earliestAcquire = data.isAcquireOnly ? now : assetWindowEnd;
+    const acquireStart = scheduledStart > earliestAcquire ? scheduledStart : earliestAcquire;
     const acquireWindowStart = skipsAcquirePhase ? 0n : acquireStart;
     const acquireWindowEnd = skipsAcquirePhase
       ? 0n
