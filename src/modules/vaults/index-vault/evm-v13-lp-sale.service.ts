@@ -19,7 +19,7 @@ const DEADLINE_SECONDS = 20 * 60;
 
 /**
  * V13 FromSale vaults (asset-only, with an LP share) fund their pool by selling exactly the
- * vault's `lpBps` slice of every token it held when the raise closed. The contract records the
+ * vault's lp%/2 slice (Cardano math) of every token it held when the raise closed. The contract records the
  * slices and only lets `swapForLp` sell inside them; `provideLiquidity` then prices the pool from
  * the proceeds (`EvmLiquidityService`). This sells whatever is left of each slice, one swap per
  * token per tick, with the same routing and slippage floor as index rebalances.

@@ -155,6 +155,12 @@ const V13_ENTRIES = [
   write('swapForLp', [{ name: 'p', type: 'tuple', components: SWAP_PARAMS_COMPONENTS }], [u256('netOut')]),
   view('lpSliceTokens', [], [{ name: '', type: 'address[]' }]),
   view('lpSlice', [addr('token')], [u256('slice'), u256('sold')]),
+  view('lpSaleVt', [], [u256('')]),
+  view('lpRateActivatesAt', [], [{ name: '', type: 'uint64' }]),
+  view('lpRateCancelled', [], [{ name: '', type: 'bool' }]),
+  write('proposeLpRate', [], [u256('rate')]),
+  write('approveLpRate', []),
+  write('cancelLpRate', []),
   write('recommitAllocationRoot', [
     u256('cycleId'),
     { name: 'allocationRoot', type: 'bytes32' },
@@ -198,6 +204,17 @@ const V13_ENTRIES = [
       { name: 'by', type: 'address', indexed: true },
     ],
   },
+  {
+    type: 'event',
+    name: 'LpRateProposed',
+    inputs: [
+      { name: 'rate', type: 'uint256', indexed: false },
+      { name: 'proceeds', type: 'uint256', indexed: false },
+      { name: 'activatesAt', type: 'uint256', indexed: false },
+    ],
+  },
+  { type: 'event', name: 'LpRateApproved', inputs: [{ name: 'by', type: 'address', indexed: true }] },
+  { type: 'event', name: 'LpRateCancelled', inputs: [{ name: 'by', type: 'address', indexed: true }] },
 ] as const;
 
 /** The vault ABI for V13 vaults: {@link VAULT_ABI} with the changed entries swapped out. */
@@ -234,8 +251,6 @@ export interface V13EconomicsInput {
   /** Percent, 0–100 (the form's `liquidityPoolContribution`). */
   lpPct: number | string;
   maxExpansionBps: number;
-  /** Creator-set LP price (VT base units per 1e18 wei). Selects FixedPrice when given. */
-  lpVtPerNative?: bigint;
 }
 
 const pctToBps = (pct: number | string): number => {
@@ -247,7 +262,6 @@ const pctToBps = (pct: number | string): number => {
 /**
  * The vault's economics from the creation form. LP mode:
  *  - no LP share → None;
- *  - a creator LP price → FixedPrice (ETH = LP share of the raise);
  *  - acquirers → FromAcquire (price and ETH from the raise, as the backend priced it before V13);
  *  - asset-only vault → FromSale (sell the LP share of every token; price from the sale).
  */
@@ -261,15 +275,15 @@ export function buildV13Economics(input: V13EconomicsInput): EvmVaultEconomics {
   }
   let lpMode = EvmLpMode.None;
   if (lpBps > 0) {
-    if (input.lpVtPerNative && input.lpVtPerNative > 0n) lpMode = EvmLpMode.FixedPrice;
-    else lpMode = acquirerBps > 0 ? EvmLpMode.FromAcquire : EvmLpMode.FromSale;
+    // FixedPrice is refused by the V13 contract (audit F-04).
+    lpMode = acquirerBps > 0 ? EvmLpMode.FromAcquire : EvmLpMode.FromSale;
   }
   return {
     vtSupply: supply * 10n ** BigInt(input.vtDecimals),
     acquirerBps,
     lpBps,
     lpMode,
-    lpVtPerNative: lpMode === EvmLpMode.FixedPrice ? input.lpVtPerNative! : 0n,
+    lpVtPerNative: 0n,
     maxExpansionBps: input.maxExpansionBps,
   };
 }
@@ -287,7 +301,7 @@ export interface V13RaisePools {
   rootVtMax: bigint;
   /** Most native the root may allocate (asset contributors). */
   rootNativeMax: bigint;
-  /** FromAcquire: the pool's VT and ETH; FixedPrice: the ETH budget (VT follows the price). */
+  /** FromAcquire: the pool's VT and ETH. FromSale: the carved-out VT (ETH comes from the sale). */
   lpVt: bigint;
   lpNative: bigint;
   /** VT per 1e18 wei the pool is seeded at; 0 until FromSale's sale is done. */
@@ -298,12 +312,18 @@ export interface V13RaisePools {
  * What `closeCycle` fixes for a vault's raise, from the raise and the contribution fee. The
  * backend's root must stay within `rootVtMax` / `rootNativeMax` or the close reverts.
  */
-export function computeV13RaisePools(e: EvmVaultEconomics, raised: bigint, contributionFee: bigint): V13RaisePools {
+export function computeV13RaisePools(
+  e: EvmVaultEconomics,
+  raised: bigint,
+  contributionFee: bigint,
+  /** FromSale: whether the vault holds any ERC-20 at close (else nothing is carved out). */
+  hasSliceTokens = true
+): V13RaisePools {
   const netRaised = raised - contributionFee;
   const BPS = BigInt(V13_BPS);
   let lpVt = 0n;
   let lpNative = 0n;
-  let lpRate = e.lpMode === EvmLpMode.FixedPrice ? e.lpVtPerNative : 0n;
+  let lpRate = 0n;
 
   if (e.lpMode === EvmLpMode.FromAcquire && e.lpBps > 0 && e.acquirerBps > 0 && raised > 0n) {
     const fdv = mulDiv(raised, BPS, BigInt(e.acquirerBps));
@@ -322,9 +342,13 @@ export function computeV13RaisePools(e: EvmVaultEconomics, raised: bigint, contr
     }
   }
 
-  const avail = e.vtSupply - (e.lpMode === EvmLpMode.FromAcquire ? lpVt : 0n);
+  // FromSale, Cardano math: lp%/2 of the supply is carved out for the pool; its ETH
+  // comes later from selling lp%/2 of every token (`swapForLp`).
+  if (e.lpMode === EvmLpMode.FromSale && e.lpBps > 0 && hasSliceTokens) {
+    lpVt = mulDiv(e.vtSupply, BigInt(e.lpBps), 2n * BPS);
+  }
+  const avail = e.vtSupply - lpVt;
   const toAcquirers = mulDiv(avail, BigInt(e.acquirerBps), BPS);
-  if (e.lpMode === EvmLpMode.FixedPrice) lpNative = mulDiv(netRaised, BigInt(e.lpBps), BPS);
 
   return {
     acquirerPool: raised === 0n ? 0n : toAcquirers,
@@ -341,14 +365,14 @@ export const v13AcquirerVt = (acquirerPool: bigint, nativeOf: bigint, raised: bi
   raised === 0n ? 0n : mulDiv(acquirerPool, nativeOf, raised);
 
 /**
- * FromSale price, as `provideLiquidity` will fix it once every slice is sold:
- * selling `lpBps` of every token sells `lpBps` of the vault, so the pool gets `lpBps` of supply.
+ * FromSale price, as `proposeLpRate` fixes it once every slice is sold (Cardano math):
+ * the carved-out `lpSaleVt` (lp%/2 of vtSupply) for all of the sale's ETH.
  */
-export const v13FromSaleRate = (supplyWithOwed: bigint, lpBps: number, proceeds: bigint): bigint =>
-  proceeds === 0n ? 0n : mulDiv(mulDiv(supplyWithOwed, BigInt(lpBps), BigInt(V13_BPS)), 10n ** 18n, proceeds);
+export const v13FromSaleRate = (lpSaleVt: bigint, proceeds: bigint): bigint =>
+  proceeds === 0n ? 0n : mulDiv(lpSaleVt, 10n ** 18n, proceeds);
 
-/** The slice of `held` that FromSale must sell for the pool (floor, as the contract). */
-export const v13LpSlice = (held: bigint, lpBps: number): bigint => mulDiv(held, BigInt(lpBps), BigInt(V13_BPS));
+/** The slice of `held` that FromSale must sell for the pool: lp%/2 (floor, as the contract). */
+export const v13LpSlice = (held: bigint, lpBps: number): bigint => mulDiv(held, BigInt(lpBps), 2n * BigInt(V13_BPS));
 
 /** Whether a V13 root may be claimed now (`cycleV13` read). */
 export const v13RootOpen = (c: { rootActivatesAt: bigint | number; rootCancelled: boolean; rootApproved: boolean }) =>

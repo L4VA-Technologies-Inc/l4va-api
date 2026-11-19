@@ -550,25 +550,37 @@ export class EvmLiquidityService {
         if (budget === 0n) throw new Error(`vault ${vaultAddress} has no LP budget left`);
 
         let rate = await read<bigint>('lpVtPerNative');
-        if (rate === 0n) {
-          if (lp.lpMode !== EvmLpMode.FromSale) throw new Error(`vault ${vaultAddress} has no LP price`);
-          for (const token of await read<Address[]>('lpSliceTokens')) {
-            const [slice, sold] = await read<readonly [bigint, bigint]>('lpSlice', [token]);
-            if (sold < slice) {
-              this.logger.log(`V13 LP for vault ${vault.id} waits for its ${token} slice (${sold}/${slice} sold)`);
-              return;
-            }
+        if (lp.lpMode === EvmLpMode.FromSale) {
+          // Audit F-02: the sale's rate is proposed on-chain, waits `allocationDelay` (the
+          // Safe or the verifier may cancel it), and only then seeds the pool.
+          if (await read<boolean>('lpRateCancelled')) {
+            this.logger.warn(`V13 LP for vault ${vault.id}: sale rate was cancelled; pool not seeded`);
+            return;
           }
-          const vaultToken = await read<Address>('vaultToken');
-          const [supply, owed, proceeds, economics] = await Promise.all([
-            client.readContract({ address: vaultToken, abi: erc20Abi, functionName: 'totalSupply' }),
-            read<bigint>('totalOutstandingClaimVt'),
-            read<bigint>('lpSaleProceeds'),
-            read<{ lpBps: number }>('economics'),
-          ]);
-          rate = v13FromSaleRate(supply + owed, Number(economics.lpBps), proceeds);
-          if (rate === 0n) throw new Error(`vault ${vaultAddress}: LP sale raised nothing`);
+          if (rate === 0n) {
+            for (const token of await read<Address[]>('lpSliceTokens')) {
+              const [slice, sold] = await read<readonly [bigint, bigint]>('lpSlice', [token]);
+              if (sold < slice) {
+                this.logger.log(`V13 LP for vault ${vault.id} waits for its ${token} slice (${sold}/${slice} sold)`);
+                return;
+              }
+            }
+            const [lpSaleVt, proceeds] = await Promise.all([read<bigint>('lpSaleVt'), read<bigint>('lpSaleProceeds')]);
+            if (v13FromSaleRate(lpSaleVt, proceeds) === 0n) throw new Error(`vault ${vaultAddress}: LP sale raised nothing`);
+            const proposed = await this.adminSigner.sendAndConfirm(
+              { address: vaultAddress, abi: VAULT_V13_ABI, functionName: 'proposeLpRate', args: [] },
+              ['LpRateProposed']
+            );
+            this.logger.log(`V13 proposeLpRate vault=${vault.id} tx=${proposed.hash}; seeding after the delay`);
+            return;
+          }
+          const activatesAt = await read<bigint>('lpRateActivatesAt');
+          if (BigInt(Math.floor(Date.now() / 1000)) < activatesAt) {
+            this.logger.log(`V13 LP for vault ${vault.id} waits for its sale rate to open at ${activatesAt}`);
+            return;
+          }
         }
+        if (rate === 0n) throw new Error(`vault ${vaultAddress} has no LP price`);
 
         const venue = await this.resolveVenue(vaultAddress, adapter, rate);
         protocol = venue.protocol;

@@ -8,6 +8,7 @@ import {
   EvmLpMode,
   v13AcquirerVt,
   v13FromSaleRate,
+  v13LpSlice,
   v13RootOpen,
   VAULT_V13_ABI,
   type EvmVaultEconomics,
@@ -97,12 +98,12 @@ describe('buildV13Economics', () => {
     });
   });
 
-  it('asset-only vault with LP → FromSale; no LP → None; creator price → FixedPrice', () => {
+  it('asset-only vault with LP → FromSale; no LP → None; never FixedPrice', () => {
     expect(buildV13Economics({ ...base, tokensForAcquiresPct: 0, lpPct: 5 }).lpMode).toBe(EvmLpMode.FromSale);
     expect(buildV13Economics({ ...base, tokensForAcquiresPct: 50, lpPct: 0 }).lpMode).toBe(EvmLpMode.None);
-    const fixed = buildV13Economics({ ...base, tokensForAcquiresPct: 50, lpPct: 5, lpVtPerNative: 300n * E18 });
-    expect(fixed.lpMode).toBe(EvmLpMode.FixedPrice);
-    expect(fixed.lpVtPerNative).toBe(300n * E18);
+    const acq = buildV13Economics({ ...base, tokensForAcquiresPct: 50, lpPct: 5 });
+    expect(acq.lpMode).toBe(EvmLpMode.FromAcquire);
+    expect(acq.lpVtPerNative).toBe(0n);
   });
 
   it('rejects out-of-range input', () => {
@@ -143,16 +144,14 @@ describe('computeV13RaisePools (mirrors Vault._setPoolsAndCheck)', () => {
     expect(pools.rootNativeMax).toBe(raised - fee - pools.lpNative);
   });
 
-  it('FixedPrice: ETH budget = lp% of the net raise, no VT carved from supply', () => {
-    const pools = computeV13RaisePools(
-      econ({ acquirerBps: 0, lpBps: 2_000, lpMode: EvmLpMode.FixedPrice, lpVtPerNative: 300n * E18 }),
-      10n * E18,
-      0n
-    );
-    expect(pools.lpNative).toBe(2n * E18);
-    expect(pools.lpRate).toBe(300n * E18);
-    expect(pools.rootVtMax).toBe(1_000_000n * E18);
-    expect(pools.rootNativeMax).toBe(8n * E18);
+  it('FromSale (Cardano math): lp%/2 of supply carved out before contributors', () => {
+    const e = econ({ acquirerBps: 0, lpBps: 1_000, lpMode: EvmLpMode.FromSale });
+    const pools = computeV13RaisePools(e, 0n, 0n);
+    expect(pools.lpVt).toBe(50_000n * E18);
+    expect(pools.rootVtMax).toBe(950_000n * E18);
+    expect(pools.lpNative).toBe(0n); // ETH comes from the slice sale
+    // NFT-only vault: nothing to sell, nothing carved out.
+    expect(computeV13RaisePools(e, 0n, 0n, false).rootVtMax).toBe(1_000_000n * E18);
   });
 
   it('nothing raised: no acquirer pool, the acquirer share is not given to contributors', () => {
@@ -161,9 +160,10 @@ describe('computeV13RaisePools (mirrors Vault._setPoolsAndCheck)', () => {
     expect(pools.rootVtMax).toBe(400_000n * E18);
   });
 
-  it('FromSale price: lp% of supply for the proceeds', () => {
-    // 900,000 VT, 10 % slice sold for 0.2 ETH → 90,000 VT for 0.2 ETH.
-    expect(v13FromSaleRate(900_000n * E18, 1_000, 2n * 10n ** 17n)).toBe(450_000n * E18);
+  it('FromSale price: the carve-out for the proceeds; slice is lp%/2', () => {
+    // 50,000 VT carved out, 5 % of the tokens sold for 0.1 ETH → 500,000 VT per ETH.
+    expect(v13FromSaleRate(50_000n * E18, 10n ** 17n)).toBe(500_000n * E18);
+    expect(v13LpSlice(1_000n * E18, 1_000)).toBe(50n * E18);
   });
 });
 

@@ -350,7 +350,14 @@ export class EvmAllocationService {
       vtSupplyBaseUnits = economics.vtSupply;
       assetsOfferedBps = economics.acquirerBps;
       const raised = formulaRows.reduce((sum, r) => sum + r.nativeRaised, 0n);
-      v13Pools = computeV13RaisePools(economics, raised, (raised * BigInt(contributionFeeBps)) / 10_000n);
+      // FromSale carves out LP VT only if the vault holds ERC-20 at close (its slices).
+      const hasSliceTokens = contributions.some(c => c.kind === EvmAssetKindOnchain.ERC20);
+      v13Pools = computeV13RaisePools(
+        economics,
+        raised,
+        (raised * BigInt(contributionFeeBps)) / 10_000n,
+        hasSliceTokens
+      );
       lp = await this.v13LpRecord(vault, economics, v13Pools);
     } else {
       lp = await this.computeLpCarveout(
