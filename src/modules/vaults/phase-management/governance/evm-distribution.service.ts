@@ -7,6 +7,7 @@ import { encodeAbiParameters, keccak256, zeroAddress, zeroHash, type Address, ty
 
 import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
+import { vaultIsV13, VAULT_V13_ABI } from '../../processing-tx/onchain/evm-v13';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
@@ -218,8 +219,10 @@ export class EvmDistributionService {
 
     // Vaults that support it pay by snapshot voting weight (held VT + VT in
     // liquidity positions), like Cardano; older vaults pay pro-rata on-chain.
+    // V13 has no Merkle mode (it still answers `distributionMerkleRoot` with zero): it pays
+    // pro-rata on-chain, with LP-held VT once the L4VA LP contract is switched on.
     let tree: DistributionTree | null = null;
-    if (await this.supportsMerkleDistribution(vaultAddress)) {
+    if (!vaultIsV13(vault) && (await this.supportsMerkleDistribution(vaultAddress))) {
       const snapshot = await this.snapshotForTimepoint(proposal, timepoint);
       if (!snapshot) throw new Error(`Proposal ${proposal.id}: no snapshot at timepoint ${timepoint} to weight from`);
       tree = this.buildTree(vaultAddress, executionKey, snapshot);
@@ -383,6 +386,23 @@ export class EvmDistributionService {
       );
     }
     const distributionId = BigInt(dist.distributionId);
+
+    // V13: a distribution is claimable after its delay (or the verifier's approval) and may be
+    // cancelled before that. Claiming early would revert and count against the holder.
+    if (vaultIsV13(vault)) {
+      const v13 = (await this.contractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_V13_ABI,
+        functionName: 'getDistribution',
+        args: [distributionId],
+      })) as { activatesAt: bigint; cancelled: boolean; approved: boolean; deadline: bigint };
+      if (v13.cancelled) {
+        await this.markAutoClaimDone(proposal, 'distribution cancelled on-chain');
+        return 0;
+      }
+      if (!v13.approved && Number(v13.activatesAt) * 1000 > Date.now()) return 0;
+      if (String(v13.deadline) !== String(dist.deadline)) dist = { ...dist, deadline: String(v13.deadline) };
+    }
 
     if (Number(dist.deadline) * 1000 <= Date.now()) {
       // Claims are closed on-chain; the remainder goes to the treasury by sweep.

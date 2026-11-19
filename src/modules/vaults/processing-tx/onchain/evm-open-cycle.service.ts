@@ -6,6 +6,7 @@ import { type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { vaultIsV13, VAULT_V13_ABI } from './evm-v13';
 import { EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
@@ -27,7 +28,15 @@ export interface EvmOpenCycleConfig {
   adaPairVtPerNativeUnit: bigint;
   assetWhitelist: Address[];
   contributorWhitelist: Address[];
+  /**
+   * V13 only. Most VT this expansion may allocate; 0 = the vault's maximum
+   * (`maxExpansionBps` of supply). Ignored for a raise.
+   */
+  vtCap?: bigint;
 }
+
+/** V13: an expansion can only close once it has been open this long (unless its cap fills). */
+export const V13_MIN_EXPANSION_WINDOW_SECONDS = 24n * 3600n;
 
 export interface OpenCycleResult {
   txHash: Hex;
@@ -78,6 +87,24 @@ export class EvmOpenCycleService {
       );
     }
 
+    const v13 = vaultIsV13(vault);
+    if (v13) {
+      // An expansion (any cycle after the raise locked) cannot close before 24 h; a shorter
+      // window would leave it open, unclosable, until then. A retried raise has no minimum.
+      const raiseCycleId = (await this.contractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_V13_ABI,
+        functionName: 'raiseCycleId',
+      })) as bigint;
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const end = cfg.assetWindow.end > cfg.acquireWindow.end ? cfg.assetWindow.end : cfg.acquireWindow.end;
+      if (raiseCycleId !== 0n && end - now < V13_MIN_EXPANSION_WINDOW_SECONDS) {
+        throw new BadRequestException(
+          `V13 expansions stay open at least 24 h; this one would close at ${end} (in ${end - now}s)`
+        );
+      }
+    }
+
     const adminTx = this.transactionsRepository.create({
       type: TransactionType.evmOpenCycle,
       status: TransactionStatus.pending,
@@ -98,12 +125,15 @@ export class EvmOpenCycleService {
       adaPairVtPerNativeUnit: cfg.adaPairVtPerNativeUnit,
       assetWhitelist: cfg.assetWhitelist,
       contributorWhitelist: cfg.contributorWhitelist,
+      // V13: expansions are valuation-priced through the root (no fixed prices yet), bounded by
+      // the cycle's VT cap.
+      ...(v13 ? { nativeVtPrice: 0n, assetVtPrices: [] as bigint[], vtCap: cfg.vtCap ?? 0n } : {}),
     };
 
     let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
     try {
       result = await this.adminSigner.sendAndConfirm(
-        { address: vaultAddress, abi: VAULT_ABI, functionName: 'openCycle', args: [cycleArg] },
+        { address: vaultAddress, abi: v13 ? VAULT_V13_ABI : VAULT_ABI, functionName: 'openCycle', args: [cycleArg] },
         ['CycleOpened'],
         async hash => {
           await this.transactionsRepository.update(

@@ -92,6 +92,14 @@ export interface EvmLpCarveoutRecord {
   provideTxHash?: string;
   attempts?: number;
   lastError?: string;
+  /**
+   * V13 only: the vault's `LpMode` (evm-v13 `EvmLpMode`). The pool is seeded straight from the
+   * vault's `lpNativeBudget` at its `lpVtPerNative`, no technical cycle. FromSale first sells
+   * an `lpBps` slice of each token with `swapForLp`.
+   */
+  lpMode?: number;
+  /** V13 FromSale: tokens whose LP slice is sold, with the ETH each sale returned. */
+  lpSales?: Record<string, string>;
 }
 
 export enum EvmLpStatus {

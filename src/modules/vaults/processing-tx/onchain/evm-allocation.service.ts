@@ -8,6 +8,14 @@ import { computeEvmAllocationRows, computeEvmLpCarveout, type EvmAllocationInput
 import { EvmContractReader } from './evm-contract-reader.service';
 import type { ContributionValueMap } from './evm-lock-time-pricing.service';
 import { EvmLpStatus, getEvmLpAdapterAddress, getEvmLpMinUsd, type EvmLpCarveoutRecord } from './evm-lp.config';
+import {
+  computeV13RaisePools,
+  EvmLpMode,
+  vaultIsV13,
+  VAULT_V13_ABI,
+  type EvmVaultEconomics,
+  type V13RaisePools,
+} from './evm-v13';
 import { ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmAssetKindOnchain } from './vault.abi';
 
@@ -311,7 +319,11 @@ export class EvmAllocationService {
     }
 
     // Run the formulas.
-    const vtSupplyBaseUnits =
+    // V13 raise: the vault's economics (fixed at creation) size every pool, and acquirers are
+    // paid on-chain, so the root only splits what the contract leaves to asset contributors.
+    const v13Raise = vaultIsV13(vault) && !expansionVtOverride?.size;
+    const economics = v13Raise ? await this.readV13Economics(vault.contract_address as Address) : null;
+    let vtSupplyBaseUnits =
       expansionVtOverride && expansionVtOverride.size > 0
         ? [...expansionVtOverride.values()].reduce((a, b) => a + b, 0n)
         : BigInt(vault.ft_token_supply) * 10n ** BigInt(vault.ft_token_decimals);
@@ -320,7 +332,7 @@ export class EvmAllocationService {
     // native acquirers for an acquire expansion (native rows carry no value).
     const overrideAllNative =
       !!expansionVtOverride?.size && contributions.every(c => c.kind === EvmAssetKindOnchain.Native);
-    const assetsOfferedBps =
+    let assetsOfferedBps =
       expansionVtOverride && expansionVtOverride.size > 0
         ? overrideAllNative
           ? 10_000
@@ -332,24 +344,47 @@ export class EvmAllocationService {
       vault.contract_address as Address,
       ProtocolFeeType.Contribution
     );
-    const lp = await this.computeLpCarveout(
-      vault,
-      formulaRows,
-      vtSupplyBaseUnits,
-      assetsOfferedBps,
-      !!expansionVtOverride?.size,
-      contributionFeeBps
-    );
+    let v13Pools: V13RaisePools | null = null;
+    let lp: EvmLpCarveoutRecord | null;
+    if (economics) {
+      vtSupplyBaseUnits = economics.vtSupply;
+      assetsOfferedBps = economics.acquirerBps;
+      const raised = formulaRows.reduce((sum, r) => sum + r.nativeRaised, 0n);
+      v13Pools = computeV13RaisePools(economics, raised, (raised * BigInt(contributionFeeBps)) / 10_000n);
+      lp = await this.v13LpRecord(vault, economics, v13Pools);
+    } else {
+      lp = await this.computeLpCarveout(
+        vault,
+        formulaRows,
+        vtSupplyBaseUnits,
+        assetsOfferedBps,
+        !!expansionVtOverride?.size,
+        contributionFeeBps
+      );
+    }
     const formulaResult = computeEvmAllocationRows({
       rows: formulaRows,
       vtSupplyBaseUnits,
       assetsOfferedBps,
-      lpVtAmount: lp ? BigInt(lp.lpVtAmount) : 0n,
-      lpNativeAmount: lp ? BigInt(lp.lpNativeAmount) : 0n,
+      // V13: the contract carves the LP whether or not the pool gets seeded (EVM_LP_MIN_USD).
+      lpVtAmount: v13Pools ? v13Pools.lpVt : lp ? BigInt(lp.lpVtAmount) : 0n,
+      lpNativeAmount: v13Pools ? v13Pools.lpNative : lp ? BigInt(lp.lpNativeAmount) : 0n,
       contributionFeeBps,
+      acquirersOnchain: v13Raise,
     });
+    if (v13Pools) {
+      if (formulaResult.totalVtAllocation > v13Pools.rootVtMax) {
+        throw new Error(`V13 root VT ${formulaResult.totalVtAllocation} exceeds the vault's ${v13Pools.rootVtMax}`);
+      }
+      if (formulaResult.totalNativeAllocation > v13Pools.rootNativeMax) {
+        throw new Error(
+          `V13 root native ${formulaResult.totalNativeAllocation} exceeds the vault's ${v13Pools.rootNativeMax}`
+        );
+      }
+    }
+    const onchainRows = formulaResult.onchainRows.filter(r => r.vtAmount > 0n);
 
-    if (formulaResult.perWallet.length === 0) {
+    if (formulaResult.perWallet.length === 0 && onchainRows.length === 0) {
       throw new EmptyAllocationError(
         `Vault ${vaultId} cycle ${cycleId} allocates nothing: ` +
           `nativeRaised=${formulaResult.totalNativeRaised}, vtToContributors=${formulaResult.vtToContributors}`
@@ -366,7 +401,10 @@ export class EvmAllocationService {
       vtAmount: r.vtAmount,
       nativeAmount: r.nativeAmount,
     }));
-    const tree = buildAllocationMerkleTree(leafInputs);
+    // V13 raise with acquirers only: nothing for a root to split. `closeCycle` still needs a
+    // non-zero root; with zero totals it opens at once and no leaf can prove against it.
+    const tree =
+      leafInputs.length > 0 ? buildAllocationMerkleTree(leafInputs) : { root: EMPTY_CYCLE_ROOT, proofs: [] as Hex[][] };
 
     // Compute valuation hash = keccak256(canonicalJson(snapshot payload)).
     const canonicalPayload = this.buildCanonicalPayload({
@@ -450,6 +488,22 @@ export class EvmAllocationService {
           proof: tree.proofs[i],
         })
       );
+      // V13: acquirers' on-chain shares, numbered after the leaves, never in the tree.
+      for (const [i, r] of onchainRows.entries()) {
+        allocationEntities.push(
+          manager.create(EvmAllocation, {
+            snapshot_id: savedSnapshot.id,
+            vault_id: vaultId,
+            cycle_id: cycleId.toString(),
+            claim_index: (leafInputs.length + i).toString(),
+            contributor: r.contributor.toLowerCase(),
+            vt_amount: r.vtAmount.toString(),
+            native_amount: '0',
+            proof: [],
+            onchain: true,
+          })
+        );
+      }
       await manager.save(EvmAllocation, allocationEntities);
 
       return savedSnapshot.id;
@@ -457,7 +511,7 @@ export class EvmAllocationService {
 
     this.logger.log(
       `Computed snapshot ${snapshotId} for vault ${vaultId} cycle ${cycleId}: ` +
-        `${leafInputs.length} leaves, root=${tree.root}, ` +
+        `${leafInputs.length} leaves${onchainRows.length ? ` + ${onchainRows.length} on-chain` : ''}, root=${tree.root}, ` +
         `totalVt=${formulaResult.totalVtAllocation}, totalNative=${formulaResult.totalNativeAllocation}`
     );
     return { snapshotId, leafCount: leafInputs.length };
@@ -619,6 +673,60 @@ export class EvmAllocationService {
       rate: lp.rate.toString(),
       fdvNative: lp.fdvNative.toString(),
       adapter,
+    };
+  }
+
+  private async readV13Economics(vaultAddress: Address): Promise<EvmVaultEconomics> {
+    const e = (await this.contractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_V13_ABI,
+      functionName: 'economics',
+    })) as {
+      vtSupply: bigint;
+      acquirerBps: number;
+      lpBps: number;
+      lpMode: number;
+      lpVtPerNative: bigint;
+      maxExpansionBps: number;
+    };
+    return { ...e, lpMode: Number(e.lpMode) as EvmLpMode };
+  }
+
+  /**
+   * V13 LP record for the seeding job. The contract has already fixed the pool's price and ETH
+   * budget; this only decides whether the backend seeds it. A pool below EVM_LP_MIN_USD (or with
+   * LP off) is not seeded and its ETH stays in the vault: it never goes to contributors.
+   */
+  private async v13LpRecord(
+    vault: Vault,
+    e: EvmVaultEconomics,
+    pools: V13RaisePools
+  ): Promise<EvmLpCarveoutRecord | null> {
+    const adapter = getEvmLpAdapterAddress(vault);
+    if (!adapter || e.lpMode === EvmLpMode.None || e.lpBps === 0) return null;
+    if (e.lpMode !== EvmLpMode.FromSale && pools.lpNative === 0n) return null;
+
+    const minUsd = getEvmLpMinUsd();
+    if (minUsd > 0 && e.lpMode !== EvmLpMode.FromSale) {
+      const ethUsd = await this.priceService.getEthPrice();
+      const lpNativeUsd = (Number(pools.lpNative) / 1e18) * ethUsd;
+      if (lpNativeUsd < minUsd) {
+        this.logger.warn(
+          `V13 LP not seeded for vault ${vault.id}: $${lpNativeUsd.toFixed(2)} < EVM_LP_MIN_USD $${minUsd}; ` +
+            `its ${pools.lpNative} wei stays in the vault`
+        );
+        return null;
+      }
+    }
+    return {
+      status: EvmLpStatus.pending,
+      lpBps: e.lpBps,
+      lpVtAmount: pools.lpVt.toString(),
+      lpNativeAmount: pools.lpNative.toString(),
+      rate: pools.lpRate.toString(),
+      fdvNative: '0',
+      adapter,
+      lpMode: e.lpMode,
     };
   }
 }
