@@ -376,6 +376,29 @@ export class EvmSnapshotService {
   }
 
   /**
+   * LP VT per position owner at a snapshot's block, for distributions (the snapshot's own
+   * `lpBalances` may be missing when its attribution failed). Throws instead of returning null:
+   * a distribution must not silently leave LP providers out.
+   */
+  async lpBalancesForSnapshot(snapshot: Snapshot, vaultAddress: Address): Promise<Record<string, string>> {
+    if (snapshot.lpBalances) return snapshot.lpBalances;
+    if (!snapshot.snapshotBlock) throw new Error(`Snapshot ${snapshot.id} has no block to attribute LP VT at`);
+    const vtAddress = await this.getVaultTokenAddress(vaultAddress);
+    const fromBlock = (await this.vaultCreationBlock(snapshot.vaultId)) ?? (await this.factoryDeployBlock(snapshot.vaultId));
+    const lp = await this.lpVoting.attributeLpVt(
+      snapshot.vaultId,
+      vaultAddress,
+      vtAddress,
+      fromBlock,
+      BigInt(snapshot.snapshotBlock)
+    );
+    const out = Object.fromEntries([...lp.entries()].map(([address, vt]) => [address, String(vt)]));
+    await this.snapshotRepository.update({ id: snapshot.id }, { lpBalances: out });
+    snapshot.lpBalances = out;
+    return out;
+  }
+
+  /**
    * Voting weight for VT that holders put into Uniswap pools. A failure here leaves LP
    * providers without a vote on this snapshot rather than blocking the proposal.
    */

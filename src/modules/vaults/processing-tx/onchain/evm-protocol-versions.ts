@@ -59,6 +59,12 @@ export interface EvmProtocolVersion {
    * V8–V10, whose vaults have no freeze and hand authority over with propose/accept.
    */
   guardian?: Address;
+  /**
+   * L4VALpShareRegistry this deployment's factory points `lpShareSource` at: the backend records
+   * the pool VT of LP providers there before each distribution, so they are paid without depositing
+   * anything. Unset = LP payouts off for this version.
+   */
+  lpShareRegistry?: Address;
 }
 
 export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
@@ -178,14 +184,18 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       deployBlock: 118439792n,
       adapterRegistry: '0x898902514c2f6F72106Dbec5E633453e2E9f6c84',
       protocolFeeConfig: '0xc918dFC5e642A95Bc1a6066867dCEEe0d8fB6314',
-      batchDeployer: '0x91977Fe65faAFAf8b7Ccbfa41468899bA17821bD',
-      swapAdapter: '0xA5eCf4BAE51882337e929F0309BD09c50F96E77E',
+      batchDeployer: '0x38dD2b6b98Fc0eb7c282be9357798Abec3141246',
+      swapAdapter: '0x164552378d21c553962a3254CC8C8C888CB05388',
       swapAdapterMultiPath: true,
-      lpAdapter: '0xB791F82Dc709ee65A0a319E197457dF1F887322c',
-      lpExitAdapter: '0xB292b476049584a00880d20E444ffe374953D411',
+      lpAdapter: '0x078d10051959E63522e1f973D1c29d6BEd195716',
+      lpExitAdapter: '0x91773Ef6DBAF35fFa76c51E7B1d6F0B9Bc8882f8',
       feeConverter: '0xc32a0b4eF83a67148D100DcE93425afdc5a72383',
       feeController: '0xaeb6B894Af6722020052cCaD25DBd81E77d69443',
       guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
+      // 2026-11-20 audit fixes (script/upgrade-v13-audit.sh + Safe batch): new deployer, guarded swap,
+      // LP V2 and exit V2; the previous ones (0x9197…, 0xA5eC…, 0xB791…, 0xB292…) are revoked.
+      // LP payouts (2026-11-20): backend records LP providers' pool VT here before each distribution.
+      lpShareRegistry: '0xd763D8dCf064413fd5BC82bc9a6c9ca7A99B783d',
     },
   ],
   46630: [

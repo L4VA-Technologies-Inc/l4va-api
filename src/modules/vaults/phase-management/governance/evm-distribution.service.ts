@@ -3,10 +3,11 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { Repository } from 'typeorm';
-import { encodeAbiParameters, keccak256, zeroAddress, zeroHash, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, parseAbi, zeroAddress, zeroHash, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
+import { getEvmProtocolVersion } from '../../processing-tx/onchain/evm-protocol-versions';
 import { vaultIsV13, VAULT_V13_ABI } from '../../processing-tx/onchain/evm-v13';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
@@ -67,6 +68,20 @@ export interface EvmDistributionOpenResult {
  * the vault contract, and `openDistribution` reserves them there so holders can
  * claim trustlessly. The backend never takes custody.
  */
+const LP_SOURCE_ABI = parseAbi([
+  'function factory() view returns (address)',
+  'function lpShareSource() view returns (address)',
+]);
+const LP_REGISTRY_ABI = parseAbi([
+  'function record(address vault, uint256 timepoint, address[] accounts, uint256[] vts)',
+  'function finalize(address vault, uint256 timepoint)',
+  'function recorded(address vault, address account, uint256 timepoint) view returns (uint256 vt, uint256 total, bool finalized)',
+  'event Recorded(address indexed vault, uint256 indexed timepoint, uint256 accounts, uint256 total)',
+  'event Finalized(address indexed vault, uint256 indexed timepoint, uint256 total)',
+]);
+/** Accounts per `L4VALpShareRegistry.record` transaction. */
+const LP_RECORD_BATCH = 200;
+
 @Injectable()
 export class EvmDistributionService {
   private readonly logger = new Logger(EvmDistributionService.name);
@@ -227,6 +242,10 @@ export class EvmDistributionService {
       if (!snapshot) throw new Error(`Proposal ${proposal.id}: no snapshot at timepoint ${timepoint} to weight from`);
       tree = this.buildTree(vaultAddress, executionKey, snapshot);
     }
+
+    // V13 with LP payouts on: record LP providers' pool VT for this timepoint first, so the
+    // distribution's supply and payouts include them (no action needed from them).
+    if (vaultIsV13(vault)) await this.recordLpShares(proposal, vault, timepoint);
 
     const window = BigInt(DEFAULT_CLAIM_WINDOW_SECONDS);
     const result = await this.adminSigner.sendAndConfirm(
@@ -426,7 +445,11 @@ export class EvmDistributionService {
     let pending = false;
     const failures: Record<string, number> = { ...(dist.autoClaimFailures ?? {}) };
     let failuresChanged = false;
-    const holders = tree ? [...tree.entries.keys()] : Object.keys(snapshot.addressBalances ?? {});
+    // LP providers are paid through the vault's lpShareSource (`distributionClaimable` includes
+    // their pool VT); the contract returns 0 for anyone with nothing to claim.
+    const holders = tree
+      ? [...tree.entries.keys()]
+      : [...new Set([...Object.keys(snapshot.addressBalances ?? {}), ...Object.keys(snapshot.lpBalances ?? {})])];
     for (const holder of holders) {
       // A holder whose claim keeps reverting (e.g. a contract that rejects ETH) is skipped;
       // it can still claim itself until the deadline.
@@ -756,6 +779,69 @@ export class EvmDistributionService {
   }
 
   /** The snapshot a distribution is weighted from: the one at its timepoint, else the proposal's. */
+  /**
+   * Writes LP providers' pool VT at `timepoint` into the factory's L4VALpShareRegistry and
+   * freezes it. Skipped when LP payouts are off (`lpShareSource` = 0) or already recorded.
+   * Refuses to write to a source that is not the registry configured for the vault's version.
+   */
+  private async recordLpShares(proposal: Proposal, vault: Vault, timepoint: bigint): Promise<void> {
+    const client = this.contractReader.publicClient;
+    const vaultAddress = vault.contract_address as Address;
+    const factory = (await client.readContract({
+      address: vaultAddress,
+      abi: LP_SOURCE_ABI,
+      functionName: 'factory',
+    })) as Address;
+    const source = (await client.readContract({
+      address: factory,
+      abi: LP_SOURCE_ABI,
+      functionName: 'lpShareSource',
+    })) as Address;
+    if (source === zeroAddress) return;
+
+    const expected = getEvmProtocolVersion(Number(vault.chain_id), vault.evm_protocol_version)?.lpShareRegistry;
+    if (!expected || expected.toLowerCase() !== source.toLowerCase()) {
+      throw new Error(
+        `Vault ${vaultAddress}: factory lpShareSource ${source} is not the LP share registry configured for ` +
+          `version ${vault.evm_protocol_version} (${expected ?? 'none'}); refusing to record LP shares there`
+      );
+    }
+    const [, , finalized] = (await client.readContract({
+      address: source,
+      abi: LP_REGISTRY_ABI,
+      functionName: 'recorded',
+      args: [vaultAddress, zeroAddress, timepoint],
+    })) as readonly [bigint, bigint, boolean];
+    if (finalized) return;
+
+    const snapshot = await this.snapshotForTimepoint(proposal, timepoint);
+    if (!snapshot || String(snapshot.snapshotTimepoint) !== String(timepoint)) {
+      throw new Error(`Proposal ${proposal.id}: no snapshot at timepoint ${timepoint} to attribute LP VT from`);
+    }
+    const lp = await this.evmSnapshotService.lpBalancesForSnapshot(snapshot, vaultAddress);
+    const entries = Object.entries(lp).filter(([, vt]) => BigInt(vt) > 0n);
+    for (let i = 0; i < entries.length; i += LP_RECORD_BATCH) {
+      const chunk = entries.slice(i, i + LP_RECORD_BATCH);
+      await this.adminSigner.sendAndConfirm(
+        {
+          address: source,
+          abi: LP_REGISTRY_ABI,
+          functionName: 'record',
+          args: [vaultAddress, timepoint, chunk.map(([a]) => a as Address), chunk.map(([, vt]) => BigInt(vt))],
+        },
+        ['Recorded']
+      );
+    }
+    await this.adminSigner.sendAndConfirm(
+      { address: source, abi: LP_REGISTRY_ABI, functionName: 'finalize', args: [vaultAddress, timepoint] },
+      ['Finalized']
+    );
+    const total = entries.reduce((sum, [, vt]) => sum + BigInt(vt), 0n);
+    this.logger.log(
+      `Proposal ${proposal.id}: recorded ${entries.length} LP provider(s), ${total} VT, at timepoint ${timepoint} in ${source}`
+    );
+  }
+
   private async snapshotForTimepoint(proposal: Proposal, timepoint: bigint): Promise<Snapshot | null> {
     return (
       (await this.snapshotRepository.findOne({
