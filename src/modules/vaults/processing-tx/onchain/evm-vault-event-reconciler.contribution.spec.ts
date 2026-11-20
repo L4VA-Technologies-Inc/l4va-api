@@ -69,6 +69,8 @@ function build(opts: {
   assetRows: Record<string, Array<{ id: string; type: AssetType; policy_id: string; asset_id: string }>>;
   existing?: { id: string; transaction_id: string; asset_id: string | null } & Record<string, unknown>;
   vaultStatus?: VaultStatus;
+  /** ETH/USD for acquire rewards; 0 = no price (one unit). */
+  ethUsd?: number;
 }) {
   const vault = { id: 'v1', contract_address: VAULT, vault_status: opts.vaultStatus ?? VaultStatus.contribution };
   const statusUpdates: Array<{ where: any; set: any }> = [];
@@ -119,9 +121,10 @@ function build(opts: {
     {} as any,
     transactionsService as any,
     { sendAlert: jest.fn() } as any,
-    rewardEventProducer as any
+    rewardEventProducer as any,
+    { getEthPrice: jest.fn<Fn>(async () => opts.ethUsd ?? 0) } as any
   );
-  return { reconciler, statusUpdates, inserted, transactionsService, rewardEventProducer };
+  return { reconciler, statusUpdates, inserted, transactionsService, rewardEventProducer, transactionsRepository };
 }
 
 const confirmedIds = (updates: Array<{ where: any; set: any }>): string[] =>
@@ -198,6 +201,7 @@ describe('EvmVaultEventReconciler — ContributionMade confirms only the transac
       assetRows: {
         'tx-alice': [{ id: 'eth-a', type: AssetType.ETH, policy_id: '0x' + '00'.repeat(20), asset_id: 'eth' }],
       },
+      ethUsd: 2000,
     });
 
     const stats = await reconciler.reconcileLogs([
@@ -217,7 +221,10 @@ describe('EvmVaultEventReconciler — ContributionMade confirms only the transac
     const reward = rewardEventProducer.indexEvent.mock.calls[0][0] as any;
     expect(reward.walletAddress).toBe(ALICE);
     expect(reward.eventType).toBe(RewardActivityType.TOKEN_ACQUIRE);
-    expect(reward.units).toBe(1e18); // the ETH that landed, not the amount the request asked for
+    // Scored by the USD value of the ETH that landed (1 ETH @ $2000), not the amount the request asked for.
+    expect(reward.units).toBe(2000);
+    expect(reward.metadata.units_scale).toBe('usd');
+    expect(reward.metadata.amount).toBe((10n ** 18n).toString());
   });
 
   it('a redelivered contribution re-applies status and lock but not the reward', async () => {
@@ -259,5 +266,86 @@ describe('EvmVaultEventReconciler — ContributionMade confirms only the transac
     expect(stats.errors).toBe(0);
     expect(transactionsService.lockAssetsForTransaction).toHaveBeenCalledWith('tx-alice', ['a1']);
     expect(rewardEventProducer.indexEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('EvmVaultEventReconciler — a contribution sent without /confirm (partial wallet flow)', () => {
+  it('is adopted by its nonce: hash bound, Asset rows created, transaction confirmed', async () => {
+    // The wallet flow stopped after asset 0 landed, so /confirm never ran: no tx_hash, no Asset rows.
+    const alice: Tx = {
+      id: 'tx-alice',
+      type: TransactionType.contribute,
+      tx_hash: null,
+      status: TransactionStatus.created,
+      metadata: [
+        { type: 'nft', policyId: NFT, assetName: '7', quantity: 1 },
+        { type: 'nft', policyId: NFT, assetName: '8', quantity: 1 },
+      ],
+      user: { address: ALICE },
+    };
+    const { reconciler, statusUpdates, inserted, transactionsService, rewardEventProducer } = build({
+      byHash: null,
+      candidates: [alice],
+      authNonce: deriveContributionNonce('tx-alice', 0),
+      assetRows: {},
+    });
+
+    const stats = await reconciler.reconcileLogs([
+      contributionLog({
+        id: 3n,
+        contributor: ALICE,
+        kind: EvmAssetKindOnchain.ERC721,
+        asset: NFT,
+        tokenId: 7n,
+        amount: 1n,
+      }),
+    ]);
+
+    expect(stats.errors).toBe(0);
+    // Bound the way /confirm would, guarded so a late /confirm cannot create the rows twice.
+    const bind = statusUpdates.find(u => u.set.tx_hash === TX_HASH);
+    expect(bind?.where.id).toBe('tx-alice');
+    expect(bind?.set.status).toBe(TransactionStatus.submitted);
+    expect(transactionsService.createAssets).toHaveBeenCalledWith('tx-alice');
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toMatchObject({ transaction_id: 'tx-alice', on_chain_contribution_id: '3', token_id: '7' });
+    expect(confirmedIds(statusUpdates)).toEqual(['tx-alice']);
+    expect(rewardEventProducer.indexEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the grace period before adopting, so the app's own /confirm lands first", async () => {
+    const alice: Tx = {
+      id: 'tx-alice',
+      type: TransactionType.contribute,
+      tx_hash: null,
+      status: TransactionStatus.created,
+      metadata: [{ type: 'nft', policyId: NFT, assetName: '7', quantity: 1 }],
+      user: { address: ALICE },
+    };
+    const { reconciler, inserted, transactionsService, transactionsRepository } = build({
+      byHash: null,
+      candidates: [alice],
+      authNonce: deriveContributionNonce('tx-alice', 0),
+      assetRows: {},
+    });
+    // The block is fresh.
+    const getBlock = (reconciler as any).contractReader.publicClient.getBlock;
+    getBlock.mockImplementation(async () => ({ timestamp: BigInt(Math.floor(Date.now() / 1000)) }));
+
+    const stats = await reconciler.reconcileLogs([
+      contributionLog({
+        id: 3n,
+        contributor: ALICE,
+        kind: EvmAssetKindOnchain.ERC721,
+        asset: NFT,
+        tokenId: 7n,
+        amount: 1n,
+      }),
+    ]);
+
+    expect(stats.errors).toBe(0);
+    expect(inserted).toHaveLength(0);
+    expect(transactionsService.createAssets).not.toHaveBeenCalled();
+    expect(transactionsRepository.update).not.toHaveBeenCalled();
   });
 });

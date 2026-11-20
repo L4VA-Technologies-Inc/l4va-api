@@ -71,6 +71,8 @@ export interface VaultSpecSettings {
   maxContributionDuration: number;
   minAcquireWindowDuration: number;
   maxAcquireWindowDuration: number;
+  /** Set only when the min is overridden by env (staging): the form and AI then start at it. */
+  defaultAcquireWindowDuration?: number | null;
   minAcquireThresholdEth: number;
   maxAcquireThresholdEth: number;
   vaultArchetypesEnabled(chain: ChainType): VaultArchetype[];
@@ -91,7 +93,11 @@ export function resolveVaultCreationSpecFromSettings(
   const resolvedArchetype = archetype ?? settings.vaultArchetypesEnabled(chain)[0] ?? VaultArchetype.standard;
   const overrides: Record<string, VaultFieldOverride> = {
     contributionDuration: { min: settings.minContributionDuration, max: settings.maxContributionDuration },
-    acquireWindowDuration: { min: settings.minAcquireWindowDuration, max: settings.maxAcquireWindowDuration },
+    acquireWindowDuration: {
+      min: settings.minAcquireWindowDuration,
+      max: settings.maxAcquireWindowDuration,
+      ...(settings.defaultAcquireWindowDuration ? { default: settings.defaultAcquireWindowDuration } : {}),
+    },
   };
   if (chain === ChainType.robinhood) {
     overrides.minAcquireThreshold = { min: settings.minAcquireThresholdEth, max: settings.maxAcquireThresholdEth };

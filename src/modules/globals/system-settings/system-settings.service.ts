@@ -506,6 +506,11 @@ export class SystemSettingsService implements OnModuleInit {
     return this.durationOverride('MIN_ACQUIRE_WINDOW_DURATION_MS') ?? (this.isMainnet ? 86400000 : 300000);
   }
 
+  /** Staging: when MIN_ACQUIRE_WINDOW_DURATION_MS is set, it is also the default acquire window. */
+  get defaultAcquireWindowDuration(): number | null {
+    return this.durationOverride('MIN_ACQUIRE_WINDOW_DURATION_MS');
+  }
+
   private durationOverride(key: string): number | null {
     const value = Number(this.configService.get<string>(key));
     return Number.isFinite(value) && value > 0 ? value : null;
