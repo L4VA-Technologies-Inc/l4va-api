@@ -144,10 +144,10 @@ describe('IndexSwapRouteService', () => {
     });
 
     it('is illiquid when the round trip loses more than the limit', async () => {
-      ctx.simulateContract.mockResolvedValue(probeResult({ soldReceived: (PROBE * 94n) / 100n }));
+      ctx.simulateContract.mockResolvedValue(probeResult({ soldReceived: (PROBE * 70n) / 100n }));
       const check = await ctx.service.checkAsset(AMZN, null, true);
       expect(check.status).toBe('illiquid');
-      expect(check.reason).toMatch(/6.0% less/);
+      expect(check.reason).toMatch(/30.0% less/);
     });
 
     it('is illiquid when selling at current prices returns far less than the buy cost, even if the probe looks cheap', async () => {

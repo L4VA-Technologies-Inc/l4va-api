@@ -65,8 +65,8 @@ const ROUTE_CHECK_TTL_MS = 15 * 60_000;
 /** Default size of the buy probe behind {@link IndexSwapRouteService.checkAsset}: 0.01 ETH. */
 const DEFAULT_ROUTE_PROBE_NATIVE = 10n ** 16n;
 
-/** Default round-trip cost above which a token counts as too illiquid for a basket: 3%. */
-const DEFAULT_MAX_ROUND_TRIP_LOSS_BPS = 300;
+/** Default round-trip cost above which a token counts as too illiquid for a basket: 25% (matches the swap-pool allowlist). */
+const DEFAULT_MAX_ROUND_TRIP_LOSS_BPS = 2500;
 /** A buy that arrives more than this short of what the adapter delivered means a transfer tax. */
 const TRANSFER_TAX_TOLERANCE_BPS = 10n;
 
