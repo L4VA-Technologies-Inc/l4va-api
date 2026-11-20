@@ -1,4 +1,3 @@
-import { isV13Version } from './evm-v13';
 import { describe, expect, it } from '@jest/globals';
 
 import {
@@ -11,6 +10,7 @@ import {
   resolveVaultLpAdapter,
   resolveVaultSwapAdapter,
 } from './evm-protocol-versions';
+import { isV13Version } from './evm-v13';
 
 describe('evm protocol versions', () => {
   it('finds a version by factory, case-insensitively and per chain', () => {

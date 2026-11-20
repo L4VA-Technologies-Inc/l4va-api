@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-nocheck -- dev driver run with ts-node --transpile-only; viem generics over dynamic ABIs do not type-check
 /**
  * V13 end-to-end driver for Robinhood testnet (46630) against a LOCAL API.
@@ -133,7 +134,10 @@ function vaultPayload(name: string, scenario: string) {
     name: `V13 e2e ${name}`,
     type: 'cnt',
     privacy: 'public',
-    vaultTokenTicker: `V13${name.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase()}`,
+    vaultTokenTicker: `V13${name
+      .replace(/[^a-z0-9]/gi, '')
+      .slice(-6)
+      .toUpperCase()}`,
     description: 'V13 testnet end-to-end run',
     tokenDescription: 'test',
     isExpandableAssetWhitelist: false,

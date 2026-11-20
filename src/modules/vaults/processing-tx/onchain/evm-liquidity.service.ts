@@ -4,7 +4,6 @@ import { Repository } from 'typeorm';
 import {
   encodeAbiParameters,
   encodePacked,
-  erc20Abi,
   formatUnits,
   keccak256,
   toBytes,
@@ -549,7 +548,7 @@ export class EvmLiquidityService {
         const budget = await read<bigint>('lpNativeBudget');
         if (budget === 0n) throw new Error(`vault ${vaultAddress} has no LP budget left`);
 
-        let rate = await read<bigint>('lpVtPerNative');
+        const rate = await read<bigint>('lpVtPerNative');
         if (lp.lpMode === EvmLpMode.FromSale) {
           // Audit F-02: the sale's rate is proposed on-chain, waits `allocationDelay` (the
           // Safe or the verifier may cancel it), and only then seeds the pool.
@@ -566,7 +565,8 @@ export class EvmLiquidityService {
               }
             }
             const [lpSaleVt, proceeds] = await Promise.all([read<bigint>('lpSaleVt'), read<bigint>('lpSaleProceeds')]);
-            if (v13FromSaleRate(lpSaleVt, proceeds) === 0n) throw new Error(`vault ${vaultAddress}: LP sale raised nothing`);
+            if (v13FromSaleRate(lpSaleVt, proceeds) === 0n)
+              throw new Error(`vault ${vaultAddress}: LP sale raised nothing`);
             const proposed = await this.adminSigner.sendAndConfirm(
               { address: vaultAddress, abi: VAULT_V13_ABI, functionName: 'proposeLpRate', args: [] },
               ['LpRateProposed']

@@ -17,11 +17,9 @@ jest.mock(
   }),
   { virtual: true }
 );
-jest.mock(
-  '@/types/vault.types',
-  () => ({ InvestmentWindowType: {}, VaultStatus: { published: 'published' } }),
-  { virtual: true }
-);
+jest.mock('@/types/vault.types', () => ({ InvestmentWindowType: {}, VaultStatus: { published: 'published' } }), {
+  virtual: true,
+});
 
 const addr = (n: string): string => `0x${n.repeat(40)}`;
 const word = (a: string): string => `0x${'0'.repeat(24)}${a.slice(2)}`;
@@ -44,7 +42,11 @@ const INITIALIZED = toEventSelector(
 );
 
 const topicsFor = (vault: string, creator = OWNER): string[] => [CREATED, ID, word(vault), word(creator)];
-const createdLog = (emitter: string, vault: string): object => ({ address: emitter, data: '0x', topics: topicsFor(vault) });
+const createdLog = (emitter: string, vault: string): object => ({
+  address: emitter,
+  data: '0x',
+  topics: topicsFor(vault),
+});
 const initializedLog = (emitter: string, authority = ADMIN): object => ({
   address: emitter,
   data: word(MINTER),

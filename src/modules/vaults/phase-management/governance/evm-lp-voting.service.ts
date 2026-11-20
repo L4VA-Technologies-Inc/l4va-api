@@ -1,4 +1,3 @@
-import { resolveVaultLpAdapter } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,6 +9,7 @@ import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-read
 import { amountsForLiquidity, sqrtPriceAtTick } from './evm-lp-voting.math';
 
 import { Vault } from '@/database/vault.entity';
+import { resolveVaultLpAdapter } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 
 const INITIALIZE_EVENT = parseAbiItem(
   'event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)'
