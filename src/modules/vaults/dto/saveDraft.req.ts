@@ -27,6 +27,7 @@ import {
 import { ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';
+import { MAX_ASSETS_WHITELIST } from './createVault.req';
 
 import { IndexBasketItemDto } from '@/modules/vaults/index-vault/dto/index-basket.dto';
 import { VaultArchetype } from '@/types/index-vault.types';
@@ -361,7 +362,8 @@ export class SaveDraftReq {
   ftTokenImg?: string | null;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
+    description:
+      'List of whitelisted assets with their policy IDs and optional count caps (max 10 on Cardano, 15 on Robinhood)',
     type: [AssetWhitelistDto],
     required: false,
     example: [
@@ -373,7 +375,7 @@ export class SaveDraftReq {
     ],
   })
   @IsArray()
-  @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
+  @ArrayMaxSize(MAX_ASSETS_WHITELIST, { message: `A maximum of ${MAX_ASSETS_WHITELIST} assets can be whitelisted` })
   @IsObject({ each: true })
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
