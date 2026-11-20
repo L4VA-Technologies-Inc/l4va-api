@@ -69,6 +69,8 @@ export class MarketService implements OnModuleInit {
     const queryBuilder = this.createBaseQuery()
       .andWhere('market.type = :type', { type: MarketType.vault_token })
       .andWhere('vault.has_active_lp = true')
+      // A terminating / burned vault's VT is being redeemed and burned — no longer a listed token.
+      .andWhere('vault.vault_status IN (:...vtStatuses)', { vtStatuses: VAULT_STATUSES_WITH_VT_TOKENS })
       .andWhere('vault.chain_type = :chainType', { chainType });
 
     const hiddenIds = this.systemSettingsService.hiddenMainnetVaultIds;
@@ -349,7 +351,9 @@ export class MarketService implements OnModuleInit {
     if (type === MarketType.robinhood_token) {
       queryBuilder.andWhere('market.type = :type', { type });
     } else {
-      queryBuilder.andWhere('vault.has_active_lp = true');
+      queryBuilder
+        .andWhere('vault.has_active_lp = true')
+        .andWhere('vault.vault_status IN (:...vtStatuses)', { vtStatuses: VAULT_STATUSES_WITH_VT_TOKENS });
       if (type) {
         queryBuilder.andWhere('market.type = :type', { type });
       }

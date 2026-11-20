@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
 import {
   createWalletClient,
   decodeEventLog,
@@ -135,6 +136,19 @@ export interface AdminTxResult {
 @Injectable()
 export class EvmAdminSigner {
   private readonly logger = new Logger(EvmAdminSigner.name);
+  /**
+   * Admin sends run from many places at once (proposal executions, lifecycle crons, the airdrop
+   * orchestrator). Each one read the "pending" nonce from the RPC independently, so concurrent
+   * sends signed the same nonce and all but one were rejected. Sends are serialised (prepare →
+   * sign → broadcast only; receipt waits stay concurrent):
+   *  - in-process through this promise chain;
+   *  - across processes through a Postgres advisory lock — during a blue/green deploy the old and
+   *    new containers both run the crons and both sign with this key for a few minutes.
+   * The next nonce is also tracked locally in case the RPC's pending count lags behind a
+   * just-accepted tx (the lock makes the RPC count authoritative across processes).
+   */
+  private sendChain: Promise<unknown> = Promise.resolve();
+  private nextLocalNonce: number | null = null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly walletClient: any;
@@ -146,7 +160,8 @@ export class EvmAdminSigner {
   constructor(
     private readonly configService: ConfigService,
     private readonly contractReader: EvmContractReader,
-    private readonly signers: EvmKmsSigners
+    private readonly signers: EvmKmsSigners,
+    private readonly dataSource: DataSource
   ) {
     const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
     if (!rpcUrl) throw new Error('EVM_RPC_URL is not configured.');
@@ -285,17 +300,55 @@ export class EvmAdminSigner {
    * Found → returned as broadcast. Not found → {@link TxBroadcastError}.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async signAndBroadcast(
+  private signAndBroadcast(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     account: any,
     request: { to: Address; data?: Hex; value?: bigint },
     label: string
   ): Promise<Hex> {
-    const prepared = await this.walletClient.prepareTransactionRequest({ account, chain: null, ...request });
+    const run = this.sendChain.then(() =>
+      this.withClusterSendLock(() => this.signAndBroadcastExclusive(account, request, label))
+    );
+    // Keep the chain alive whatever this send does.
+    this.sendChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Holds a cluster-wide advisory lock (per admin address) for the duration of `fn`. */
+  private async withClusterSendLock<T>(fn: () => Promise<T>): Promise<T> {
+    const key = `evm-admin-send:${this.chainId}:${String(this.address).toLowerCase()}`;
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+      try {
+        return await fn();
+      } finally {
+        await runner.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]).catch(() => undefined);
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async signAndBroadcastExclusive(
+    account: any,
+    request: { to: Address; data?: Hex; value?: bigint },
+    label: string
+  ): Promise<Hex> {
+    const rpcNonce: number = await this.publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    });
+    const nonce = Math.max(rpcNonce, this.nextLocalNonce ?? 0);
+    const prepared = await this.walletClient.prepareTransactionRequest({ account, chain: null, nonce, ...request });
     const serializedTransaction = (await account.signTransaction(prepared)) as Hex;
     const hash = keccak256(serializedTransaction);
 
     try {
       await this.walletClient.sendRawTransaction({ serializedTransaction });
+      this.nextLocalNonce = nonce + 1;
       return hash;
     } catch (err) {
       const transport = isTransportFailure(err);
@@ -305,8 +358,11 @@ export class EvmAdminSigner {
       );
       if (await this.isTxKnown(hash, transport ? BROADCAST_RECHECK_MS : 0)) {
         this.logger.warn(`Tx ${hash} (${label}) reached the node despite the failed broadcast call; continuing`);
+        this.nextLocalNonce = nonce + 1;
         return hash;
       }
+      // Not sent: forget the local guess so the next send re-reads the chain.
+      this.nextLocalNonce = null;
       throw new TxBroadcastError(hash, err);
     }
   }
