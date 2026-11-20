@@ -70,8 +70,8 @@ export class DailySwapCapError extends Error {
     readonly remaining: bigint
   ) {
     super(
-      `Vault ${vault} may sell at most ${remaining} more base units of ${asset} in the current 24 h window ` +
-        `(requested ${requested}). The cap protects vault assets; split the trade or wait for the window to reset.`
+      `Vault ${vault} may sell at most ${remaining} more base units of ${asset} right now ` +
+        `(requested ${requested}). The cap protects vault assets; split the trade or wait — the allowance refills over 24 h.`
     );
     this.name = 'DailySwapCapError';
   }

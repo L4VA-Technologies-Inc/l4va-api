@@ -155,11 +155,13 @@ export class EvmAirdropOrchestrator {
       );
     }
 
-    // V13: acquirers are paid on-chain, independently of the root (the cycle only has to be
-    // Locked). The root's leaves wait until it opens: after the allocation delay, or earlier
-    // when the verifier approves it; a cancelled root pays nothing until it is recommitted.
+    // V13: acquirers (on-chain) and the root's leaves both wait until the root opens: after
+    // the allocation delay, or earlier when the verifier approves it; a cancelled root pays
+    // nothing until it is recommitted. A pure acquirer raise (no contributed assets, root
+    // (0,0)) opens at close, so its acquirers are paid at once. A raise holding assets keeps
+    // the acquirer pool behind the delay too (audit 2026-11-20 #4).
     if (vaultIsV13(vault)) {
-      const onchain = await this.pushOnchainClaims(vault, cycleId);
+      const none: PushResult = { batchesBroadcast: 0, claimsBroadcast: 0, alreadyClaimedSkipped: 0, txHashes: [] };
       const view = toV13CycleView(
         (await this.contractReader.publicClient.readContract({
           address: vault.contract_address as Address,
@@ -174,9 +176,10 @@ export class EvmAirdropOrchestrator {
           vaultId,
           cycleId: cycleId.toString(),
         });
-        return onchain;
+        return none;
       }
-      if (!v13RootOpen(view)) return onchain;
+      if (!v13RootOpen(view)) return none;
+      const onchain = await this.pushOnchainClaims(vault, cycleId);
       const leaves = await this.pushMerkleBatch(vault, cycleId);
       return {
         batchesBroadcast: onchain.batchesBroadcast + leaves.batchesBroadcast,

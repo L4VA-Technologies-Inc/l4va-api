@@ -36,7 +36,9 @@ export function getEvmLpMinUsd(): number {
 
 export function getEvmLpMaxPriceDeviationBps(): number {
   const n = Number(process.env.EVM_LP_MAX_PRICE_DEVIATION_BPS ?? '30');
-  return Number.isInteger(n) && n >= 0 && n <= 10_000 ? n : 30;
+  // The V4 LP adapter refuses more than MAX_PRICE_DEVIATION_BPS (100) since the 2026-11-20
+  // audit: a looser tolerance let a pre-initialized pool price drain the LP ETH.
+  return Number.isInteger(n) && n >= 0 && n <= 100 ? n : 30;
 }
 
 /**
