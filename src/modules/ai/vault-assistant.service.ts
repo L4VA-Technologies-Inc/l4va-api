@@ -10,7 +10,7 @@ import { firstJsonObject } from './first-json-object';
 import { ChatMessage, ChatTurn, ChatTurnParams, OpenAiClient } from './openai.client';
 import { buildVaultAssistantPrompt, PresetContext } from './prompts/vault-assistant.prompt';
 import { buildVaultCompletionContext } from './spec/completion-context';
-import { resolveVaultCreationSpec } from './spec/resolve-spec';
+import { resolveVaultCreationSpecFromSettings } from './spec/resolve-spec';
 import { sanitizeVaultDraft } from './spec/sanitize-draft';
 import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork } from './spec/spec.types';
 import { buildVaultDraftJsonSchema } from './spec/vault-draft.schema';
@@ -284,11 +284,8 @@ export class VaultAssistantService {
 
   /** The creation spec with phase minimums taken from settings, so env overrides (staging) apply here too. */
   resolveSpec(chain: SpecChain, network: SpecNetwork, archetype?: VaultArchetype): ResolvedVaultCreationSpec {
-    const { minContributionDuration, minAcquireWindowDuration } = this.systemSettingsService;
-    return resolveVaultCreationSpec(chain, network, archetype, {
-      contributionDuration: { min: minContributionDuration },
-      acquireWindowDuration: { min: minAcquireWindowDuration },
-    });
+    // Same resolution as createVault and the client form (via GET /ai/vault-creation-spec).
+    return resolveVaultCreationSpecFromSettings(this.systemSettingsService, chain, network, archetype);
   }
 
   private async buildTurnContext(userId: string, request: VaultAssistantMessageReq): Promise<AssistantTurnContext> {

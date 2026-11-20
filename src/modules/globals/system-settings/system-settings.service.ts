@@ -476,6 +476,25 @@ export class SystemSettingsService implements OnModuleInit {
     return 100000;
   }
 
+  /** Network the vault creation spec resolves against: the API's own deployment network. */
+  get specNetwork(): 'mainnet' | 'preprod' {
+    return this.isMainnet ? 'mainnet' : 'preprod';
+  }
+
+  /** Longest contribution window a vault may be created with. */
+  get maxContributionDuration(): number {
+    return 2592000000; // 30 days
+  }
+
+  /** Robinhood minAcquireThreshold range, in ETH. */
+  get minAcquireThresholdEth(): number {
+    return 0.01;
+  }
+
+  get maxAcquireThresholdEth(): number {
+    return 100000;
+  }
+
   get minContributionDuration(): number {
     // Environment-based: 10 min (preprod) / 5 days (mainnet); MIN_CONTRIBUTION_DURATION_MS overrides (e.g. staging)
     return this.durationOverride('MIN_CONTRIBUTION_DURATION_MS') ?? (this.isMainnet ? 432000000 : 600000);

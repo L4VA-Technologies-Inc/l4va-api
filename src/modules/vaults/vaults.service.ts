@@ -87,6 +87,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
+import { findSpecBoundsViolations, resolveVaultCreationSpecFromSettings } from '@/modules/ai/spec/resolve-spec';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
@@ -171,12 +172,7 @@ function normalizeMinAcquireThresholdForDb(
   }
 
   if (chainType === ChainType.robinhood) {
-    if (value < 0.01) {
-      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold must be at least 0.01 ETH');
-    }
-    if (value > 100000) {
-      throw new BadRequestException('For Robinhood vaults, minAcquireThreshold cannot exceed 100,000 ETH');
-    }
+    // The ETH range is checked against the vault creation spec in createVault.
     try {
       return parseEther(String(value)).toString();
     } catch {
@@ -594,27 +590,36 @@ export class VaultsService {
       // ========================================================================
       // CHAIN-SPECIFIC: Build and save the vault entity
       // ========================================================================
-      // 0.1% proposal threshold is the Robinhood launch default; Cardano governance keeps its 0.5% floor.
-      if (data.chainType !== ChainType.robinhood && Number(data.creationThreshold) < 0.5) {
-        throw new BadRequestException('Proposal threshold must be at least 0.5% on Cardano');
+      // Numeric bounds come from the same resolved spec the AI assistant and the client form use
+      // (GET /ai/vault-creation-spec), with system settings applied: one place to change a limit.
+      const specChain = data.chainType === ChainType.robinhood ? ChainType.robinhood : ChainType.cardano;
+      const creationSpec = resolveVaultCreationSpecFromSettings(
+        this.systemSettingsService,
+        specChain,
+        undefined,
+        data.vaultArchetype === VaultArchetype.index_weighted ? VaultArchetype.index_weighted : VaultArchetype.standard
+      );
+      const hasAcquirePhase = Number(data.tokensForAcquires) !== 0;
+      const boundsViolations = findSpecBoundsViolations(creationSpec, data as unknown as Record<string, unknown>, {
+        creationThreshold: 'Proposal threshold',
+        cosigningThreshold: 'Vote quorum threshold',
+        executionThreshold: 'Approval threshold',
+        ...(hasAcquirePhase
+          ? { liquidityPoolContribution: 'Liquidity pool contribution', acquireWindowDuration: 'Acquire window' }
+          : {}),
+        ...(data.isAcquireOnly ? {} : { contributionDuration: 'Contribution window' }),
+        ...(specChain === ChainType.robinhood && data.isAcquireOnly
+          ? { minAcquireThreshold: 'Minimum acquire threshold' }
+          : {}),
+      });
+      if (boundsViolations.length) {
+        throw new BadRequestException(boundsViolations.map(v => v.message).join('; '));
+      }
+      if (hasAcquirePhase && !Number.isFinite(Number(data.acquireWindowDuration))) {
+        throw new BadRequestException('Acquire window duration is required');
       }
 
-      // Robinhood launch range for the LP contribution.
-      if (data.chainType === ChainType.robinhood) {
-        const lp = Number(data.liquidityPoolContribution);
-        if (!Number.isFinite(lp) || lp < 5 || lp > 20) {
-          throw new BadRequestException('Liquidity pool contribution must be between 5% and 20% on Robinhood');
-        }
-      }
-
-      if (Number(data.tokensForAcquires) !== 0) {
-        const duration = Number(data.acquireWindowDuration);
-        const { minAcquireWindowDuration: min, maxAcquireWindowDuration: max } = this.systemSettingsService;
-        if (!Number.isFinite(duration) || duration < min || duration > max) {
-          throw new BadRequestException(
-            `Acquire window must be between ${Math.round(min / 60000)} minutes and ${max / 86400000} days`
-          );
-        }
+      if (hasAcquirePhase) {
         // A custom start in the past would silently open at creation instead; make the user pick again.
         if (
           data.isAcquireOnly &&
@@ -2189,17 +2194,25 @@ export class VaultsService {
     }
 
     if (contributionWindow?.from) {
-      queryBuilder.andWhere('vault.contribution_open_window_time >= :contributionWindowFrom', { contributionWindowFrom: contributionWindow.from });
+      queryBuilder.andWhere('vault.contribution_open_window_time >= :contributionWindowFrom', {
+        contributionWindowFrom: contributionWindow.from,
+      });
     }
     if (contributionWindow?.to) {
-      queryBuilder.andWhere('vault.contribution_open_window_time <= :contributionWindowTo', { contributionWindowTo: contributionWindow.to });
+      queryBuilder.andWhere('vault.contribution_open_window_time <= :contributionWindowTo', {
+        contributionWindowTo: contributionWindow.to,
+      });
     }
 
     if (acquireWindow?.from) {
-      queryBuilder.andWhere('vault.acquire_open_window_time >= :acquireWindowFrom', { acquireWindowFrom: acquireWindow.from });
+      queryBuilder.andWhere('vault.acquire_open_window_time >= :acquireWindowFrom', {
+        acquireWindowFrom: acquireWindow.from,
+      });
     }
     if (acquireWindow?.to) {
-      queryBuilder.andWhere('vault.acquire_open_window_time <= :acquireWindowTo', { acquireWindowTo: acquireWindow.to });
+      queryBuilder.andWhere('vault.acquire_open_window_time <= :acquireWindowTo', {
+        acquireWindowTo: acquireWindow.to,
+      });
     }
 
     if (minTvl) {
