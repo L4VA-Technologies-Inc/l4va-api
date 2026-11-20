@@ -2,7 +2,7 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { keccak256 } from 'viem';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -313,7 +313,38 @@ export class BlockchainWebhookService {
       }
     }
 
-    return this.applyTransactionStatus(txHash, txIndex, status);
+    const transactionId = await this.applyTransactionStatus(txHash, txIndex, status);
+    if (status === TransactionStatus.failed) await this.revertEvmVaultCreation(txHash);
+    return transactionId;
+  }
+
+  /**
+   * A reverted createVault created nothing on-chain, but /publish already marked the vault
+   * `published`. Put it back to draft so it does not sit published without a contract and the
+   * owner can launch it again. Only when the vault is still exactly what this transaction
+   * published: published, no contract address, publication_hash = this hash (a newer attempt or
+   * a vault that did get created is left alone). Idempotent.
+   */
+  private async revertEvmVaultCreation(txHash: string): Promise<void> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { tx_hash: txHash },
+      select: ['id', 'type', 'vault_id'],
+    });
+    if (transaction?.type !== TransactionType.createVault || !transaction.vault_id) return;
+
+    const result = await this.vaultRepository.update(
+      {
+        id: transaction.vault_id,
+        chain_type: ChainType.robinhood,
+        vault_status: VaultStatus.published,
+        contract_address: IsNull(),
+        publication_hash: txHash,
+      },
+      { vault_status: VaultStatus.draft, publication_hash: null }
+    );
+    if ((result.affected ?? 0) > 0) {
+      this.logger.warn(`WH: createVault ${txHash} reverted on-chain; vault ${transaction.vault_id} returned to draft`);
+    }
   }
 
   /**
