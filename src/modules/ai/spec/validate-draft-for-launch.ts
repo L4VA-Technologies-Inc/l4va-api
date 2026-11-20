@@ -1,7 +1,7 @@
-import { MAX_ASSETS_WHITELIST } from '@/modules/vaults/dto/createVault.req';
 import { sanitizeVaultDraft } from './sanitize-draft';
 import { FieldCondition, ResolvedVaultCreationSpec } from './spec.types';
 
+import { maxAssetsWhitelistFor } from '@/modules/vaults/dto/createVault.req';
 import { BPS, INDEX_MAX_ASSETS, INDEX_MIN_WEIGHT_BPS, VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
@@ -242,11 +242,13 @@ export function validateVaultDraftForLaunch(
         message: 'At least one verified asset collection must be selected.',
         action: 'choose_assets',
       });
-    } else if (validAssets > MAX_ASSETS_WHITELIST) {
-      errors.push(`assetsWhitelist: a maximum of ${MAX_ASSETS_WHITELIST} asset collections can be whitelisted`);
+    } else if (validAssets > maxAssetsWhitelistFor(spec.chain)) {
+      errors.push(
+        `assetsWhitelist: a maximum of ${maxAssetsWhitelistFor(spec.chain)} asset collections can be whitelisted`
+      );
       addBlocker({
         field: 'assetsWhitelist',
-        message: `A vault can whitelist at most ${MAX_ASSETS_WHITELIST} asset collections.`,
+        message: `A vault can whitelist at most ${maxAssetsWhitelistFor(spec.chain)} asset collections.`,
         action: 'choose_assets',
       });
     }

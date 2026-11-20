@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -19,6 +18,10 @@ import {
   ArrayMinSize,
   IsUUID,
   ValidateNested,
+  Validate,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
@@ -37,8 +40,34 @@ import {
   ChainType,
 } from '@/types/vault.types';
 
-/** Max policies in a vault's asset whitelist (same cap governance enforces on whitelist proposals). */
-export const MAX_ASSETS_WHITELIST = 30;
+/**
+ * Max entries in a vault's asset whitelist, per chain. Robinhood: `beginTermination` takes at most
+ * 16 assets incl. native ETH, so 15 (same as `INDEX_MAX_ASSETS`). Cardano: 10.
+ */
+export const MAX_ASSETS_WHITELIST_BY_CHAIN: Record<ChainType, number> = {
+  [ChainType.cardano]: 10,
+  [ChainType.robinhood]: 15,
+};
+/** Upper bound across chains — for payloads that don't carry a chain (drafts). */
+export const MAX_ASSETS_WHITELIST = Math.max(...Object.values(MAX_ASSETS_WHITELIST_BY_CHAIN));
+
+export function maxAssetsWhitelistFor(chainType?: ChainType): number {
+  return (
+    MAX_ASSETS_WHITELIST_BY_CHAIN[chainType ?? ChainType.cardano] ?? MAX_ASSETS_WHITELIST_BY_CHAIN[ChainType.cardano]
+  );
+}
+
+@ValidatorConstraint({ name: 'assetsWhitelistMaxForChain', async: false })
+class AssetsWhitelistMaxForChain implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    if (!Array.isArray(value)) return true;
+    return value.length <= maxAssetsWhitelistFor((args.object as { chainType?: ChainType }).chainType);
+  }
+  defaultMessage(args: ValidationArguments): string {
+    const chain = (args.object as { chainType?: ChainType }).chainType ?? ChainType.cardano;
+    return `A maximum of ${maxAssetsWhitelistFor(chain)} assets can be whitelisted on ${chain}`;
+  }
+}
 
 export class CreateVaultReq {
   @ApiProperty({ required: false })
@@ -403,7 +432,8 @@ export class CreateVaultReq {
   ftTokenImg: string;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 30 assets)',
+    description:
+      'List of whitelisted assets with their policy IDs and optional count caps (max 10 on Cardano, 15 on Robinhood)',
     type: [AssetWhitelistDto],
     required: false,
     example: [
@@ -416,7 +446,7 @@ export class CreateVaultReq {
   })
   @IsArray()
   @ArrayMinSize(1, { message: 'At least one asset must be whitelisted' })
-  @ArrayMaxSize(MAX_ASSETS_WHITELIST, { message: `A maximum of ${MAX_ASSETS_WHITELIST} assets can be whitelisted` })
+  @Validate(AssetsWhitelistMaxForChain)
   @IsObject({ each: true })
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];

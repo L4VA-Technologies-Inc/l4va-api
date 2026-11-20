@@ -362,7 +362,8 @@ export class SaveDraftReq {
   ftTokenImg?: string | null;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 30 assets)',
+    description:
+      'List of whitelisted assets with their policy IDs and optional count caps (max 10 on Cardano, 15 on Robinhood)',
     type: [AssetWhitelistDto],
     required: false,
     example: [
