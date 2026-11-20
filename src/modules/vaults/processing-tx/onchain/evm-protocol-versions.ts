@@ -6,11 +6,29 @@ import type { Address } from 'viem';
  * factory creates its own adapter registry), so a vault must keep using its own address set.
  *
  * To release a version: deploy the contracts, add an entry here, then point EVM_FACTORY_ADDRESS at it.
- * Never remove an entry while vaults live on it. Addresses come from
+ * Never remove an entry while vaults live on it.
+ *
+ * NUMBERING. `version` is a DEPLOYMENT id, unique per chain, not the contract code version.
+ * Stage and production share chain 4663 but are separate deployments (own factory, registry,
+ * adapters, keys), so each gets its own id: a new contract version takes the next free id for
+ * stage and the one after it for production. Every vault stores its id (`evm_protocol_version`),
+ * so an id must never be reused or renumbered.
+ *   4663:  8–11 stage (V8–V11 code) · 12 production (V12 code) · 13 stage (V13) · 14 production (V13)
+ *   46630: testnet, one id per deployment
+ * `stack` says which environment an entry belongs to and `codeVersion` which contract code it runs.
+ * Code checks such as `isV13Version` compare ids (`>= 13`), which holds because ids only grow.
+ * The vault-contract-solidity deploy scripts print the id to use (`API_VERSION`). Addresses come from
  * vault-contract-solidity/deployments and were checked on-chain on 2026-11-06.
  */
+export type EvmStack = 'production' | 'stage' | 'testnet';
+
 export interface EvmProtocolVersion {
+  /** Deployment id, unique per chain (see NUMBERING above). Stored on every vault. */
   version: number;
+  /** Which environment's deployment this is. Stage and production must never share an id. */
+  stack: EvmStack;
+  /** Contract code version the vaults of this deployment run (V13 code on both 13 and 14). */
+  codeVersion: number;
   factory: Address;
   /** Lower bound for log scans. The V9 deployment files hold an L1 block, so the real one is used. */
   deployBlock: bigint;
@@ -27,9 +45,10 @@ export interface EvmProtocolVersion {
   swapAdapterMultiPath?: boolean;
   lpAdapter: Address | null;
   /**
-   * `LiquidityExitAdapter` approved (tag "swap") in this version's registry. It returns withdrawn
-   * v4 LP proceeds into the vault's custody through `Vault.swap`, so holders redeem them. One
-   * deployment serves every version; it must be approved in each registry. Unset until deployed.
+   * V1 `LiquidityExitAdapter` approved (tag "swap") in this version's registry. It returns withdrawn
+   * v4 LP proceeds of V1 LP adapters into the vault's custody through `Vault.swap`. A V2 LP adapter
+   * (`UniswapV4LiquidityAdapterV2`) names its own `LiquidityExitAdapterV2` on-chain and does not use
+   * this field; `EvmLpExitService` tells the two apart per position. Unset until deployed.
    */
   lpExitAdapter?: Address | null;
   feeConverter: Address;
@@ -40,12 +59,20 @@ export interface EvmProtocolVersion {
    * V8–V10, whose vaults have no freeze and hand authority over with propose/accept.
    */
   guardian?: Address;
+  /**
+   * L4VALpShareRegistry this deployment's factory points `lpShareSource` at: the backend records
+   * the pool VT of LP providers there before each distribution, so they are paid without depositing
+   * anything. Unset = LP payouts off for this version.
+   */
+  lpShareRegistry?: Address;
 }
 
 export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
   4663: [
     {
       version: 8,
+      stack: 'stage',
+      codeVersion: 8,
       factory: '0x7Eb5c9F3FE05C8e924BC4d1792D8C0Eb07fccC05',
       deployBlock: 94143837n,
       adapterRegistry: '0xd36b53bC8A11C09dB5dc708d7B4E2Ca06769F730',
@@ -60,6 +87,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
     },
     {
       version: 9,
+      stack: 'stage',
+      codeVersion: 9,
       factory: '0xf933f971Dd670648162b393f02f718E49C788ebb',
       deployBlock: 104978002n,
       adapterRegistry: '0x0CfbD0767198aA1C2dc7297580E3DDc46F4f3350',
@@ -74,6 +103,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
     },
     {
       version: 10,
+      stack: 'stage',
+      codeVersion: 10,
       factory: '0xceC9F4A79e3FF744aF845b6379561c570dc54CCf',
       deployBlock: 107526764n,
       adapterRegistry: '0x1BB699ae8A027c242dA401f59B89B2bD6c9d3629',
@@ -98,6 +129,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // deployed 2026-11-17 with script/deploy-stage-v11.sh (deployments/robinhood-mainnet-stage-v11.json).
       // Production keeps creating vaults on V10 until its EVM_FACTORY_ADDRESS is switched.
       version: 11,
+      stack: 'stage',
+      codeVersion: 11,
       factory: '0xfB79Bf6a61950a04C64F1AD6Ef3b1809A21c2598',
       deployBlock: 116436007n,
       adapterRegistry: '0x7720D6FAA6cA32B0ef22f1B11B278F406A70eC03',
@@ -122,6 +155,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // deployments/robinhood-mainnet-v12.json, script/deploy-mainnet-v12.sh, 2026-11-18).
       // Vault code: guardian freeze + closeAcquireWindow + burnHeldVaultToken.
       version: 12,
+      stack: 'production',
+      codeVersion: 12,
       factory: '0x2d100A23459df7AdEa1Cd369374B48Bda2cC1567',
       deployBlock: 117391239n,
       adapterRegistry: '0x6Ba8C1628EF52665c5B275DB319a4F8Beb624f49',
@@ -137,10 +172,37 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // L4VA Safe; also the pauser.
       guardian: '0x4733002467440E5881b84D19aC31e5c546Be9945',
     },
+    {
+      // V13 STAGE (vault-contract-solidity feat/v13, script/deploy-stage-v13.sh, 2026-11-19): own
+      // stack, stage keys. Registry + ProtocolFeeConfig roles are on the stage Safe, not the
+      // backend key (audit F-08/F-09). Guarded swap adapter (pool allowlist + daily cap, owner =
+      // Safe); the stack's unguarded swap adapter and V1 LP adapter are revoked. Delays 24 h.
+      version: 13,
+      stack: 'stage',
+      codeVersion: 13,
+      factory: '0x6d54065a3aC9C0964a92101F7C07453C952eDcD6',
+      deployBlock: 118439792n,
+      adapterRegistry: '0x898902514c2f6F72106Dbec5E633453e2E9f6c84',
+      protocolFeeConfig: '0xc918dFC5e642A95Bc1a6066867dCEEe0d8fB6314',
+      batchDeployer: '0x38dD2b6b98Fc0eb7c282be9357798Abec3141246',
+      swapAdapter: '0x164552378d21c553962a3254CC8C8C888CB05388',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0x078d10051959E63522e1f973D1c29d6BEd195716',
+      lpExitAdapter: '0x91773Ef6DBAF35fFa76c51E7B1d6F0B9Bc8882f8',
+      feeConverter: '0xc32a0b4eF83a67148D100DcE93425afdc5a72383',
+      feeController: '0xaeb6B894Af6722020052cCaD25DBd81E77d69443',
+      guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
+      // 2026-11-20 audit fixes (script/upgrade-v13-audit.sh + Safe batch): new deployer, guarded swap,
+      // LP V2 and exit V2; the previous ones (0x9197…, 0xA5eC…, 0xB791…, 0xB292…) are revoked.
+      // LP payouts (2026-11-20): backend records LP providers' pool VT here before each distribution.
+      lpShareRegistry: '0xd763D8dCf064413fd5BC82bc9a6c9ca7A99B783d',
+    },
   ],
   46630: [
     {
       version: 8,
+      stack: 'testnet',
+      codeVersion: 8,
       factory: '0x042822e201F16b25D5c377F5fA9c22C9FCA50235',
       deployBlock: 119398566n,
       adapterRegistry: '0x68BFc801c81f8f994BFFf5b97860cC8d3920f867',
@@ -153,6 +215,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
     },
     {
       version: 9,
+      stack: 'testnet',
+      codeVersion: 9,
       factory: '0x8BdB53276A383Bf448E50DaE451Fd183bce5cE9B',
       deployBlock: 147622177n,
       adapterRegistry: '0x90185b17a288218105A107f28F2192C2DA67878e',
@@ -165,6 +229,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
     },
     {
       version: 10,
+      stack: 'testnet',
+      codeVersion: 10,
       factory: '0x6272107267D0d65031c0754cE7c61a10CC744771',
       deployBlock: 149540495n,
       adapterRegistry: '0xaEC325F84e36A696263d8c1aC10D94a3d8E13f61',
@@ -181,6 +247,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // V2 LP adapter are reused from V10; the LP adapter is not bound to a factory but must be
       // approved in this registry. Testnet has no Safe: guardian and pauser are the admin EOA.
       version: 11,
+      stack: 'testnet',
+      codeVersion: 11,
       factory: '0x9795635535b11e09b561a67b87A175e516dfc680',
       deployBlock: 154424047n,
       adapterRegistry: '0x6552F8a786465b8d2Aef745D2002dA677dc17C2c',
@@ -193,6 +261,48 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       feeConverter: '0xBdD98E3578056aAC2f9afFb27b1EED7Dfb03baec',
       feeController: '0x978f6EFdDB9516A11fd0F994ACCD20664033e85c',
       guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
+    },
+    {
+      // V13 (vault-contract-solidity feat/v13, script/deploy-testnet-v13.sh, 2026-11-19): vault
+      // economics fixed at creation, contract-computed allocations, 1 h review windows on roots and
+      // distributions (testnet setting), verifier = the Dave test wallet. Fixed-rate testnet swap
+      // adapter; Uniswap v4 LP adapter V2 with its own exit adapter (0x1451…89f2).
+      version: 13,
+      stack: 'testnet',
+      codeVersion: 13,
+      factory: '0x1a5BC0EFbF5a031e821e472b23148A4F067c47b1',
+      deployBlock: 155352797n,
+      adapterRegistry: '0xBA94A5378543D3Cf3854722090B9075cD9862C4f',
+      protocolFeeConfig: '0x6347e3C741dB95a6CdaB4FE445f58C464b108727',
+      batchDeployer: '0xAa2d2CC95B9aE3f439E0E8424227EbA4e9032A4e',
+      swapAdapter: '0x4bB3777d7c2968dF3EAE1ec148fb10Fa910C7De4',
+      lpAdapter: '0xfa64379745F6aACE931AA08103a155F48E5b7dAA',
+      feeConverter: '0x3c2726d1c42aF641171b4454492F42985EcAaAF7',
+      feeController: '0x606E8b94f1cEF179661f28D7c220ce03A724fCe9',
+      guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
+    },
+    {
+      // V13 with the audit fixes (2026-11-19, script/deploy-testnet-v13.sh): FixedPrice removed,
+      // FromSale on the Cardano math with a delayed, cancellable rate. Replaces id 13 for new
+      // vaults (13 stays for vaults created on it). No testnet Safe: registry/fee roles stay on
+      // the admin key here. Fixed-rate testnet swap adapter; delays 1 h; verifier = Dave.
+      version: 14,
+      stack: 'testnet',
+      codeVersion: 13,
+      factory: '0x26A696583E461382723ABe5Ec47a999882d0Ce53',
+      deployBlock: 155562270n,
+      adapterRegistry: '0x9e47184b2C83fB4B285301B990330D0c91c1297b',
+      protocolFeeConfig: '0xd01ca9faC35F7E05Ea3a442d37797624B486292D',
+      batchDeployer: '0x8A554A224b1c3A88598F97EEEf259a8762C6420E',
+      // Fixed-rate TestnetSwapAdapter ("swap" tag). 0x2f48…4796 is the MockAdapter (no rate()).
+      swapAdapter: '0x797CE9e0DddBEcA057DCb238f721d94381D6aE79',
+      lpAdapter: '0x66247971049f8563dD5E46cf628f730F2D0ebF8b',
+      lpExitAdapter: '0x762920Efe8c6878569F342ddB34F6f9d776BD446',
+      feeConverter: '0xc2c5B0264D8B9f67c56174366465331E56932646',
+      feeController: '0x5edf35Bc35149bDBa1D073CC42f844b25E5A9d97',
+      guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
+      // 2026-11-20 audit fixes (script/upgrade-v13-audit.sh): new deployer and LP V2 / exit V2;
+      // the previous ones (0x199C…, 0x7315…, 0x9d22…) are revoked. Vaults created earlier keep their code.
     },
   ],
 };

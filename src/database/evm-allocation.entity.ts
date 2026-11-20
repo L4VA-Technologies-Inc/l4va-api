@@ -77,6 +77,13 @@ export class EvmAllocation {
   @Column({ name: 'proof', type: 'jsonb' })
   proof: string[];
 
+  /**
+   * V13 raise: an acquirer's VT, paid by `claimOnchainAllocation` rather than a Merkle leaf.
+   * Not part of the tree (empty proof); `claim_index` only numbers it after the leaves.
+   */
+  @Column({ name: 'onchain', type: 'boolean', default: false })
+  onchain: boolean;
+
   /** Set by the AllocationClaimed webhook / airdrop confirm — idempotent. */
   @Column({ name: 'claimed_at', type: 'timestamptz', nullable: true })
   claimed_at?: Date;

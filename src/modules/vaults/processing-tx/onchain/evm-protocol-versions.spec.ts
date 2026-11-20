@@ -10,6 +10,7 @@ import {
   resolveVaultLpAdapter,
   resolveVaultSwapAdapter,
 } from './evm-protocol-versions';
+import { isV13Version } from './evm-v13';
 
 describe('evm protocol versions', () => {
   it('finds a version by factory, case-insensitively and per chain', () => {
@@ -67,4 +68,30 @@ describe('evm protocol versions', () => {
     expect(findEvmProtocolVersionByFeeConverter(4663, v9.feeConverter.toLowerCase())?.version).toBe(9);
     expect(findEvmProtocolVersionByFeeConverter(4663, env)).toBeNull();
   });
+});
+
+describe('EVM_PROTOCOL_VERSIONS numbering (deployment ids)', () => {
+  for (const [chain, list] of Object.entries(EVM_PROTOCOL_VERSIONS)) {
+    it(`chain ${chain}: ids are unique and only grow`, () => {
+      const ids = list.map(v => v.version);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect([...ids].sort((a, b) => a - b)).toEqual(ids);
+    });
+
+    it(`chain ${chain}: stack matches the chain`, () => {
+      for (const v of list) {
+        if (Number(chain) === 46630) expect(v.stack).toBe('testnet');
+        else expect(v.stack).not.toBe('testnet');
+      }
+    });
+
+    it(`chain ${chain}: isV13Version (id >= 13) agrees with the code version`, () => {
+      for (const v of list) expect(isV13Version(v.version)).toBe(v.codeVersion >= 13);
+    });
+
+    it(`chain ${chain}: no two deployments share a factory`, () => {
+      const f = list.map(v => v.factory.toLowerCase());
+      expect(new Set(f).size).toBe(f.length);
+    });
+  }
 });

@@ -1,12 +1,20 @@
 import { KeyManagementServiceClient } from '@google-cloud/kms';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { Address, LocalAccount } from 'viem';
+import { getAddress, type Address, type LocalAccount } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 // Relative, not `@/`: specs that load the services importing this file run without the path alias.
 import { createKmsAccount, type KmsSigningClient } from '../../../../common/evm/kms-account';
 
 type Role = 'admin' | 'minting';
+
+/** Robinhood Chain testnet: the only chain where plain private keys may sign (local runs). */
+const TESTNET_CHAIN_ID = 46630;
+const LOCAL_KEY: Record<Role, string> = {
+  admin: 'EVM_ADMIN_PRIVATE_KEY',
+  minting: 'EVM_MINTING_SIGNER_PRIVATE_KEY',
+};
 
 const CONFIG: Record<Role, { key: string; address: string; purpose: string }> = {
   admin: {
@@ -77,8 +85,21 @@ export class EvmKmsSigners implements OnModuleInit {
     const { key, address, purpose } = CONFIG[role];
     const keyVersion = this.configService.get<string>(key);
     const expected = this.configService.get<string>(address) as Address | undefined;
-    if (!keyVersion) throw new Error(`${key} is not configured (${purpose}).`);
     if (!expected) throw new Error(`${address} is not configured (${purpose}).`);
+    if (!keyVersion) {
+      // Local testnet runs only: a plain key from the env. Refused on every other chain.
+      const localKey = this.configService.get<string>(LOCAL_KEY[role]);
+      const chainId = Number(this.configService.get<string>('EVM_CHAIN_ID'));
+      if (localKey && chainId === TESTNET_CHAIN_ID) {
+        const account = privateKeyToAccount(localKey as `0x${string}`);
+        if (getAddress(account.address) !== getAddress(expected)) {
+          throw new Error(`${LOCAL_KEY[role]} does not belong to ${address} (${purpose}).`);
+        }
+        this.logger.warn(`${purpose}: signing with a local testnet key (chain ${chainId}), not KMS`);
+        return account;
+      }
+      throw new Error(`${key} is not configured (${purpose}).`);
+    }
 
     this.client ??= new KeyManagementServiceClient() as unknown as KmsSigningClient;
     return createKmsAccount(this.client, keyVersion, expected);

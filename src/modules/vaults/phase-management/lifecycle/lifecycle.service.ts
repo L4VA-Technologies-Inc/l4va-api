@@ -22,6 +22,7 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { EvmV13LpSaleService } from '@/modules/vaults/index-vault/evm-v13-lp-sale.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { latestOutstandingAcquireDeadline } from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
@@ -62,6 +63,9 @@ import {
 
 /** Margin after the last outstanding contribution signature expires (block inclusion, clock skew). */
 const EVM_EARLY_CLOSE_MARGIN_MS = 2 * 60 * 1000;
+
+/** Postgres advisory-lock key for the lifecycle cron (one tick cluster-wide at a time). */
+const LIFECYCLE_CLUSTER_LOCK_KEY = 'lifecycle-transitions-tick';
 
 @Injectable()
 export class LifecycleService {
@@ -108,7 +112,8 @@ export class LifecycleService {
     private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
     private readonly evmTerminationService: EvmTerminationService,
     private readonly indexVaultService: IndexVaultService,
-    private readonly evmLpExitService: EvmLpExitService
+    private readonly evmLpExitService: EvmLpExitService,
+    private readonly evmV13LpSaleService: EvmV13LpSaleService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -118,31 +123,55 @@ export class LifecycleService {
       return;
     }
 
+    // `isRunning` only covers this process. During a blue/green deploy the old and new containers
+    // both run this cron for a few minutes, so take a cluster-wide lock as well and skip if the
+    // other instance holds it.
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    let clusterLocked = false;
     try {
+      const [{ locked }] = await runner.query('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [
+        LIFECYCLE_CLUSTER_LOCK_KEY,
+      ]);
+      clusterLocked = Boolean(locked);
+      if (!clusterLocked) {
+        this.logger.warn('Lifecycle tick is running on another instance, skipping this execution');
+        return;
+      }
       this.isRunning = true;
-      await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
-      await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions (also handles direct contribution -> governance for 0% acquire vaults)
-      await this.handlePublishedToAcquire(); // Handle acquire-only vault: published -> acquire transition
-      await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
-      await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
-      await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
-      await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
-      await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
-      await this.handleEvmScheduledAcquireOpen(); // EVM: acquire-only vaults with a scheduled start: published → acquire at that time
-      await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
-      await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
-      await this.handleEvmLiquidity(); // EVM: seed the VT/WETH pool for raises that closed with an LP carveout
-      await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
-      await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
-      await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
-      await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
-      await this.handleEvmFeeWithdraw(); // EVM: sweep accrued protocol fees to treasury
-      await this.handleEvmFinalizeTerminating(); // EVM: call finalizeTermination when all VT has been redeemed
-      await this.handleEvmIndexInitialBuys(); // EVM: buy the target basket for index vaults whose cycle just locked
-      await this.handleEvmIndexScheduledRebalances(); // EVM: auto-rebalance index vaults whose cadence has elapsed
+      await this.runLifecycleSteps();
     } finally {
       this.isRunning = false;
+      if (clusterLocked) {
+        await runner
+          .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [LIFECYCLE_CLUSTER_LOCK_KEY])
+          .catch(() => undefined);
+      }
+      await runner.release();
     }
+  }
+
+  private async runLifecycleSteps(): Promise<void> {
+    await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
+    await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions (also handles direct contribution -> governance for 0% acquire vaults)
+    await this.handlePublishedToAcquire(); // Handle acquire-only vault: published -> acquire transition
+    await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+    await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
+    await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
+    await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
+    await this.handleEvmContributionToAcquireLabel(); // EVM: flip DB vault_status contribution → acquire when contribution window elapses
+    await this.handleEvmScheduledAcquireOpen(); // EVM: acquire-only vaults with a scheduled start: published → acquire at that time
+    await this.handleEvmContributionToSnapshotReady(); // EVM: build ready snapshot for vaults whose windows have closed with threshold met
+    await this.handleEvmAcquireToLocked(); // EVM: broadcast closeCycle for vaults with a ready snapshot
+    await this.handleEvmLiquidity(); // EVM: seed the VT/WETH pool for raises that closed with an LP carveout
+    await this.handleEvmAirdropClaims(); // EVM: batch-claim allocations for confirmed snapshots
+    await this.handleEvmFailedVaultDetection(); // EVM: cancelCurrentCycle when threshold not met OR nobody contributed
+    await this.handleEvmRefundBatches(); // EVM: refundContributions for cancelled cycles
+    await this.handleEvmFinalizeCancelledVaults(); // EVM: mark vault_status=failed once cancel + refunds settle
+    await this.handleEvmFeeWithdraw(); // EVM: sweep accrued protocol fees to treasury
+    await this.handleEvmFinalizeTerminating(); // EVM: call finalizeTermination when all VT has been redeemed
+    await this.handleEvmIndexInitialBuys(); // EVM: buy the target basket for index vaults whose cycle just locked
+    await this.handleEvmIndexScheduledRebalances(); // EVM: auto-rebalance index vaults whose cadence has elapsed
   }
 
   private async executePhaseTransition(data: {
@@ -3394,6 +3423,12 @@ export class LifecycleService {
    */
   private async handleEvmLiquidity(): Promise<void> {
     if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      // V13 FromSale: sell the LP slice of each token first; the pool is seeded once all are sold.
+      await this.evmV13LpSaleService.runPendingSales();
+    } catch (err) {
+      this.logger.error(`EVM V13 LP sale sweep failed: ${(err as Error).message}`);
+    }
     try {
       await this.evmLiquidityService.processPending();
     } catch (err) {

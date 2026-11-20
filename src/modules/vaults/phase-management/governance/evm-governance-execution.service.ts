@@ -15,6 +15,7 @@ import {
 } from '../../processing-tx/onchain/evm-position.service';
 import { EvmSwapService } from '../../processing-tx/onchain/evm-swap.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
+import { EvmVaultOnchainStatus } from '../../processing-tx/onchain/vault.abi';
 
 import { EvmDistributionService } from './evm-distribution.service';
 
@@ -549,8 +550,8 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * Locked/Cancelled and the sole exit is `beginTermination`, so a vault that
    * enters and then cannot commit is bricked rather than delayed. If step 1
    * succeeds and step 2 fails, the vault is left in `TerminationPreparing` and
-   * the proposal is NOT marked executed — `retryTermination` resumes from
-   * there once the underlying problem is fixed.
+   * the proposal is NOT marked executed; the automatic proposal retry (or
+   * `retryTermination`) resumes at step 2.
    *
    * The distributable set comes from the vault's own `custodyTokens()`
    * registry, not from `evm_external_positions`. The old position-derived list
@@ -561,9 +562,18 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   private async executeTermination(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     let prepared = false;
     try {
-      await this.terminationService.beginTerminationPreparing(vault.id);
-      prepared = true;
-      this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted (preflight passed)`);
+      // A retry after step 2 failed finds the vault already in TerminationPreparing: step 1
+      // would now always revert ("must be Locked or Cancelled"), so resume at step 2.
+      if ((await this.terminationService.onchainStatus(vault.id)) === EvmVaultOnchainStatus.TerminationPreparing) {
+        prepared = true;
+        this.logger.warn(
+          `Proposal ${proposal.id}: vault ${vault.id} already in TerminationPreparing; resuming at beginTermination`
+        );
+      } else {
+        await this.terminationService.beginTerminationPreparing(vault.id);
+        prepared = true;
+        this.logger.log(`Proposal ${proposal.id}: beginTerminationPreparing submitted (preflight passed)`);
+      }
 
       const result = await this.terminationService.beginTermination(vault.id);
       this.logger.log(

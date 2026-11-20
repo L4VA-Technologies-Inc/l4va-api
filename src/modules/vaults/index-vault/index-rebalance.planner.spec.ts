@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it } from '@jest/globals';
 
 import {
   computeAllocation,
@@ -9,12 +9,12 @@ import {
   type PlanOptions,
   type PortfolioState,
   type SkippedLeg,
-} from "./index-rebalance.planner";
+} from './index-rebalance.planner';
 
 const ETH = 10n ** 18n;
-const SPACEX = "0x00000000000000000000000000000000000000aa";
-const NVDA = "0x00000000000000000000000000000000000000bb";
-const OLD = "0x00000000000000000000000000000000000000cc";
+const SPACEX = '0x00000000000000000000000000000000000000aa';
+const NVDA = '0x00000000000000000000000000000000000000bb';
+const OLD = '0x00000000000000000000000000000000000000cc';
 
 const opts = (overrides: Partial<PlanOptions> = {}): PlanOptions => ({
   reserveBps: 1000,
@@ -23,15 +23,15 @@ const opts = (overrides: Partial<PlanOptions> = {}): PlanOptions => ({
   ...overrides,
 });
 
-describe("index rebalance planner", () => {
-  describe("initial buy", () => {
+describe('index rebalance planner', () => {
+  describe('initial buy', () => {
     const state: PortfolioState = { nativeAvailable: 100n * ETH, holdings: [] };
     const targets = [
       { asset: SPACEX, weightBps: 6000 },
       { asset: NVDA, weightBps: 4000 },
     ];
 
-    it("keeps the reserve in native and splits the rest by weight", () => {
+    it('keeps the reserve in native and splits the rest by weight', () => {
       const buys = planBuys(state, targets, opts());
       expect(buys).toEqual([
         { asset: SPACEX, nativeIn: 54n * ETH },
@@ -39,12 +39,12 @@ describe("index rebalance planner", () => {
       ]);
     });
 
-    it("plans no sells for an all-native vault", () => {
+    it('plans no sells for an all-native vault', () => {
       expect(planSells(state, targets, opts())).toEqual([]);
     });
   });
 
-  describe("re-weight", () => {
+  describe('re-weight', () => {
     // NAV 100: 10 native reserve, SPACEX 54, NVDA 36 — exactly on a 60/40 basket.
     const state: PortfolioState = {
       nativeAvailable: 10n * ETH,
@@ -54,7 +54,7 @@ describe("index rebalance planner", () => {
       ],
     };
 
-    it("trades nothing while every leg is inside the tolerance", () => {
+    it('trades nothing while every leg is inside the tolerance', () => {
       const targets = [
         { asset: SPACEX, weightBps: 6100 },
         { asset: NVDA, weightBps: 3900 },
@@ -63,19 +63,17 @@ describe("index rebalance planner", () => {
       expect(planBuys(state, targets, opts())).toEqual([]);
     });
 
-    it("sells the overweight asset down to target in token units", () => {
+    it('sells the overweight asset down to target in token units', () => {
       // SPACEX → 10%: target 9 ETH of value, excess 45 ETH = 5/6 of the balance.
       const targets = [
         { asset: SPACEX, weightBps: 1000 },
         { asset: NVDA, weightBps: 9000 },
       ];
       const sells = planSells(state, targets, opts());
-      expect(sells).toEqual([
-        { asset: SPACEX, amountIn: 450n, valueNative: 45n * ETH, exit: false },
-      ]);
+      expect(sells).toEqual([{ asset: SPACEX, amountIn: 450n, valueNative: 45n * ETH, exit: false }]);
     });
 
-    it("buys the underweight asset with the proceeds after sells settle", () => {
+    it('buys the underweight asset with the proceeds after sells settle', () => {
       const targets = [
         { asset: SPACEX, weightBps: 1000 },
         { asset: NVDA, weightBps: 9000 },
@@ -87,18 +85,13 @@ describe("index rebalance planner", () => {
           { asset: NVDA, balance: 360n, valueNative: 36n * ETH },
         ],
       };
-      expect(planBuys(afterSells, targets, opts())).toEqual([
-        { asset: NVDA, nativeIn: 45n * ETH },
-      ]);
+      expect(planBuys(afterSells, targets, opts())).toEqual([{ asset: NVDA, nativeIn: 45n * ETH }]);
     });
 
-    it("exits an asset removed from the basket entirely", () => {
+    it('exits an asset removed from the basket entirely', () => {
       const withOld: PortfolioState = {
         nativeAvailable: 10n * ETH,
-        holdings: [
-          ...state.holdings,
-          { asset: OLD, balance: 777n, valueNative: 5n * ETH },
-        ],
+        holdings: [...state.holdings, { asset: OLD, balance: 777n, valueNative: 5n * ETH }],
       };
       const sells = planSells(
         withOld,
@@ -106,7 +99,7 @@ describe("index rebalance planner", () => {
           { asset: SPACEX, weightBps: 6000 },
           { asset: NVDA, weightBps: 4000 },
         ],
-        opts(),
+        opts()
       );
       expect(sells).toContainEqual({
         asset: OLD,
@@ -117,7 +110,7 @@ describe("index rebalance planner", () => {
     });
   });
 
-  it("scales buys pro rata when native cannot cover every deficit", () => {
+  it('scales buys pro rata when native cannot cover every deficit', () => {
     // Sells failed to fill: only 20 ETH spendable for 45 + 9 of deficits.
     const state: PortfolioState = {
       nativeAvailable: 30n * ETH,
@@ -129,38 +122,28 @@ describe("index rebalance planner", () => {
         { asset: SPACEX, weightBps: 5000 },
         { asset: NVDA, weightBps: 5000 },
       ],
-      opts(),
+      opts()
     );
     const total = buys.reduce((s, b) => s + b.nativeIn, 0n);
     expect(total).toBeLessThanOrEqual(20n * ETH);
     expect(buys[0].nativeIn).toEqual(buys[1].nativeIn);
   });
 
-  it("never spends the reserve", () => {
+  it('never spends the reserve', () => {
     const state: PortfolioState = { nativeAvailable: 5n * ETH, holdings: [] };
-    const buys = planBuys(
-      state,
-      [{ asset: SPACEX, weightBps: 10000 }],
-      opts({ reserveBps: 10000 }),
-    );
+    const buys = planBuys(state, [{ asset: SPACEX, weightBps: 10000 }], opts({ reserveBps: 10000 }));
     expect(buys).toEqual([]);
   });
 
-  it("skips dust legs", () => {
+  it('skips dust legs', () => {
     const state: PortfolioState = {
       nativeAvailable: ETH / 10_000n,
       holdings: [],
     };
-    expect(
-      planBuys(
-        state,
-        [{ asset: SPACEX, weightBps: 10000 }],
-        opts({ reserveBps: 0 }),
-      ),
-    ).toEqual([]);
+    expect(planBuys(state, [{ asset: SPACEX, weightBps: 10000 }], opts({ reserveBps: 0 }))).toEqual([]);
   });
 
-  it("reports allocation against NAV including the reserve", () => {
+  it('reports allocation against NAV including the reserve', () => {
     const state: PortfolioState = {
       nativeAvailable: 10n * ETH,
       holdings: [
@@ -174,21 +157,21 @@ describe("index rebalance planner", () => {
         { asset: SPACEX, weightBps: 6000 },
         { asset: NVDA, weightBps: 4000 },
       ],
-      1000,
+      1000
     );
     expect(nav).toEqual(computeNav(state));
     expect(reserveActualBps).toBe(1000);
-    const spacex = rows.find((r) => r.asset === SPACEX)!;
+    const spacex = rows.find(r => r.asset === SPACEX)!;
     expect(spacex.targetBps).toBe(5400);
     expect(spacex.actualBps).toBe(6000);
     expect(spacex.driftBps).toBe(600);
   });
 
-  describe("skipped legs (preview reasons)", () => {
-    const L4VA = "0x0c020bef365d7001611ef1cecd6084cdd6b73683";
-    const AMZN = "0x00000000000000000000000000000000000a3a2e";
+  describe('skipped legs (preview reasons)', () => {
+    const L4VA = '0x0c020bef365d7001611ef1cecd6084cdd6b73683';
+    const AMZN = '0x00000000000000000000000000000000000a3a2e';
 
-    it("reports below_min_trade for a vault too small to trade (staging DTIV case)", () => {
+    it('reports below_min_trade for a vault too small to trade (staging DTIV case)', () => {
       // NAV ≈ 0.00155 ETH: 89.9% L4VA, 10.1% ETH; new basket L4VA 90% / AMZN 10%, 10% reserve.
       const state: PortfolioState = {
         nativeAvailable: 156_666_666_666_666n,
@@ -208,13 +191,13 @@ describe("index rebalance planner", () => {
       const o = opts({ reserveBps: 1000, driftToleranceBps: 200 });
       expect(planSells(state, targets, o, skipped)).toEqual([]);
       expect(planBuys(state, targets, o, skipped)).toEqual([]);
-      expect(skipped.map((s) => [s.asset, s.side, s.reason])).toEqual([
-        [L4VA, "sell", "below_min_trade"],
-        [AMZN, "buy", "below_min_trade"],
+      expect(skipped.map(s => [s.asset, s.side, s.reason])).toEqual([
+        [L4VA, 'sell', 'below_min_trade'],
+        [AMZN, 'buy', 'below_min_trade'],
       ]);
     });
 
-    it("reports within_tolerance for small drift and no_free_native when the reserve blocks buys", () => {
+    it('reports within_tolerance for small drift and no_free_native when the reserve blocks buys', () => {
       const state: PortfolioState = {
         nativeAvailable: ETH, // exactly the 10% reserve → nothing spendable
         holdings: [{ asset: SPACEX, balance: 9n * ETH, valueNative: 9n * ETH }],
@@ -230,8 +213,8 @@ describe("index rebalance planner", () => {
             { asset: AMZN, weightBps: 1000 },
           ],
           o,
-          skipped,
-        ),
+          skipped
+        )
       ).toHaveLength(1);
       // Before that sell fills, AMZN (deficit 0.9 ETH) has no free native.
       expect(
@@ -242,14 +225,14 @@ describe("index rebalance planner", () => {
             { asset: AMZN, weightBps: 1000 },
           ],
           o,
-          skipped,
-        ),
+          skipped
+        )
       ).toEqual([]);
       expect(skipped).toEqual([
         {
           asset: AMZN,
-          side: "buy",
-          reason: "no_free_native",
+          side: 'buy',
+          reason: 'no_free_native',
           valueNative: (9n * ETH) / 10n,
         },
       ]);
@@ -258,40 +241,30 @@ describe("index rebalance planner", () => {
       planSells(
         {
           nativeAvailable: ETH,
-          holdings: [
-            { asset: SPACEX, balance: 9n * ETH, valueNative: 9n * ETH },
-          ],
+          holdings: [{ asset: SPACEX, balance: 9n * ETH, valueNative: 9n * ETH }],
         },
         [{ asset: SPACEX, weightBps: 10000 }],
         o,
-        nearTarget,
+        nearTarget
       );
       // Target 9 ETH exactly → no excess at all, nothing reported.
       expect(nearTarget).toEqual([]);
     });
   });
 
-  describe("validateWeights", () => {
+  describe('validateWeights', () => {
     const base = { maxAssets: 10, minWeightBps: 100 };
-    it("accepts a basket summing to 100%", () => {
-      expect(
-        validateWeights({ ...base, weightsBps: [5000, 3000, 2000] }),
-      ).toBeNull();
+    it('accepts a basket summing to 100%', () => {
+      expect(validateWeights({ ...base, weightsBps: [5000, 3000, 2000] })).toBeNull();
     });
-    it("rejects a basket that does not sum to 100%", () => {
-      expect(validateWeights({ ...base, weightsBps: [5000, 3000] })).toMatch(
-        /add up to 100%/,
-      );
+    it('rejects a basket that does not sum to 100%', () => {
+      expect(validateWeights({ ...base, weightsBps: [5000, 3000] })).toMatch(/add up to 100%/);
     });
-    it("rejects too many assets", () => {
-      expect(
-        validateWeights({ ...base, weightsBps: Array(11).fill(909) }),
-      ).toMatch(/at most 10/);
+    it('rejects too many assets', () => {
+      expect(validateWeights({ ...base, weightsBps: Array(11).fill(909) })).toMatch(/at most 10/);
     });
-    it("rejects weights below the minimum", () => {
-      expect(validateWeights({ ...base, weightsBps: [9950, 50] })).toMatch(
-        /at least 1%/,
-      );
+    it('rejects weights below the minimum', () => {
+      expect(validateWeights({ ...base, weightsBps: [9950, 50] })).toMatch(/at least 1%/);
     });
   });
 });

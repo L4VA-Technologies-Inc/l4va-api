@@ -36,7 +36,9 @@ export function getEvmLpMinUsd(): number {
 
 export function getEvmLpMaxPriceDeviationBps(): number {
   const n = Number(process.env.EVM_LP_MAX_PRICE_DEVIATION_BPS ?? '30');
-  return Number.isInteger(n) && n >= 0 && n <= 10_000 ? n : 30;
+  // The V4 LP adapter refuses more than MAX_PRICE_DEVIATION_BPS (100) since the 2026-11-20
+  // audit: a looser tolerance let a pre-initialized pool price drain the LP ETH.
+  return Number.isInteger(n) && n >= 0 && n <= 100 ? n : 30;
 }
 
 /**
@@ -92,6 +94,14 @@ export interface EvmLpCarveoutRecord {
   provideTxHash?: string;
   attempts?: number;
   lastError?: string;
+  /**
+   * V13 only: the vault's `LpMode` (evm-v13 `EvmLpMode`). The pool is seeded straight from the
+   * vault's `lpNativeBudget` at its `lpVtPerNative`, no technical cycle. FromSale first sells
+   * an `lpBps` slice of each token with `swapForLp`.
+   */
+  lpMode?: number;
+  /** V13 FromSale: tokens whose LP slice is sold, with the ETH each sale returned. */
+  lpSales?: Record<string, string>;
 }
 
 export enum EvmLpStatus {

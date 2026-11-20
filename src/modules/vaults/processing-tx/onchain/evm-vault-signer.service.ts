@@ -19,6 +19,13 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmKmsSigners } from './evm-kms-signers.service';
 import { getEvmProtocolVersion } from './evm-protocol-versions';
+import {
+  buildV13Economics,
+  CYCLE_CONFIG_V13_COMPONENTS,
+  factoryIsV13,
+  VAULT_ECONOMICS_COMPONENTS,
+  type EvmVaultEconomics,
+} from './evm-v13';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -77,6 +84,22 @@ const VAULT_CONFIG_ABI = [
   },
 ] as const;
 
+/** V13 VaultConfig: the V13 cycle fields and the vault's economics. */
+export const VAULT_CONFIG_ABI_V13 = [
+  {
+    name: 'cfg',
+    type: 'tuple' as const,
+    components: [
+      ...VAULT_CONFIG_ABI[0].components.filter(c => c.name !== 'initialCycle'),
+      { name: 'initialCycle', type: 'tuple' as const, components: CYCLE_CONFIG_V13_COMPONENTS },
+      { name: 'economics', type: 'tuple' as const, components: VAULT_ECONOMICS_COMPONENTS },
+    ],
+  },
+] as const;
+
+/** Default V13 expansion cap when EVM_V13_MAX_EXPANSION_BPS is unset: 25 % of supply per expansion. */
+const DEFAULT_V13_MAX_EXPANSION_BPS = 2_500;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -88,6 +111,10 @@ export interface EvmCycleConfig {
   adaPairVtPerNativeUnit: bigint;
   assetWhitelist: Address[];
   contributorWhitelist: Address[];
+  /** V13 only. */
+  nativeVtPrice?: bigint;
+  assetVtPrices?: bigint[];
+  vtCap?: bigint;
 }
 
 export interface EvmVaultConfig {
@@ -103,11 +130,18 @@ export interface EvmVaultConfig {
   vtSymbol: string;
   vtDecimals: number;
   initialCycle: EvmCycleConfig;
+  /** V13 only: fixed for the vault's life. */
+  economics?: EvmVaultEconomics;
 }
 
 export interface EvmCreationPayload {
   /** The factory the admin signature was issued for. */
   factoryAddress: Address;
+  /**
+   * 13 when `evmVaultConfig` is a V13 config (with `economics`): the client must call `createVault`
+   * with the V13 factory ABI. Absent for earlier factories.
+   */
+  configVersion?: number;
   dbVaultId: string;
   transactionId: string;
   evmVaultConfig: EvmVaultConfig;
@@ -209,6 +243,7 @@ export class EvmVaultSignerService {
       deadline: Number(deadline),
       adminSignature,
       factoryAddress: this.factoryAddress,
+      ...(cfg.economics ? { configVersion: 13 } : {}),
     };
   }
 
@@ -450,8 +485,7 @@ export class EvmVaultSignerService {
 
   /** keccak256(abi.encode(cfg)) — mirrors VaultCreationAuthorizations.configHash(). */
   private computeConfigHash(cfg: EvmVaultConfig): Hex {
-    const encoded = encodeAbiParameters(VAULT_CONFIG_ABI, [cfg as any]);
-    return keccak256(encoded);
+    return computeEvmConfigHash(cfg);
   }
 
   // --------------------------------------------------------------------------
@@ -460,6 +494,7 @@ export class EvmVaultSignerService {
 
   private buildVaultConfig(evmVaultId: Hex, creatorAddress: Address, data: CreateVaultReq): EvmVaultConfig {
     const now = BigInt(Math.floor(Date.now() / 1000));
+    const v13 = factoryIsV13(this.chainId, this.factoryAddress);
     const oneDay = BigInt(86400);
 
     // Asset (contribution) window — default 7 days from now if not specified.
@@ -475,13 +510,15 @@ export class EvmVaultSignerService {
     // Contribution-only vaults (0% tokens for acquirers) skip the acquire window.
     // { start: 0, end: 0 } is treated as already closed by the lifecycle cron.
     const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
-    // An acquire-only vault can schedule its acquire window for a later date; the
-    // contract keeps acquisitions closed until then. A date already past opens now.
+    // The acquire window follows the asset window: the contract only accepts native buys inside
+    // it, so a window starting now would close before the vault ever reaches its acquire phase.
+    // Acquire-only vaults (no asset window) open now. A custom date opens it then, never earlier.
     const scheduledStart =
-      data.isAcquireOnly && data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
+      data.acquireOpenWindowType === InvestmentWindowType.custom && data.acquireOpenWindowTime
         ? BigInt(Math.floor(toEpochMs(data.acquireOpenWindowTime) / 1000))
         : 0n;
-    const acquireStart = scheduledStart > now ? scheduledStart : now;
+    const earliestAcquire = data.isAcquireOnly ? now : assetWindowEnd;
+    const acquireStart = scheduledStart > earliestAcquire ? scheduledStart : earliestAcquire;
     const acquireWindowStart = skipsAcquirePhase ? 0n : acquireStart;
     const acquireWindowEnd = skipsAcquirePhase
       ? 0n
@@ -516,7 +553,22 @@ export class EvmVaultSignerService {
         adaPairVtPerNativeUnit: 0n,
         assetWhitelist: [],
         contributorWhitelist: [],
+        // V13: the raise never takes fixed prices; the cap is the vault's supply.
+        ...(v13 ? { nativeVtPrice: 0n, assetVtPrices: [], vtCap: 0n } : {}),
       },
+      ...(v13
+        ? {
+            economics: buildV13Economics({
+              ftTokenSupply: data.ftTokenSupply ?? 1_000_000,
+              vtDecimals: 18,
+              tokensForAcquiresPct: data.tokensForAcquires ?? 0,
+              lpPct: data.liquidityPoolContribution ?? 0,
+              maxExpansionBps: Number(
+                this.configService.get<string>('EVM_V13_MAX_EXPANSION_BPS') ?? DEFAULT_V13_MAX_EXPANSION_BPS
+              ),
+            }),
+          }
+        : {}),
     };
   }
 
@@ -537,4 +589,15 @@ export class EvmVaultSignerService {
     }
     return obj;
   }
+}
+
+/**
+ * keccak256(abi.encode(cfg)) — mirrors VaultCreationAuthorizations.configHash(). A config with
+ * `economics` is encoded as the V13 struct.
+ */
+export function computeEvmConfigHash(cfg: EvmVaultConfig): Hex {
+  const encoded = cfg.economics
+    ? encodeAbiParameters(VAULT_CONFIG_ABI_V13, [cfg as any])
+    : encodeAbiParameters(VAULT_CONFIG_ABI, [cfg as any]);
+  return keccak256(encoded);
 }

@@ -1,15 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, LessThan, Repository } from 'typeorm';
 import { getAbiItem, type Address } from 'viem';
 
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmVaultEventReconciler, type VaultLogInput } from './evm-vault-event-reconciler.service';
 import { VAULT_ABI } from './vault.abi';
 
+import { Asset } from '@/database/asset.entity';
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetStatus } from '@/types/asset.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
 /**
@@ -33,6 +35,14 @@ import { ChainType, VaultStatus } from '@/types/vault.types';
  * The reconciler is idempotent (unique `(vault_id, on_chain_contribution_id)`),
  * so re-processing already-persisted contributions is a no-op.
  */
+/**
+ * An Asset row is created from the signed request (at /confirm, or when the reconciler adopts a
+ * contribution), i.e. after its authorization was signed. Once the longest authorization validity
+ * (1h for asset contributions) plus a margin for block-time skew has passed since then, the
+ * contribution can no longer land on-chain.
+ */
+const UNLANDED_ASSET_RELEASE_AFTER_MS = (60 * 60 + 15 * 60) * 1000;
+
 @Injectable()
 export class EvmContributionBackfillService {
   private readonly logger = new Logger(EvmContributionBackfillService.name);
@@ -43,6 +53,7 @@ export class EvmContributionBackfillService {
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(EvmContribution) private readonly contribsRepository: Repository<EvmContribution>,
+    @InjectRepository(Asset) private readonly assetsRepository: Repository<Asset>,
     private readonly contractReader: EvmContractReader,
     private readonly reconciler: EvmVaultEventReconciler,
     configService: ConfigService
@@ -121,6 +132,8 @@ export class EvmContributionBackfillService {
     const inDb = await this.contribsRepository.count({ where: { vault_id: vault.id } });
 
     if (BigInt(inDb) >= onChain) {
+      // Every on-chain contribution is indexed, so the asset rows bound to none of them are final.
+      await this.releaseUnlandedAssets(vault.id);
       return { onChain: Number(onChain), inDb, inserted: 0 };
     }
 
@@ -166,6 +179,44 @@ export class EvmContributionBackfillService {
     }
 
     return { onChain: Number(onChain), inDb: inDbAfter, inserted };
+  }
+
+  /**
+   * A contribute request whose wallet flow stopped part-way (asset 3 of 5 reverted, the user closed
+   * the tab) still gets Asset rows for every asset it named: /confirm and the reconciler's adoption
+   * both create them from the request. Rows whose contribution never landed would stay PENDING and
+   * count toward TVL, contribution caps and cancel checks forever.
+   *
+   * Release them once they can no longer land (authorization expired) and nothing on-chain points
+   * at them. Only called when the DB holds every on-chain contribution of the vault, so a landed
+   * but not-yet-indexed contribution is never mistaken for a missing one.
+   */
+  private async releaseUnlandedAssets(vaultId: string): Promise<void> {
+    const cutoff = new Date(Date.now() - UNLANDED_ASSET_RELEASE_AFTER_MS);
+    const stale = await this.assetsRepository
+      .createQueryBuilder('asset')
+      .select('asset.id', 'id')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.status = :pending', { pending: AssetStatus.PENDING })
+      .andWhere('asset.deleted = false')
+      .andWhere('asset.transaction_id IS NOT NULL')
+      .andWhere('asset.added_at < :cutoff', { cutoff })
+      .andWhere(
+        'NOT EXISTS (SELECT 1 FROM evm_contributions c WHERE c.vault_id = asset.vault_id AND c.asset_id = asset.id)'
+      )
+      .getRawMany<{ id: string }>();
+    if (stale.length === 0) return;
+
+    const ids = stale.map(r => r.id);
+    // Conditional on PENDING so a row locked in the meantime is left alone.
+    const res = await this.assetsRepository.update(
+      { id: In(ids), status: AssetStatus.PENDING, added_at: LessThan(cutoff) },
+      { status: AssetStatus.RELEASED }
+    );
+    this.logger.warn(
+      `Vault ${vaultId}: released ${res.affected ?? 0} asset row(s) whose contribution never landed on-chain ` +
+        `(${ids.join(', ')})`
+    );
   }
 
   /**

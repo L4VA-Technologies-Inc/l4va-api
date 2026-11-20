@@ -5,6 +5,8 @@ import { erc20Abi, zeroAddress, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { assertSwapAllowed } from './evm-swap-guard';
+import { VAULT_V13_ABI } from './evm-v13';
 import { VAULT_ABI } from './vault.abi';
 
 import { Transaction } from '@/database/transaction.entity';
@@ -109,10 +111,30 @@ export class EvmSwapService {
   async swap(
     vaultId: string,
     params: SwapParams,
-    context: { proposalId?: string; onBroadcast?: (hash: Hex) => Promise<void> } = {}
+    context: {
+      proposalId?: string;
+      onBroadcast?: (hash: Hex) => Promise<void>;
+      /** V13: sell for the LP (`swapForLp`): the proceeds become the pool's ETH budget. */
+      forLp?: boolean;
+    } = {}
   ): Promise<SwapResult> {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
+
+    // A guarded adapter (pool allowlist + daily cap) would revert this swap: refuse it before
+    // anything is signed. Nothing reached the chain, so callers may re-plan at once.
+    try {
+      await assertSwapAllowed(this.contractReader.publicClient, {
+        vault: vaultAddress,
+        adapter: params.adapter,
+        assetIn: params.assetIn,
+        amountIn: params.amountIn,
+        route: params.route,
+      });
+    } catch (err) {
+      this.logger.warn(`Swap refused for vault ${vaultAddress}: ${(err as Error).message}`);
+      throw new SwapNotBroadcastError(err);
+    }
 
     const adminTx = await this.transactionsRepository.save(
       this.transactionsRepository.create({
@@ -133,6 +155,7 @@ export class EvmSwapService {
           assetOut: params.assetOut,
           minAmountOut: params.minAmountOut.toString(),
           ...(context.proposalId && { proposalId: context.proposalId }),
+          ...(context.forLp && { forLp: true }),
         },
       })
     );
@@ -143,7 +166,9 @@ export class EvmSwapService {
     const broadcast: { hash?: Hex } = {};
     try {
       result = await this.adminSigner.sendAndConfirm(
-        { address: vaultAddress, abi: VAULT_ABI, functionName: 'swap', args: [params] },
+        context.forLp
+          ? { address: vaultAddress, abi: VAULT_V13_ABI, functionName: 'swapForLp', args: [params] }
+          : { address: vaultAddress, abi: VAULT_ABI, functionName: 'swap', args: [params] },
         ['Swapped'],
         async hash => {
           broadcast.hash = hash;

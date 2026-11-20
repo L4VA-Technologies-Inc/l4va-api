@@ -21,6 +21,7 @@ import {
   lpTechnicalCycleRoot,
   type EvmLpCarveoutRecord,
 } from './evm-lp.config';
+import { EvmLpMode, v13FromSaleRate, vaultIsV13, VAULT_V13_ABI } from './evm-v13';
 import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
@@ -409,6 +410,7 @@ export class EvmLiquidityService {
 
     const vault = await this.vaultsRepository.findOne({ where: { id: snap.vault_id } });
     if (!vault?.contract_address) return;
+    if (vaultIsV13(vault)) return this.runV13(snap, vault, lp);
     const vaultAddress = vault.contract_address as Address;
     const raiseCycleId = BigInt(snap.cycle_id);
     const rate = BigInt(lp.rate);
@@ -517,6 +519,139 @@ export class EvmLiquidityService {
           });
         });
       }
+      throw err;
+    }
+  }
+
+  /**
+   * V13: no technical cycle. The vault holds the pool's price (`lpVtPerNative`) and ETH budget
+   * (`lpNativeBudget`) since its raise closed; this spends the whole budget in one
+   * `provideLiquidity`. FromSale fixes the price at that call from the slice sale, so it waits
+   * until every slice is sold (EvmV13LpSaleService) and the venue check uses the price the
+   * contract is about to fix.
+   */
+  private async runV13(snap: EvmValuationSnapshot, vault: Vault, lp: EvmLpCarveoutRecord): Promise<void> {
+    const vaultAddress = vault.contract_address as Address;
+    const client = this.contractReader.publicClient;
+    const read = async <T>(functionName: string, args: unknown[] = []): Promise<T> =>
+      (await client.readContract({ address: vaultAddress, abi: VAULT_V13_ABI, functionName, args })) as T;
+    const adapter = lp.adapter as Address;
+    const operationId = keccak256(
+      encodePacked(['address', 'uint256', 'string'], [vaultAddress, BigInt(snap.cycle_id), 'l4va-v13-lp'])
+    );
+
+    try {
+      let positionId = await this.findPosition(vaultAddress, operationId);
+      let protocol: LpVenue['protocol'] | undefined;
+      let where: { poolId?: string; pair?: string } = {};
+      if (positionId === null) {
+        const budget = await read<bigint>('lpNativeBudget');
+        if (budget === 0n) throw new Error(`vault ${vaultAddress} has no LP budget left`);
+
+        const rate = await read<bigint>('lpVtPerNative');
+        if (lp.lpMode === EvmLpMode.FromSale) {
+          // Audit F-02: the sale's rate is proposed on-chain, waits `allocationDelay` (the
+          // Safe or the verifier may cancel it), and only then seeds the pool.
+          if (await read<boolean>('lpRateCancelled')) {
+            this.logger.warn(`V13 LP for vault ${vault.id}: sale rate was cancelled; pool not seeded`);
+            return;
+          }
+          if (rate === 0n) {
+            for (const token of await read<Address[]>('lpSliceTokens')) {
+              const [slice, sold] = await read<readonly [bigint, bigint]>('lpSlice', [token]);
+              if (sold < slice) {
+                this.logger.log(`V13 LP for vault ${vault.id} waits for its ${token} slice (${sold}/${slice} sold)`);
+                return;
+              }
+            }
+            const [lpSaleVt, proceeds] = await Promise.all([read<bigint>('lpSaleVt'), read<bigint>('lpSaleProceeds')]);
+            if (v13FromSaleRate(lpSaleVt, proceeds) === 0n)
+              throw new Error(`vault ${vaultAddress}: LP sale raised nothing`);
+            const proposed = await this.adminSigner.sendAndConfirm(
+              { address: vaultAddress, abi: VAULT_V13_ABI, functionName: 'proposeLpRate', args: [] },
+              ['LpRateProposed']
+            );
+            this.logger.log(`V13 proposeLpRate vault=${vault.id} tx=${proposed.hash}; seeding after the delay`);
+            return;
+          }
+          const activatesAt = await read<bigint>('lpRateActivatesAt');
+          if (BigInt(Math.floor(Date.now() / 1000)) < activatesAt) {
+            this.logger.log(`V13 LP for vault ${vault.id} waits for its sale rate to open at ${activatesAt}`);
+            return;
+          }
+        }
+        if (rate === 0n) throw new Error(`vault ${vaultAddress} has no LP price`);
+
+        const venue = await this.resolveVenue(vaultAddress, adapter, rate);
+        protocol = venue.protocol;
+        where = venue.protocol === 'uniswap-v4' ? { poolId: venue.poolId } : { pair: venue.pair };
+        await this.saveLp(snap.id, { ...lp, protocol, ...where, rate: rate.toString() });
+
+        const result = await this.adminSigner.sendAndConfirm(
+          {
+            address: vaultAddress,
+            abi: VAULT_V13_ABI,
+            functionName: 'provideLiquidity',
+            args: [
+              {
+                operationId,
+                adapter,
+                nativeAmount: budget,
+                expectedPositionAsset: venue.positionAsset,
+                minPositionAmount: 1n,
+                deadline: BigInt(Math.floor(Date.now() / 1000) + DEADLINE_SECONDS),
+                vtPool: venue.vtPool,
+                protocolParams: venue.protocolParams,
+              },
+            ],
+          },
+          ['LiquidityProvided']
+        );
+        this.logger.log(
+          `V13 provideLiquidity (${venue.protocol}) vault=${vault.id} native=${budget} tx=${result.hash}`
+        );
+        await this.saveLp(snap.id, {
+          ...lp,
+          protocol,
+          ...where,
+          rate: rate.toString(),
+          lpNativeAmount: budget.toString(),
+          provideTxHash: result.hash,
+        });
+        positionId = await this.findPosition(vaultAddress, operationId);
+        if (positionId === null) throw new Error(`LiquidityProvided confirmed but position ${operationId} not found`);
+      }
+
+      const position = (await client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'getLiquidityPosition',
+        args: [positionId],
+      })) as { positionAmount: bigint; vtAmount?: bigint };
+      const fresh = (await this.snapshotsRepository.findOne({ where: { id: snap.id } }))!
+        .lp_carveout as unknown as EvmLpCarveoutRecord;
+      await this.saveLp(snap.id, {
+        ...fresh,
+        status: EvmLpStatus.provided,
+        ...(protocol ? { protocol, ...where } : {}),
+        lpPositionId: positionId.toString(),
+        lpTokens: position.positionAmount.toString(),
+        lastError: undefined,
+      });
+      await this.vaultsRepository.update({ id: vault.id }, { has_active_lp: true });
+      this.logger.log(`V13 LP seeded for vault ${vault.id}: position=${positionId}`);
+    } catch (err) {
+      const message = ((err as Error).message || String(err)).slice(0, 500);
+      const attempts = (lp.attempts ?? 0) + 1;
+      const fresh = ((await this.snapshotsRepository.findOne({ where: { id: snap.id } }))?.lp_carveout ??
+        lp) as unknown as EvmLpCarveoutRecord;
+      // Nothing to unwind in V13: the vault never leaves Locked for the LP.
+      await this.saveLp(snap.id, {
+        ...fresh,
+        attempts,
+        lastError: message,
+        status: attempts >= MAX_ATTEMPTS ? EvmLpStatus.failed : EvmLpStatus.pending,
+      });
       throw err;
     }
   }

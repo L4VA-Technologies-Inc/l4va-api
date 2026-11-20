@@ -9,7 +9,8 @@ import { EvmContractReader } from './evm-contract-reader.service';
 import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { lpTechnicalCycleRoot } from './evm-lp.config';
-import { EvmAssetKindOnchain, EvmCycleStatus, VAULT_ABI } from './vault.abi';
+import { VAULT_V13_ABI } from './evm-v13';
+import { EvmAssetKindOnchain, EvmCycleStatus } from './vault.abi';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -168,6 +169,25 @@ export class EvmVaultEventReconciler {
             break;
           case 'AllocationClaimed':
             await this.handleAllocationClaimed(vault, log, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
+          case 'OnchainAllocationClaimed':
+            await this.handleOnchainAllocationClaimed(vault, log, decoded.args);
+            recordApplied(log.txHash, decoded.eventName);
+            processed++;
+            break;
+          case 'AllocationRootCancelled':
+          case 'DistributionCancelled':
+            // A guardian / pauser / verifier stopped a pending root or distribution: an
+            // operator has to look (a root needs recomputing and recommitting).
+            this.logger.warn(`${decoded.eventName} on vault ${vault.id} tx=${log.txHash}`);
+            void this.alerts.sendAlert('evm_v13_cancelled', {
+              chain: 'robinhood',
+              vaultId: vault.id,
+              event: decoded.eventName,
+              txHash: log.txHash,
+            });
             recordApplied(log.txHash, decoded.eventName);
             processed++;
             break;
@@ -783,6 +803,41 @@ export class EvmVaultEventReconciler {
     );
   }
 
+  /**
+   * V13 OnchainAllocationClaimed(cycleId, account, vtAmount): an acquirer's on-chain share was
+   * paid (by the airdrop job or by the acquirer). The contract's amount is the truth.
+   */
+  private async handleOnchainAllocationClaimed(
+    vault: Vault,
+    log: VaultLogInput,
+    args: Record<string, unknown>
+  ): Promise<void> {
+    const cycleId = String(args.cycleId as bigint);
+    const account = String(args.account as Address).toLowerCase();
+    const vtAmount = String(args.vtAmount as bigint);
+    const row = await this.allocationsRepository.findOne({
+      where: { vault_id: vault.id, cycle_id: cycleId, contributor: account, onchain: true },
+    });
+    if (!row) {
+      this.logger.warn(
+        `OnchainAllocationClaimed vault=${vault.id} cycle=${cycleId} account=${account} tx=${log.txHash}: no row`
+      );
+      return;
+    }
+    if (row.claimed_at) return; // idempotent
+    await this.allocationsRepository
+      .createQueryBuilder()
+      .update(EvmAllocation)
+      .set({
+        vt_amount: vtAmount,
+        claimed_at: new Date(),
+        claim_tx_hash: log.txHash,
+        claim_block_number: log.blockNumber != null ? String(log.blockNumber) : null,
+      })
+      .where('id = :id AND claimed_at IS NULL', { id: row.id })
+      .execute();
+  }
+
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
@@ -1204,8 +1259,9 @@ export class EvmVaultEventReconciler {
   private tryDecode(log: VaultLogInput): { eventName: string; args: Record<string, unknown> } | null {
     if (!log.topics || log.topics.length === 0) return null;
     try {
+      // The V13 ABI holds every pre-V13 event too, plus the V13 ones.
       const decoded = decodeEventLog({
-        abi: VAULT_ABI,
+        abi: VAULT_V13_ABI,
         data: log.data as Hex,
         topics: log.topics as [Hex, ...Hex[]],
       }) as { eventName: string; args: unknown };

@@ -88,6 +88,16 @@ export class EvmTerminationService {
    * Phase 4 step 1: require Locked/Cancelled, no open positions, no NFTs held.
    * Transitions on-chain vault → TerminationPreparing.
    */
+  /** Current on-chain `status()` of the vault. */
+  async onchainStatus(vaultId: string): Promise<EvmVaultOnchainStatus> {
+    const vault = await this._requireEvmVault(vaultId);
+    return (await this.contractReader.publicClient.readContract({
+      address: vault.contract_address as Address,
+      abi: VAULT_ABI,
+      functionName: 'status',
+    })) as EvmVaultOnchainStatus;
+  }
+
   async beginTerminationPreparing(vaultId: string): Promise<{ txHash: Hex }> {
     const vault = await this._requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
