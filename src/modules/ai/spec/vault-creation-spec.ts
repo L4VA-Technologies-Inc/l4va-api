@@ -449,7 +449,7 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
           values: ['public'],
           description: 'Robinhood Chain vaults are always public.',
         },
-        minAcquireThreshold: { unit: 'ETH', min: 0.01, max: 10_000 },
+        minAcquireThreshold: { unit: 'ETH', min: 0.01, max: 100_000 },
         // Same floor the client form and the create endpoint use on Robinhood (Cardano keeps 0.5%).
         creationThreshold: { min: 0.1, default: 0.1 },
         // Robinhood launch range, same as the client form's rh-lp-range check.
