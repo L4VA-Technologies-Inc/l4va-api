@@ -294,7 +294,8 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       adapterRegistry: '0x9e47184b2C83fB4B285301B990330D0c91c1297b',
       protocolFeeConfig: '0xd01ca9faC35F7E05Ea3a442d37797624B486292D',
       batchDeployer: '0x8A554A224b1c3A88598F97EEEf259a8762C6420E',
-      swapAdapter: '0x2f48C9b2C0b9ED5158fd70985DA9e4588A884796',
+      // Fixed-rate TestnetSwapAdapter ("swap" tag). 0x2f48…4796 is the MockAdapter (no rate()).
+      swapAdapter: '0x797CE9e0DddBEcA057DCb238f721d94381D6aE79',
       lpAdapter: '0x66247971049f8563dD5E46cf628f730F2D0ebF8b',
       lpExitAdapter: '0x762920Efe8c6878569F342ddB34F6f9d776BD446',
       feeConverter: '0xc2c5B0264D8B9f67c56174366465331E56932646',
