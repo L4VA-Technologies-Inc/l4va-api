@@ -1,3 +1,4 @@
+import { MAX_ASSETS_WHITELIST } from '@/modules/vaults/dto/createVault.req';
 import { sanitizeVaultDraft } from './sanitize-draft';
 import { FieldCondition, ResolvedVaultCreationSpec } from './spec.types';
 
@@ -241,11 +242,11 @@ export function validateVaultDraftForLaunch(
         message: 'At least one verified asset collection must be selected.',
         action: 'choose_assets',
       });
-    } else if (validAssets > 10) {
-      errors.push('assetsWhitelist: a maximum of 10 asset collections can be whitelisted');
+    } else if (validAssets > MAX_ASSETS_WHITELIST) {
+      errors.push(`assetsWhitelist: a maximum of ${MAX_ASSETS_WHITELIST} asset collections can be whitelisted`);
       addBlocker({
         field: 'assetsWhitelist',
-        message: 'A vault can whitelist at most 10 asset collections.',
+        message: `A vault can whitelist at most ${MAX_ASSETS_WHITELIST} asset collections.`,
         action: 'choose_assets',
       });
     }

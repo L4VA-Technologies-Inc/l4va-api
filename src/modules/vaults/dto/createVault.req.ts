@@ -37,6 +37,9 @@ import {
   ChainType,
 } from '@/types/vault.types';
 
+/** Max policies in a vault's asset whitelist (same cap governance enforces on whitelist proposals). */
+export const MAX_ASSETS_WHITELIST = 30;
+
 export class CreateVaultReq {
   @ApiProperty({ required: false })
   @IsOptional()
@@ -400,7 +403,7 @@ export class CreateVaultReq {
   ftTokenImg: string;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
+    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 30 assets)',
     type: [AssetWhitelistDto],
     required: false,
     example: [
@@ -413,7 +416,7 @@ export class CreateVaultReq {
   })
   @IsArray()
   @ArrayMinSize(1, { message: 'At least one asset must be whitelisted' })
-  @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
+  @ArrayMaxSize(MAX_ASSETS_WHITELIST, { message: `A maximum of ${MAX_ASSETS_WHITELIST} assets can be whitelisted` })
   @IsObject({ each: true })
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
