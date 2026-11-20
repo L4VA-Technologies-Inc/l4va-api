@@ -49,6 +49,11 @@ export interface EvmAllocationFormulaParams {
    * paid out here must leave that slice in custody or the close reverts.
    */
   contributionFeeBps?: number;
+  /**
+   * V13 raise: acquirers claim their VT on-chain (`claimOnchainAllocation`), so their share goes
+   * to `onchainRows` instead of the leaves. Totals then cover the leaves only.
+   */
+  acquirersOnchain?: boolean;
 }
 
 export interface EvmAllocationFormulaRow {
@@ -67,6 +72,8 @@ export interface EvmAllocationFormulaResult {
   contributionFee: bigint;
   vtToAcquirers: bigint;
   vtToContributors: bigint;
+  /** `acquirersOnchain` only: each acquirer's on-chain VT (floor, as the contract). */
+  onchainRows: { contributor: `0x${string}`; vtAmount: bigint }[];
 }
 
 /** Deterministic per-wallet allocation. Rows are returned sorted by contributor address. */
@@ -116,6 +123,7 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
   const sortedEntries = Array.from(merged.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
   const perWallet: EvmAllocationFormulaRow[] = [];
+  const onchainRows: { contributor: `0x${string}`; vtAmount: bigint }[] = [];
   let sumVt = 0n;
   let sumNative = 0n;
 
@@ -133,7 +141,9 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
 
     // Acquirer share of the acquire pool.
     if (totalNativeRaised > 0n && agg.nativeRaised > 0n) {
-      vt += (vtToAcquirers * agg.nativeRaised) / totalNativeRaised;
+      const acquired = (vtToAcquirers * agg.nativeRaised) / totalNativeRaised;
+      if (params.acquirersOnchain) onchainRows.push({ contributor, vtAmount: acquired });
+      else vt += acquired;
     }
 
     if (vt === 0n && native === 0n) continue;
@@ -152,6 +162,7 @@ export function computeEvmAllocationRows(params: EvmAllocationFormulaParams): Ev
     contributionFee,
     vtToAcquirers,
     vtToContributors,
+    onchainRows,
   };
 }
 

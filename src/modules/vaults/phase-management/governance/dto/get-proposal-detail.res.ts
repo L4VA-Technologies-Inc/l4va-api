@@ -511,6 +511,20 @@ export class GetProposalDetailRes {
   distributionStatus?: DistributionStatusDto;
 
   @Expose()
+  @ApiPropertyOptional({
+    description:
+      'V13 EVM distributions: claims open at `activatesAt` (unix seconds, earlier if approved) and close at ' +
+      '`deadline`; a cancelled distribution pays nothing and its pot returns to the vault',
+  })
+  evmDistributionTiming?: {
+    activatesAt: number;
+    deadline: number;
+    approved: boolean;
+    cancelled: boolean;
+    pending: boolean;
+  };
+
+  @Expose()
   @ApiPropertyOptional({ description: 'Fungible tokens for staking', type: [StakingTokenDto] })
   @Type(() => StakingTokenDto)
   fungibleTokens?: StakingTokenDto[];

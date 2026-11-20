@@ -7,6 +7,7 @@ import { encodeAbiParameters, keccak256, zeroAddress, zeroHash, type Address, ty
 
 import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
+import { vaultIsV13, VAULT_V13_ABI } from '../../processing-tx/onchain/evm-v13';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
@@ -191,7 +192,7 @@ export class EvmDistributionService {
         `Proposal ${proposal.id}: execution key ${executionKey} already opened distribution ${existingId} on-chain. ` +
           `Backfilling from chain instead of opening a second distribution.`
       );
-      const onchain = await this.readDistribution(vaultAddress, existingId);
+      const onchain = await this.readDistribution(vault, existingId);
       return {
         distributionId: String(existingId),
         txHash: null,
@@ -218,8 +219,10 @@ export class EvmDistributionService {
 
     // Vaults that support it pay by snapshot voting weight (held VT + VT in
     // liquidity positions), like Cardano; older vaults pay pro-rata on-chain.
+    // V13 has no Merkle mode (it still answers `distributionMerkleRoot` with zero): it pays
+    // pro-rata on-chain, with LP-held VT once the L4VA LP contract is switched on.
     let tree: DistributionTree | null = null;
-    if (await this.supportsMerkleDistribution(vaultAddress)) {
+    if (!vaultIsV13(vault) && (await this.supportsMerkleDistribution(vaultAddress))) {
       const snapshot = await this.snapshotForTimepoint(proposal, timepoint);
       if (!snapshot) throw new Error(`Proposal ${proposal.id}: no snapshot at timepoint ${timepoint} to weight from`);
       tree = this.buildTree(vaultAddress, executionKey, snapshot);
@@ -362,7 +365,7 @@ export class EvmDistributionService {
         this.buildExecutionKey(proposal.vaultId, proposal.id)
       );
       if (id === 0n) return 0; // not opened (yet)
-      const onchain = await this.readDistribution(vaultAddress, id);
+      const onchain = await this.readDistribution(vault, id);
       dist = {
         distributionId: String(id),
         asset: onchain.asset,
@@ -383,6 +386,23 @@ export class EvmDistributionService {
       );
     }
     const distributionId = BigInt(dist.distributionId);
+
+    // V13: a distribution is claimable after its delay (or the verifier's approval) and may be
+    // cancelled before that. Claiming early would revert and count against the holder.
+    if (vaultIsV13(vault)) {
+      const v13 = (await this.contractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_V13_ABI,
+        functionName: 'getDistribution',
+        args: [distributionId],
+      })) as { activatesAt: bigint; cancelled: boolean; approved: boolean; deadline: bigint };
+      if (v13.cancelled) {
+        await this.markAutoClaimDone(proposal, 'distribution cancelled on-chain');
+        return 0;
+      }
+      if (!v13.approved && Number(v13.activatesAt) * 1000 > Date.now()) return 0;
+      if (String(v13.deadline) !== String(dist.deadline)) dist = { ...dist, deadline: String(v13.deadline) };
+    }
 
     if (Number(dist.deadline) * 1000 <= Date.now()) {
       // Claims are closed on-chain; the remainder goes to the treasury by sweep.
@@ -512,7 +532,7 @@ export class EvmDistributionService {
         .where('p.vault_id = :vaultId', { vaultId })
         .andWhere(`p.metadata->'evmDistribution'->>'distributionId' = :id`, { id: distributionId })
         .getOne();
-      const onchain = await this.readDistribution(vaultAddress, id);
+      const onchain = await this.readDistribution(vault, id);
       const snapshot = proposal ? await this.snapshotForTimepoint(proposal, BigInt(onchain.timepoint)) : null;
       const tree = proposal && snapshot ? await this.treeForDistribution(proposal, vaultAddress, id, snapshot) : null;
       const entry = tree?.entries.get(holder.toLowerCase());
@@ -640,10 +660,11 @@ export class EvmDistributionService {
     })) as bigint;
   }
 
-  private async readDistribution(vaultAddress: Address, distributionId: bigint) {
+  private async readDistribution(vault: Vault, distributionId: bigint) {
     return (await this.contractReader.publicClient.readContract({
-      address: vaultAddress,
-      abi: VAULT_ABI,
+      address: vault.contract_address as Address,
+      // V13 reorders the struct's tail; its own ABI decodes it.
+      abi: vaultIsV13(vault) ? VAULT_V13_ABI : VAULT_ABI,
       functionName: 'getDistribution',
       args: [distributionId],
     })) as {

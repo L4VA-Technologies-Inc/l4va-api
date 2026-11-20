@@ -22,6 +22,7 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { EvmV13LpSaleService } from '@/modules/vaults/index-vault/evm-v13-lp-sale.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
 import { latestOutstandingAcquireDeadline } from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
@@ -108,7 +109,8 @@ export class LifecycleService {
     private readonly evmFeeWithdrawService: EvmFeeWithdrawService,
     private readonly evmTerminationService: EvmTerminationService,
     private readonly indexVaultService: IndexVaultService,
-    private readonly evmLpExitService: EvmLpExitService
+    private readonly evmLpExitService: EvmLpExitService,
+    private readonly evmV13LpSaleService: EvmV13LpSaleService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -3394,6 +3396,12 @@ export class LifecycleService {
    */
   private async handleEvmLiquidity(): Promise<void> {
     if (!this.isEvmCycleAutomationEnabled()) return;
+    try {
+      // V13 FromSale: sell the LP slice of each token first; the pool is seeded once all are sold.
+      await this.evmV13LpSaleService.runPendingSales();
+    } catch (err) {
+      this.logger.error(`EVM V13 LP sale sweep failed: ${(err as Error).message}`);
+    }
     try {
       await this.evmLiquidityService.processPending();
     } catch (err) {

@@ -221,6 +221,62 @@ const VT_ABI = [
   },
 ] as const;
 
+/**
+ * `UniswapV4LiquidityAdapterV2`: exits take no recipient. `withdrawToExit` pays the position's
+ * proceeds to the adapter's own `exitAdapter` (a `LiquidityExitAdapterV2`), credited to the vault.
+ */
+const V4_LP_ADAPTER_V2_ABI = [
+  {
+    type: 'function',
+    name: 'exitAdapter',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'withdrawToExit',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
+    outputs: [
+      { name: 'nativeAmount', type: 'uint256' },
+      { name: 'vtAmount', type: 'uint256' },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'LiquidityWithdrawn',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
+    ],
+  },
+] as const;
+
+/** `LiquidityExitAdapterV2`: VT is released only to its own vault, by anyone. */
+const LP_EXIT_ADAPTER_V2_ABI = [
+  {
+    type: 'function',
+    name: 'releaseToken',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'token', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'event',
+    name: 'TokenReleased',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'token', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+] as const;
+
 export interface LpExitResult {
   withdrawnTokenIds: bigint[];
   nativeReturned: bigint;
@@ -260,6 +316,8 @@ export class EvmLpExitService {
   private readonly logger = new Logger(EvmLpExitService.name);
   /** Vault code never changes, so burn support is cached per address for the process lifetime. */
   private readonly burnSupport = new Map<string, boolean>();
+  /** LP adapter → its V2 exit adapter, or null for a V1 adapter. Adapter code never changes. */
+  private readonly exitTargets = new Map<string, Address | null>();
 
   constructor(
     private readonly contractReader: EvmContractReader,
@@ -385,7 +443,21 @@ export class EvmLpExitService {
       vtBurned: 0n,
     };
 
-    const lpAdapters = await this.v4LpAdapters(vaultAddress);
+    const allLpAdapters = await this.v4LpAdapters(vaultAddress);
+
+    // V2 LP adapters carry their own exit adapter and credit proceeds to the vault themselves.
+    const v2Exits = new Map<Address, Address>();
+    const lpAdapters: Address[] = [];
+    for (const adapter of allLpAdapters) {
+      const exit = await this.v2ExitTargetOf(adapter);
+      if (exit) v2Exits.set(adapter, exit);
+      else lpAdapters.push(adapter);
+    }
+    if (v2Exits.size > 0) await this.exitThroughV2(vault, v2Exits, allLpAdapters, result);
+
+    // ---- V1 LP adapters (positions opened before the V2 adapters) ----------------
+    // Runs exactly as before, over the V1 adapters only. It also finishes a burn a previous run
+    // left half-done, so it is not skipped when there are no V1 positions.
     const exitAdapter = this.exitAdapterFor(vault);
     if (!exitAdapter) {
       if ((await this.liquidityInPools(vaultAddress)) > 0n) {
@@ -613,6 +685,143 @@ export class EvmLpExitService {
     }
 
     return result;
+  }
+
+  /** The V2 exit adapter of `lpAdapter`, or null when it is a V1 adapter (no `exitAdapter()`). */
+  async v2ExitTargetOf(lpAdapter: Address): Promise<Address | null> {
+    const key = lpAdapter.toLowerCase();
+    if (this.exitTargets.has(key)) return this.exitTargets.get(key) ?? null;
+    let exit: Address | null;
+    try {
+      exit = (await this.contractReader.publicClient.readContract({
+        address: lpAdapter,
+        abi: V4_LP_ADAPTER_V2_ABI,
+        functionName: 'exitAdapter',
+      })) as Address;
+    } catch {
+      exit = null;
+    }
+    this.exitTargets.set(key, exit);
+    return exit;
+  }
+
+  /**
+   * V2 exit: every live position is withdrawn with `withdrawToExit` (proceeds are credited to
+   * this vault on-chain — no `assign`, no attribution), native is pulled back through
+   * `Vault.swap`, and the pool's VT is released to the vault and burned. V2 only ever returns VT
+   * to the vault, so it requires a vault that can burn it (V12+ code).
+   */
+  private async exitThroughV2(
+    vault: Vault,
+    v2Exits: Map<Address, Address>,
+    allLpAdapters: Address[],
+    result: LpExitResult
+  ): Promise<void> {
+    const client = this.contractReader.publicClient;
+    const vaultAddress = vault.contract_address as Address;
+    const vt = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'vaultToken',
+    })) as Address;
+
+    // ---- 1. withdraw every live position; proceeds are credited to this vault --------
+    for (const adapter of v2Exits.keys()) {
+      const tokenIds = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'positionsOf',
+        args: [vaultAddress],
+      })) as readonly bigint[];
+      if (tokenIds.length === 0) continue;
+      const posm = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'positionManager',
+      })) as Address;
+      for (const tokenId of tokenIds) {
+        const liq = (await client.readContract({
+          address: posm,
+          abi: POSM_ABI,
+          functionName: 'getPositionLiquidity',
+          args: [tokenId],
+        })) as bigint;
+        if (liq === 0n) continue;
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: adapter, abi: V4_LP_ADAPTER_V2_ABI, functionName: 'withdrawToExit', args: [tokenId] },
+          ['LiquidityWithdrawn']
+        );
+        result.withdrawnTokenIds.push(tokenId);
+        this.logger.log(`LP exit (v2): vault=${vaultAddress} tokenId=${tokenId} withdrawn and credited tx=${tx.hash}`);
+      }
+    }
+
+    const burns = await this.vaultBurnsHeldVt(vaultAddress);
+    for (const exit of new Set(v2Exits.values())) {
+      // ---- 2. pull native into the vault's custody ----------------------------------
+      const owed = (await client.readContract({
+        address: exit,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'nativeOwed',
+        args: [vaultAddress],
+      })) as bigint;
+      if (owed > 0n) {
+        const leg = await this.pickDustLeg(vaultAddress, vt, allLpAdapters, exit);
+        const operationId = keccak256(toBytes(`lp-exit-v2:${vaultAddress.toLowerCase()}:${owed}:${Date.now()}`)) as Hex;
+        const swap = await this.swapService.swap(vault.id, {
+          operationId,
+          adapter: exit,
+          assetIn: leg.assetIn,
+          amountIn: 1n,
+          assetOut: leg.assetOut,
+          minAmountOut: owed,
+          deadline: BigInt(Math.floor(Date.now() / 1000) + 600),
+          route: '0x',
+        });
+        result.nativeReturned += owed;
+        result.returnedAs = leg.assetOut;
+        this.logger.log(`LP exit (v2): ${owed} wei back in ${vaultAddress} custody tx=${swap.txHash}`);
+      }
+
+      // ---- 3. the pool's VT goes back to the vault -----------------------------------
+      const vtOwed = (await client.readContract({
+        address: exit,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'tokenOwed',
+        args: [vaultAddress, vt],
+      })) as bigint;
+      if (vtOwed > 0n) {
+        if (!burns) {
+          throw new BadRequestException(
+            `Vault ${vaultAddress} cannot burn VT (pre-V12 code), but its LP sits in a V2 LP adapter that returns ` +
+              `pool VT only to the vault. Releasing it would dilute holders; resolve manually.`
+          );
+        }
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: exit, abi: LP_EXIT_ADAPTER_V2_ABI, functionName: 'releaseToken', args: [vaultAddress, vt] },
+          ['TokenReleased']
+        );
+        this.logger.log(`LP exit (v2): moved ${vtOwed} pool VT onto ${vaultAddress} for burning tx=${tx.hash}`);
+      }
+    }
+
+    // ---- 4. burn what the vault holds -------------------------------------------------
+    if (burns) {
+      const held = (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [vaultAddress],
+      })) as bigint;
+      if (held > 0n) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: vaultAddress, abi: VAULT_ABI, functionName: 'burnHeldVaultToken', args: [] },
+          ['HeldVaultTokenBurned']
+        );
+        result.vtBurned += held;
+        this.logger.log(`LP exit (v2): burned ${held} VT held by ${vaultAddress} tx=${tx.hash}`);
+      }
+    }
   }
 
   /** True when the vault's code has `burnHeldVaultToken()` (V12+). Read from bytecode: no call, no side effects. */

@@ -58,6 +58,11 @@ import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import { EvmLpStatus } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
+import {
+  readV13DistributionTiming,
+  vaultIsV13,
+  type V13DistributionTiming,
+} from '@/modules/vaults/processing-tx/onchain/evm-v13';
 import { UniswapQuoteService } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -2978,8 +2983,28 @@ export class GovernanceService {
         : undefined,
     };
 
+    // V13 EVM distributions open after a delay and can be cancelled before that.
+    let evmDistributionTiming: V13DistributionTiming | undefined;
+    const evmDistributionId = proposal.metadata?.evmDistribution?.distributionId;
+    if (
+      proposal.proposalType === ProposalType.DISTRIBUTION &&
+      evmDistributionId &&
+      proposal.vault?.contract_address &&
+      vaultIsV13(proposal.vault)
+    ) {
+      evmDistributionTiming = await readV13DistributionTiming(
+        this.evmContractReader.publicClient,
+        proposal.vault.contract_address,
+        BigInt(evmDistributionId)
+      ).catch(err => {
+        this.logger.warn(`V13 distribution timing for proposal ${proposalId}: ${(err as Error).message}`);
+        return undefined;
+      });
+    }
+
     const response = {
       proposal: proposalDto,
+      evmDistributionTiming,
       votes,
       totals,
       canVote,

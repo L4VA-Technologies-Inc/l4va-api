@@ -420,6 +420,24 @@ export class VaultFullResponse extends VaultShortResponse {
   protocolAcquiresFeeWei?: string;
 
   @ApiProperty({
+    description:
+      'V13 EVM vaults: allocation root of the latest closed cycle — when contributors can claim (unix seconds), ' +
+      'and whether it is pending, approved early or cancelled',
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'evmV13' },
+  })
+  evmV13?: {
+    cycleId: string;
+    rootActivatesAt: number;
+    rootApproved: boolean;
+    rootCancelled: boolean;
+    rootPending: boolean;
+  };
+
+  @ApiProperty({
     description: 'EVM on-chain acquire fee in bps, taken from the ETH raised when the vault locks',
     required: false,
   })

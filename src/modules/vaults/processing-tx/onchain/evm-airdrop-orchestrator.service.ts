@@ -6,6 +6,7 @@ import { type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
+import { toV13CycleView, v13RootOpen, vaultIsV13, VAULT_V13_ABI } from './evm-v13';
 import { VAULT_ABI } from './vault.abi';
 
 import { Claim } from '@/database/claim.entity';
@@ -154,12 +155,52 @@ export class EvmAirdropOrchestrator {
       );
     }
 
+    // V13: acquirers (on-chain) and the root's leaves both wait until the root opens: after
+    // the allocation delay, or earlier when the verifier approves it; a cancelled root pays
+    // nothing until it is recommitted. A pure acquirer raise (no contributed assets, root
+    // (0,0)) opens at close, so its acquirers are paid at once. A raise holding assets keeps
+    // the acquirer pool behind the delay too (audit 2026-11-20 #4).
+    if (vaultIsV13(vault)) {
+      const none: PushResult = { batchesBroadcast: 0, claimsBroadcast: 0, alreadyClaimedSkipped: 0, txHashes: [] };
+      const view = toV13CycleView(
+        (await this.contractReader.publicClient.readContract({
+          address: vault.contract_address as Address,
+          abi: VAULT_V13_ABI,
+          functionName: 'cycleV13',
+          args: [cycleId],
+        })) as readonly unknown[]
+      );
+      if (view.rootCancelled) {
+        void this.alerts.sendAlert('evm_allocation_root_cancelled', {
+          chain: 'robinhood',
+          vaultId,
+          cycleId: cycleId.toString(),
+        });
+        return none;
+      }
+      if (!v13RootOpen(view)) return none;
+      const onchain = await this.pushOnchainClaims(vault, cycleId);
+      const leaves = await this.pushMerkleBatch(vault, cycleId);
+      return {
+        batchesBroadcast: onchain.batchesBroadcast + leaves.batchesBroadcast,
+        claimsBroadcast: onchain.claimsBroadcast + leaves.claimsBroadcast,
+        alreadyClaimedSkipped: onchain.alreadyClaimedSkipped + leaves.alreadyClaimedSkipped,
+        txHashes: [...onchain.txHashes, ...leaves.txHashes],
+      };
+    }
+    return this.pushMerkleBatch(vault, cycleId);
+  }
+
+  /** One `claimAllocations` batch of the cycle's Merkle leaves. */
+  private async pushMerkleBatch(vault: Vault, cycleId: bigint): Promise<PushResult> {
+    const vaultId = vault.id;
     // Pick candidate rows. Sort by claim_index for deterministic ordering.
     const candidates = (await this.allocationsRepository
       .createQueryBuilder('alloc')
       .where('alloc.vault_id = :vaultId', { vaultId })
       .andWhere('alloc.cycle_id = :cycleId', { cycleId: cycleId.toString() })
       .andWhere('alloc.claimed_at IS NULL')
+      .andWhere('alloc.onchain = false')
       .orderBy('alloc.claim_index', 'ASC')
       .limit(MAX_BATCH_SIZE * 2) // over-fetch so we can skip already-on-chain-claimed
       .getMany()) as unknown as PickedAllocation[];
@@ -298,6 +339,148 @@ export class EvmAirdropOrchestrator {
   }
 
   /**
+   * V13: pays up to MAX_BATCH_SIZE acquirers of a raise with `claimOnchainAllocation`, one
+   * transaction each (the contract has no batch form). What each gets is the contract's own
+   * pro-rata share; the row is updated to the amount the event reports.
+   */
+  private async pushOnchainClaims(vault: Vault, cycleId: bigint): Promise<PushResult> {
+    const vaultAddress = vault.contract_address as Address;
+    const rows = await this.allocationsRepository
+      .createQueryBuilder('alloc')
+      .where('alloc.vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere('alloc.cycle_id = :cycleId', { cycleId: cycleId.toString() })
+      .andWhere('alloc.claimed_at IS NULL')
+      .andWhere('alloc.onchain = true')
+      .orderBy('alloc.claim_index', 'ASC')
+      .limit(MAX_BATCH_SIZE)
+      .getMany();
+
+    const out: PushResult = { batchesBroadcast: 0, claimsBroadcast: 0, alreadyClaimedSkipped: 0, txHashes: [] };
+    for (const row of rows) {
+      const [, claimed] = (await this.contractReader.publicClient.readContract({
+        address: vaultAddress,
+        abi: VAULT_V13_ABI,
+        functionName: 'onchainEntitlement',
+        args: [cycleId, row.contributor as Address],
+      })) as readonly [bigint, boolean];
+      if (claimed) {
+        // Claimed by the acquirer or a previous tick; the reconciler records the event.
+        await this.allocationsRepository
+          .createQueryBuilder()
+          .update(EvmAllocation)
+          .set({ claimed_at: () => 'CURRENT_TIMESTAMP' })
+          .where('id = :id AND claimed_at IS NULL', { id: row.id })
+          .execute();
+        out.alreadyClaimedSkipped++;
+        continue;
+      }
+
+      const adminTx = await this.createAdminClaimTxRow(vault, 1, 'OnchainAllocationClaimed');
+      let result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>;
+      try {
+        result = await this.adminSigner.sendAndConfirm(
+          {
+            address: vaultAddress,
+            abi: VAULT_V13_ABI,
+            functionName: 'claimOnchainAllocation',
+            args: [cycleId, row.contributor as Address],
+          },
+          ['OnchainAllocationClaimed'],
+          async hash => {
+            await this.transactionsRepository.update(
+              { id: adminTx.id },
+              { tx_hash: hash, status: TransactionStatus.submitted }
+            );
+            await this.allocationsRepository.update({ id: row.id }, { claim_tx_hash: hash });
+          }
+        );
+      } catch (err) {
+        if (err instanceof TxRevertedError) {
+          await this.transactionsRepository.update(
+            { id: adminTx.id },
+            {
+              status: TransactionStatus.failed,
+              tx_hash: err.hash,
+              reconciliation_status: EvmReconciliationStatus.failed,
+              reconciliation_last_error: `claimOnchainAllocation reverted: ${err.message.slice(0, 500)}`,
+            }
+          );
+          await this.allocationsRepository.update({ id: row.id }, { claim_tx_hash: null });
+        }
+        throw err;
+      }
+      const evt = result.decodedEvents.find(
+        e => e.eventName === 'OnchainAllocationClaimed' && e.address.toLowerCase() === vaultAddress.toLowerCase()
+      );
+      const vt = evt ? (evt.args as { vtAmount: bigint }).vtAmount : BigInt(row.vt_amount);
+      await this.recordOnchainClaim(row, vault.id, adminTx.id, result, vt);
+      out.batchesBroadcast++;
+      out.claimsBroadcast++;
+      out.txHashes.push(result.hash);
+    }
+    if (out.claimsBroadcast > 0) this.eventEmitter.emit('evm.airdrop.confirmed', { vaultId: vault.id });
+    return out;
+  }
+
+  private async recordOnchainClaim(
+    row: EvmAllocation,
+    vaultId: string,
+    adminTxId: string,
+    result: Awaited<ReturnType<EvmAdminSigner['sendAndConfirm']>>,
+    vt: bigint
+  ): Promise<void> {
+    await this.dataSource.transaction(async manager => {
+      await manager.update(
+        EvmAllocation,
+        { id: row.id },
+        {
+          vt_amount: vt.toString(),
+          claimed_at: new Date(),
+          claim_tx_hash: result.hash,
+          claim_block_number: result.receipt.blockNumber != null ? String(result.receipt.blockNumber) : null,
+        }
+      );
+      const user = await manager
+        .createQueryBuilder(User, 'u')
+        .where('LOWER(u.address) = :address', { address: row.contributor.toLowerCase() })
+        .select(['u.id'])
+        .getOne();
+      if (user) {
+        const dupes = await manager
+          .createQueryBuilder(Claim, 'c')
+          .where('c.user_id = :userId', { userId: user.id })
+          .andWhere('c.vault_id = :vaultId', { vaultId })
+          .andWhere(`c.metadata->>'evmClaimIndex' = :ci`, { ci: row.claim_index })
+          .andWhere(`c.metadata->>'evmCycleId' = :cycleId`, { cycleId: row.cycle_id })
+          .getCount();
+        if (dupes === 0) {
+          const claim = new Claim();
+          claim.user_id = user.id;
+          claim.vault_id = vaultId;
+          claim.type = ClaimType.ACQUIRER;
+          claim.status = ClaimStatus.CLAIMED;
+          claim.amount = vt.toString();
+          claim.lovelace_amount = null;
+          claim.distribution_tx_id = adminTxId;
+          claim.metadata = { evmCycleId: row.cycle_id, evmClaimIndex: row.claim_index };
+          await manager.save(Claim, claim);
+        }
+      }
+      await manager.update(
+        Transaction,
+        { id: adminTxId },
+        {
+          status: TransactionStatus.confirmed,
+          tx_hash: result.hash,
+          reconciliation_status: EvmReconciliationStatus.success,
+          reconciled_at: new Date(),
+          reconciliation_last_error: null,
+        }
+      );
+    });
+  }
+
+  /**
    * Explicit retry entry point for a failed / manual-review claim batch.
    * The Transaction row is only reset; the actual retry happens on the next
    * cron tick via candidate selection (since the failed batch's rows still
@@ -324,7 +507,11 @@ export class EvmAirdropOrchestrator {
   // Internals
   // --------------------------------------------------------------------------
 
-  private async createAdminClaimTxRow(vault: Vault, batchSize: number): Promise<Transaction> {
+  private async createAdminClaimTxRow(
+    vault: Vault,
+    batchSize: number,
+    eventName = 'AllocationClaimed'
+  ): Promise<Transaction> {
     const tx = this.transactionsRepository.create({
       type: TransactionType.evmClaim,
       status: TransactionStatus.pending,
@@ -334,7 +521,7 @@ export class EvmAirdropOrchestrator {
       to_address: vault.contract_address,
       reconciliation_status: EvmReconciliationStatus.pending,
       reconciliation_attempts: 0,
-      expected_events: [{ name: 'AllocationClaimed', count: batchSize }],
+      expected_events: [{ name: eventName, count: batchSize }],
     });
     return this.transactionsRepository.save(tx);
   }
