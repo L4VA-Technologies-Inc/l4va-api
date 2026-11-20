@@ -283,13 +283,15 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       deployBlock: 155562270n,
       adapterRegistry: '0x9e47184b2C83fB4B285301B990330D0c91c1297b',
       protocolFeeConfig: '0xd01ca9faC35F7E05Ea3a442d37797624B486292D',
-      batchDeployer: '0x199C2A70762Bd5513313deEdEbAaD1A9dC3C3eE4',
+      batchDeployer: '0x8A554A224b1c3A88598F97EEEf259a8762C6420E',
       swapAdapter: '0x2f48C9b2C0b9ED5158fd70985DA9e4588A884796',
-      lpAdapter: '0x7315114E4F7611b038198B38b0E21dd7e5260033',
-      lpExitAdapter: '0x9d22025DF262F6cd123BaeaD420D4654fA2D68Be',
+      lpAdapter: '0x66247971049f8563dD5E46cf628f730F2D0ebF8b',
+      lpExitAdapter: '0x762920Efe8c6878569F342ddB34F6f9d776BD446',
       feeConverter: '0xc2c5B0264D8B9f67c56174366465331E56932646',
       feeController: '0x5edf35Bc35149bDBa1D073CC42f844b25E5A9d97',
       guardian: '0x87F86a948f5369240E57a3C8BbED5E8E57F8da7e',
+      // 2026-11-20 audit fixes (script/upgrade-v13-audit.sh): new deployer and LP V2 / exit V2;
+      // the previous ones (0x199C…, 0x7315…, 0x9d22…) are revoked. Vaults created earlier keep their code.
     },
   ],
 };
