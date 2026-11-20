@@ -11,6 +11,7 @@
  *   SWAPPER=0x<guarded swap adapter>  # the address the routes are quoted for
  *   TOKENS=0xa,0xb \                  # optional; default INDEX_BASKET_ALLOWED_ASSETS + USDG
  *   SIZES_ETH=0.01,0.1,1 \            # optional probe sizes
+ *   MAX_ROUNDTRIP_LOSS_BPS=1000 \     # optional; skip pools whose ETH→token→ETH loses more
  *   npx ts-node -r tsconfig-paths/register src/scripts/swap-pool-allowlist.ts > pools.json
  */
 import { config } from 'dotenv';
@@ -59,6 +60,11 @@ async function main(): Promise<void> {
     return planFromTradingApi(resp, tokenIn, tokenOut, amount, weth);
   };
 
+  // A pool is allowlisted only when ETH → token → ETH at that size loses at most
+  // MAX_ROUNDTRIP_LOSS_BPS (default 1000 = 10 %). One-sided pools (sell back loses most of the
+  // value) are where a stolen authority would sandwich a vault, so they stay out.
+  const maxLossBps = BigInt(process.env.MAX_ROUNDTRIP_LOSS_BPS ?? '1000');
+  const illiquid: string[] = [];
   for (const t of tokens.map(a => a.toLowerCase() as Address)) {
     for (const size of sizes) {
       const buy = await quote(NATIVE, t, size).catch(() => null);
@@ -66,10 +72,18 @@ async function main(): Promise<void> {
         misses.push(`ETH→${t} @ ${size}`);
         continue;
       }
-      add(buy, `ETH→${t}`);
       const sell = await quote(t, NATIVE, buy.amountOut).catch(() => null);
-      if (sell) add(sell, `${t}→ETH`);
-      else misses.push(`${t}→ETH @ ${buy.amountOut}`);
+      if (!sell) {
+        misses.push(`${t}→ETH @ ${buy.amountOut}`);
+        continue;
+      }
+      const lossBps = sell.amountOut >= size ? 0n : ((size - sell.amountOut) * 10_000n) / size;
+      if (lossBps > maxLossBps) {
+        illiquid.push(`${t} @ ${size}: round trip loses ${lossBps} bps`);
+        continue;
+      }
+      add(buy, `ETH→${t}`);
+      add(sell, `${t}→ETH`);
     }
   }
 
@@ -83,6 +97,7 @@ async function main(): Promise<void> {
         ids: out.map(p => p.id),
         pools: out,
         noRoute: misses,
+        illiquid,
       },
       null,
       2
