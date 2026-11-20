@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 import { PaginationDto } from './pagination.dto';
 
@@ -72,9 +72,7 @@ export enum TVLCurrency {
 }
 
 export class DateRangeDto {
-  @IsNotEmpty({
-    message: 'from must be a valid ISO date string',
-  })
+  @IsOptional()
   @ApiProperty({
     example: '2025-09-03T12:00:00.000Z',
     required: false,
@@ -88,9 +86,7 @@ export class DateRangeDto {
   })
   from?: Date;
 
-  @IsNotEmpty({
-    message: 'to must be a valid ISO date string',
-  })
+  @IsOptional()
   @ApiProperty({
     example: '2025-09-10T12:00:00.000Z',
     required: false,

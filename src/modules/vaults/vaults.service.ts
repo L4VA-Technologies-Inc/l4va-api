@@ -2142,20 +2142,8 @@ export class VaultsService {
           });
           break;
         case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
-          break;
         case VaultFilter.govern:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked }).andWhere(
-            `
-              EXISTS (
-                SELECT 1
-                FROM proposal
-                WHERE proposal.vault_id = vault.id
-                AND proposal.status = :activeStatus
-              )
-            `,
-            { activeStatus: ProposalStatus.ACTIVE }
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
@@ -2200,18 +2188,18 @@ export class VaultsService {
       );
     }
 
-    if (contributionWindow) {
-      queryBuilder.andWhere('vault.contribution_open_window_time BETWEEN :start AND :end', {
-        start: contributionWindow.from,
-        end: contributionWindow.to,
-      });
+    if (contributionWindow?.from) {
+      queryBuilder.andWhere('vault.contribution_open_window_time >= :contributionWindowFrom', { contributionWindowFrom: contributionWindow.from });
+    }
+    if (contributionWindow?.to) {
+      queryBuilder.andWhere('vault.contribution_open_window_time <= :contributionWindowTo', { contributionWindowTo: contributionWindow.to });
     }
 
-    if (acquireWindow) {
-      queryBuilder.andWhere('vault.acquire_open_window_time BETWEEN :start AND :end', {
-        start: acquireWindow.from,
-        end: acquireWindow.to,
-      });
+    if (acquireWindow?.from) {
+      queryBuilder.andWhere('vault.acquire_open_window_time >= :acquireWindowFrom', { acquireWindowFrom: acquireWindow.from });
+    }
+    if (acquireWindow?.to) {
+      queryBuilder.andWhere('vault.acquire_open_window_time <= :acquireWindowTo', { acquireWindowTo: acquireWindow.to });
     }
 
     if (minTvl) {
@@ -2478,7 +2466,7 @@ export class VaultsService {
   async getAssetsWhitelist(
     query: GetAssetsWhitelistDto & { userId?: string }
   ): Promise<PaginatedResponseDto<{ name: string; policyId: string }>> {
-    const { myVaults = false, userId, page = 1, limit = 10, search } = query;
+    const { myVaults = false, userId, page = 1, limit = 10, search, chainType } = query;
     const statuses = [...VAULT_SEARCH_STATUSES];
     const includeDrafts = Boolean(myVaults && userId);
     const safePage = page > 0 ? page : 1;
@@ -2496,6 +2484,10 @@ export class VaultsService {
       .addSelect("MIN(NULLIF(assets_whitelist.collection_name, ''))", 'name')
       .where('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere('vault.deleted != :deleted', { deleted: true });
+
+    if (chainType) {
+      baseQuery.andWhere('vault.chain_type = :chainType', { chainType });
+    }
 
     if (includeDrafts) {
       baseQuery.andWhere('vault.owner_id = :userId', { userId });
