@@ -249,24 +249,23 @@ export class GovernanceService {
 
       if (lockedVaults.length === 0) {
         this.logger.log('No eligible vaults found for snapshot creation');
-        return;
+      } else {
+        this.logger.log(`Found ${lockedVaults.length} locked/expansion vaults for snapshots`);
+
+        const results = await Promise.allSettled(
+          lockedVaults.map(async (vault, index) => {
+            if (index > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000)); //  Add delay between requests to avoid overwhelming BlockFrost
+            }
+            return await this.createAutomaticSnapshot(vault.id, `${vault.script_hash}${vault.asset_vault_name}`);
+          })
+        );
+
+        const successful = results.filter(r => r.status === 'fulfilled').length;
+        const failed = results.filter(r => r.status === 'rejected').length;
+
+        this.logger.log(`Daily snapshot creation completed: ${successful} successful, ${failed} failed`);
       }
-
-      this.logger.log(`Found ${lockedVaults.length} locked/expansion vaults for snapshots`);
-
-      const results = await Promise.allSettled(
-        lockedVaults.map(async (vault, index) => {
-          if (index > 0) {
-            await new Promise(resolve => setTimeout(resolve, 1000)); //  Add delay between requests to avoid overwhelming BlockFrost
-          }
-          return await this.createAutomaticSnapshot(vault.id, `${vault.script_hash}${vault.asset_vault_name}`);
-        })
-      );
-
-      const successful = results.filter(r => r.status === 'fulfilled').length;
-      const failed = results.filter(r => r.status === 'rejected').length;
-
-      this.logger.log(`Daily snapshot creation completed: ${successful} successful, ${failed} failed`);
 
       // EVM vaults: scan VaultToken Transfer events to build holder snapshots.
       await this.createDailyEvmSnapshots();
