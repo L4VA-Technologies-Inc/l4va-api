@@ -30,6 +30,7 @@ import { AlertsService } from '@/modules/alerts/alerts.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { votingBalances } from '@/modules/vaults/phase-management/governance/voting-power.util';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
 import { VaultArchetype } from '@/types/index-vault.types';
@@ -1829,21 +1830,23 @@ export class TaptoolsService {
     // Collect all unique addresses from snapshots
     const snapshotAddresses = new Set<string>();
     snapshots.forEach(snapshot => {
-      if (snapshot.addressBalances) {
-        Object.keys(snapshot.addressBalances).forEach(addr => snapshotAddresses.add(addr));
-      }
+      for (const addr of votingBalances(snapshot).keys()) snapshotAddresses.add(addr);
     });
 
-    // Batch query: Get all users by addresses
+    // Batch query: Get all users by addresses. EVM snapshots key holders in lowercase while
+    // users.address is checksummed, so match case-insensitively.
     const usersByAddress =
       snapshotAddresses.size > 0
-        ? await this.userRepository.find({
-            where: { address: In([...snapshotAddresses]) },
-            select: ['id', 'address'],
-          })
+        ? await this.userRepository
+            .createQueryBuilder('user')
+            .select(['user.id', 'user.address'])
+            .where('LOWER(user.address) IN (:...addresses)', {
+              addresses: [...snapshotAddresses].map(a => a.toLowerCase()),
+            })
+            .getMany()
         : [];
 
-    const addressToUserIdMap = new Map(usersByAddress.map(u => [u.address, u.id]));
+    const addressToUserIdMap = new Map(usersByAddress.map(u => [u.address.toLowerCase(), u.id]));
 
     // Identify affected users
     const affectedUserIds = new Set<string>();
@@ -1860,11 +1863,9 @@ export class TaptoolsService {
 
     // Add VT token holders
     snapshots.forEach(snapshot => {
-      if (snapshot.addressBalances) {
-        Object.keys(snapshot.addressBalances).forEach(address => {
-          const userId = addressToUserIdMap.get(address);
-          if (userId) affectedUserIds.add(userId);
-        });
+      for (const address of votingBalances(snapshot).keys()) {
+        const userId = addressToUserIdMap.get(address);
+        if (userId) affectedUserIds.add(userId);
       }
     });
 
@@ -1873,13 +1874,34 @@ export class TaptoolsService {
       // this.logger.debug(`Recalculating TVL and gains for ${affectedUserIds.size} users`);
 
       // Batch query: Get all relevant vaults
-      const allRelevantVaults = await this.vaultRepository.find({
+      const allRelevantVaults: Pick<
+        Vault,
+        | 'id'
+        | 'vault_status'
+        | 'ft_token_supply'
+        | 'ft_token_decimals'
+        | 'initial_total_value_ada'
+        | 'owner'
+        | 'vault_archetype'
+        | 'total_assets_cost_ada'
+        | 'total_assets_cost_eth'
+      >[] = await this.vaultRepository.find({
         where: {
           deleted: false,
           vault_status: In(VAULT_STATUSES_ACTIVE),
         },
         relations: ['owner'],
-        select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
+        select: [
+          'id',
+          'vault_status',
+          'ft_token_supply',
+          'ft_token_decimals',
+          'initial_total_value_ada',
+          'owner',
+          'vault_archetype',
+          'total_assets_cost_ada',
+          'total_assets_cost_eth',
+        ],
       });
 
       // Batch query: Get all vault values at once
@@ -1945,13 +1967,15 @@ export class TaptoolsService {
       });
 
       // Calculate TVL and gains for each user
-      const userUpdates: Array<{ id: string; tvl: number; gains: number }> = [];
+      const userUpdates: Array<{ id: string; tvl: number; gains: number; tvl_eth: number }> = [];
 
       for (const userId of affectedUserIds) {
         const user = userMap.get(userId);
         if (!user) continue;
 
-        const userTvl = { tvl: 0, gains: 0 };
+        // `eth` is the Robinhood native total, summed from each vault's own ETH value rather than
+        // converted through ADA, so it does not move with the ADA price.
+        const userTvl = { tvl: 0, gains: 0, eth: 0 };
 
         // Calculate from all vaults
         for (const vault of allRelevantVaults) {
@@ -1963,7 +1987,14 @@ export class TaptoolsService {
             const snapshot = snapshotByVaultId.get(vault.id);
 
             if (snapshot?.addressBalances && vault.ft_token_supply) {
-              const vtBalance = Number(snapshot.addressBalances[user.address] || 0);
+              // Held VT plus VT the user has in Uniswap pools (EVM `lpBalances`); keys are
+              // lowercase on EVM snapshots, as-is on Cardano.
+              const vtBalance = votingBalances(snapshot).get(user.address.toLowerCase()) ?? 0n;
+              // Index vaults keep their basket on-chain; IndexVaultService writes its value to the
+              // vault row, while the asset-table summary does not include it.
+              const isIndex = vault.vault_archetype === VaultArchetype.index_weighted;
+              const vaultValueAda = isIndex ? Number(vault.total_assets_cost_ada || 0) : summary.totalValueAda;
+              const vaultValueEth = isIndex ? Number(vault.total_assets_cost_eth || 0) : summary.totalValueEth || 0;
               if (vtBalance > 0) {
                 // VT tokens in snapshot are in smallest units (e.g., 1000000 for 1 token with 6 decimals)
                 // ft_token_supply might be in human-readable units (e.g., 1 instead of 1000000)
@@ -1976,15 +2007,16 @@ export class TaptoolsService {
                   continue;
                 }
                 // Now both are in smallest units
-                const userShare = vtBalance / ftSupplySmallestUnits;
+                const userShare = Number(vtBalance) / ftSupplySmallestUnits;
 
                 // Validate share is reasonable (0-100%)
                 if (userShare > 1 || userShare < 0) {
                   continue;
                 }
 
-                const userVaultTvl = userShare * summary.totalValueAda;
+                const userVaultTvl = userShare * vaultValueAda;
                 userTvl.tvl += userVaultTvl;
+                userTvl.eth += userShare * vaultValueEth;
 
                 // Calculate proportional gains (including negative)
                 if (vault.initial_total_value_ada !== null && vault.initial_total_value_ada !== undefined) {
@@ -2000,18 +2032,28 @@ export class TaptoolsService {
             if (userVaultAssets) {
               for (const asset of userVaultAssets) {
                 userTvl.tvl += asset.valueAda;
+                // Robinhood contributions are ETH (quantity in wei).
+                if (asset.type === AssetType.ETH) userTvl.eth += Number(asset.quantity) / 1e18;
               }
             }
           }
         }
 
-        userUpdates.push({ id: userId, tvl: userTvl.tvl, gains: userTvl.gains });
+        userUpdates.push({
+          id: userId,
+          tvl: userTvl.tvl,
+          gains: userTvl.gains,
+          tvl_eth: userTvl.eth,
+        });
       }
 
       // Batch update all users
       await Promise.all(
         userUpdates.map(update =>
-          this.userRepository.update({ id: update.id }, { tvl: update.tvl, gains: update.gains })
+          this.userRepository.update(
+            { id: update.id },
+            { tvl: update.tvl, gains: update.gains, tvl_eth: update.tvl_eth }
+          )
         )
       );
     }

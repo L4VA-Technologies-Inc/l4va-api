@@ -19,7 +19,7 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class UsersService {
@@ -97,11 +97,13 @@ export class UsersService {
               `EXISTS (
               SELECT 1 FROM snapshot
               WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
+              AND (snapshot.address_balances -> :userAddress IS NOT NULL
+                OR snapshot.address_balances -> :userAddressLower IS NOT NULL
+                OR snapshot.lp_balances -> :userAddressLower IS NOT NULL)
               ORDER BY snapshot.created_at DESC
               LIMIT 1
             )`,
-              { userAddress: user.address }
+              { userAddress: user.address, userAddressLower: user.address?.toLowerCase() }
             );
         })
       )
@@ -158,11 +160,13 @@ export class UsersService {
               `EXISTS (
               SELECT 1 FROM snapshot
               WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
+              AND (snapshot.address_balances -> :userAddress IS NOT NULL
+                OR snapshot.address_balances -> :userAddressLower IS NOT NULL
+                OR snapshot.lp_balances -> :userAddressLower IS NOT NULL)
               ORDER BY snapshot.created_at DESC
               LIMIT 1
             )`,
-              { userAddress: user.address }
+              { userAddress: user.address, userAddressLower: user.address?.toLowerCase() }
             );
         })
       )
@@ -170,8 +174,17 @@ export class UsersService {
     user.total_vaults = vaultsCount || 0;
     const plainedUsers = instanceToPlain(user);
 
-    plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.priceService.getAdaPrice())).toFixed(2));
-    plainedUsers.totalValueAda = user.tvl;
+    // TVL is stored in the chain's native unit (ADA in `tvl`, ETH in `tvl_eth`); USD is derived
+    // from that native value, so a Robinhood profile never goes through the ADA price.
+    const tvlAda = Number(user.tvl) || 0;
+    const tvlEth = Number(user.tvl_eth) || 0;
+    const isRobinhood = user.chain_type === ChainType.robinhood;
+    const tvlUsd = isRobinhood
+      ? tvlEth * (await this.priceService.getEthPrice())
+      : tvlAda * (await this.priceService.getAdaPrice());
+    plainedUsers.totalValueAda = tvlAda;
+    plainedUsers.totalValueEth = tvlEth;
+    plainedUsers.totalValueUsd = parseFloat(tvlUsd.toFixed(2));
 
     // Calculate gains as percentage: (gains / initial_investment) * 100
     // initial_investment = current_value - gains
