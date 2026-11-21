@@ -177,7 +177,9 @@ export class EvmSnapshotService {
     // A baseline-derived snapshot inherits any holder the baseline missed, and every later snapshot
     // inherits it again. Self-check against the token: if the voters' balances do not add up to
     // the voting supply at the pinned block, rebuild this snapshot from the token's deployment.
-    if (balanceSource !== 'holders_api' && canUseIncrementalBaseline) {
+    // The holders API is checked too: Blockscout indexes with a lag, so a snapshot taken right
+    // after an airdrop can come back empty or short.
+    if (balanceSource === 'holders_api' || canUseIncrementalBaseline) {
       const expected = await this.votingSupplyAt(vtAddress, vault.contract_address as Address, pinnedBlock);
       const tracked = [...balances.values()].reduce((sum, value) => sum + value, 0n);
       if (expected !== null && tracked !== expected) {
