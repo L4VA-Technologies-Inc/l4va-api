@@ -7,9 +7,13 @@ import {
   encodeMultiPathRoute,
   NATIVE,
   NoSupportedRouteError,
+  pathSharesBps,
   planFromTradingApi,
   RouteVenue,
+  tradingApiHops,
   v4PoolId,
+  validateRoutePlan,
+  type RouteHop,
   type RoutePlan,
 } from './swap-route/multi-path-route';
 import {
@@ -26,7 +30,12 @@ import {
   resolveVaultSwapAdapter,
   vaultSwapAdapterIsMultiPath,
 } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
-import { disallowedPool } from '@/modules/vaults/processing-tx/onchain/evm-swap-guard';
+import {
+  allowedPoolIds,
+  disallowedPool,
+  guardedPoolOf,
+  isGuardedSwapAdapter,
+} from '@/modules/vaults/processing-tx/onchain/evm-swap-guard';
 import { EvmSwapService, type SwapParams } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
 import { UNISWAP_V3_ROBINHOOD } from '@/modules/vaults/processing-tx/onchain/uniswap-quote.service';
 
@@ -46,6 +55,8 @@ export enum SwapAdapterKind {
 const MAINNET_CHAIN_ID = 4663;
 const MAINNET_V4_QUOTER = '0x8dc178efb8111bb0973dd9d722ebeff267c98f94' as Address;
 const MAINNET_V4_STATE_VIEW = '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b' as Address;
+/** USDG on 4663: the stable most memecoin and stock pools pair with. */
+const MAINNET_USDG = '0x5fc5360d0400a0fd4f2af552add042d716f1d168' as Address;
 /** A missing pool is re-checked after this, so a pool created later is found without a restart. */
 const V4_MISSING_POOL_TTL_MS = 10 * 60_000;
 const V3_FEE_TIERS = [100, 500, 3000, 10_000];
@@ -71,6 +82,8 @@ const DEFAULT_MAX_ROUND_TRIP_LOSS_BPS = 2500;
 const TRANSFER_TAX_TOLERANCE_BPS = 10n;
 
 const BPS = 10_000n;
+
+const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 const POOL_KEY_COMPONENTS = [
   { name: 'currency0', type: 'address' },
@@ -257,6 +270,8 @@ export class IndexSwapRouteService {
   private readonly v3Quoter: Address | null;
   private readonly v4Quoter: Address | null;
   private readonly v4StateView: Address | null;
+  /** Intermediate tokens tried when routing only through allowlisted pools. */
+  private readonly hubTokens: Address[];
 
   constructor(
     private readonly contractReader: EvmContractReader,
@@ -289,6 +304,10 @@ export class IndexSwapRouteService {
     this.v3Quoter = v3Quoter ? (v3Quoter.toLowerCase() as Address) : null;
     this.v4Quoter = v4Quoter ? (v4Quoter.toLowerCase() as Address) : null;
     this.v4StateView = stateView ? (stateView.toLowerCase() as Address) : null;
+    const hubs = configService.get<string>('EVM_ROUTE_HUB_TOKENS');
+    this.hubTokens = (hubs ? hubs.split(',') : isRobinhoodMainnet ? [MAINNET_USDG] : [])
+      .map(h => h.trim().toLowerCase() as Address)
+      .filter(h => /^0x[0-9a-f]{40}$/.test(h));
 
     if (!isTestnet && this.kind === SwapAdapterKind.testnetFixedRate) {
       throw new Error('EVM_SWAP_ADAPTER_KIND=testnet_fixed_rate must never be used on mainnet');
@@ -342,26 +361,48 @@ export class IndexSwapRouteService {
    * vault fee). Throws {@link NoSupportedRouteError} when no route the adapter
    * can run exists, or {@link TradingApiUnavailableError} when that could not
    * be determined.
+   *
+   * When `swapper` (default: the configured adapter) is a guarded adapter, only
+   * allowlisted pools are used: paths of the Uniswap route through other pools
+   * are dropped, and when none is left a route is built on-chain from
+   * allowlisted pools only. `ignoreAllowlist` prices at Uniswap's best route
+   * instead (valuation, never execution).
    */
-  async quote(assetIn: Address, assetOut: Address, amountIn: bigint, swapper?: Address): Promise<SwapQuote> {
+  async quote(
+    assetIn: Address,
+    assetOut: Address,
+    amountIn: bigint,
+    swapper?: Address,
+    opts: { ignoreAllowlist?: boolean } = {}
+  ): Promise<SwapQuote> {
     if (amountIn === 0n) return { amountOut: 0n, route: '0x', plan: null };
     assetIn = assetIn.toLowerCase() as Address;
     assetOut = assetOut.toLowerCase() as Address;
     if (this.kind === SwapAdapterKind.testnetFixedRate) return this.quoteFixedRate(assetIn, assetOut, amountIn);
 
+    const adapter = (swapper ?? this.adapter ?? NATIVE).toLowerCase() as Address;
+    const guard =
+      !opts.ignoreAllowlist && adapter !== NATIVE && (await isGuardedSwapAdapter(this.contractReader.publicClient, adapter))
+        ? adapter
+        : null;
+
     let plan: RoutePlan;
+    const hints: RouteHop[] = [];
     try {
-      plan = await this.planViaTradingApi(assetIn, assetOut, amountIn, swapper ?? this.adapter ?? NATIVE);
+      plan = await this.planViaTradingApi(assetIn, assetOut, amountIn, adapter, guard, hints);
+      if (plan.estimated) plan = await this.requote(plan);
     } catch (err) {
       // Also fall back when the Trading API finds no route: it gives up on sizes deeper than its
       // liquidity threshold (e.g. a vault's whole L4VA balance), while a direct pool still quotes —
       // and that quote is the honest exit value. The on-chain route passes the same validation.
       if (!(err instanceof TradingApiUnavailableError) && !(err instanceof NoSupportedRouteError)) throw err;
-      const fallback = await this.planViaChain(assetIn, assetOut, amountIn);
+      const fallback = guard
+        ? await this.planViaAllowlistedPools(assetIn, assetOut, amountIn, guard, hints).catch(() => null)
+        : await this.planViaChain(assetIn, assetOut, amountIn);
       if (!fallback) throw err;
       this.logger.warn(
-        `${err instanceof TradingApiUnavailableError ? 'Trading API down' : 'Trading API has no route'}; ` +
-          `using on-chain single-pool route for ${assetIn}→${assetOut}`
+        `${err instanceof TradingApiUnavailableError ? 'Trading API down' : `Trading API route unusable (${err.reason})`}; ` +
+          `using on-chain ${guard ? 'allowlisted' : 'single-pool'} route for ${assetIn}→${assetOut}`
       );
       plan = fallback;
     }
@@ -372,7 +413,7 @@ export class IndexSwapRouteService {
   async valueInNative(asset: Address, amount: bigint): Promise<bigint> {
     if (amount === 0n) return 0n;
     try {
-      return (await this.quote(asset, NATIVE, amount)).amountOut;
+      return (await this.quote(asset, NATIVE, amount, undefined, { ignoreAllowlist: true })).amountOut;
     } catch (err) {
       // Dust (e.g. 1 wei left after a sale) quotes to zero everywhere and reads as "no route".
       // Value an amount below one whole token from the price of one whole token instead, so a
@@ -385,7 +426,7 @@ export class IndexSwapRouteService {
       );
       const oneToken = 10n ** BigInt(decimals);
       if (amount >= oneToken) throw err;
-      const unitValue = (await this.quote(asset, NATIVE, oneToken)).amountOut;
+      const unitValue = (await this.quote(asset, NATIVE, oneToken, undefined, { ignoreAllowlist: true })).amountOut;
       return (amount * unitValue) / oneToken;
     }
   }
@@ -646,18 +687,204 @@ export class IndexSwapRouteService {
   // Route sources
   // ---------------------------------------------------------------------------
 
+  /**
+   * Uniswap's best route, minus the paths the adapter cannot run. With `guard`, paths through pools
+   * that adapter has not allowlisted are dropped too. Every hop Uniswap considered is pushed to
+   * `hints`, so an on-chain fallback can try those pools.
+   */
   private async planViaTradingApi(
     assetIn: Address,
     assetOut: Address,
     amountIn: bigint,
-    swapper: Address
+    swapper: Address,
+    guard: Address | null = null,
+    hints: RouteHop[] = []
   ): Promise<RoutePlan> {
     if (!this.tradingApi.enabled) throw new TradingApiUnavailableError('UNISWAP_API_KEY is not configured');
     const resp = await this.tradingApi.quoteExactInput(assetIn, assetOut, amountIn, swapper);
     if ('noRoute' in resp) {
       throw new NoSupportedRouteError(assetIn, assetOut, `Uniswap has no route (${resp.detail})`);
     }
-    return planFromTradingApi(resp, assetIn, assetOut, amountIn, this.weth);
+    const hops = tradingApiHops(resp, this.weth);
+    hints.push(...hops);
+    let disallowed: ((path: RouteHop[]) => Hex | null) | undefined;
+    if (guard) {
+      const allowed = await allowedPoolIds(
+        this.contractReader.publicClient,
+        guard,
+        hops.map(h => guardedPoolOf(h).id)
+      );
+      if (allowed) {
+        disallowed = path => {
+          const bad = path.map(h => guardedPoolOf(h).id).find(id => !allowed.has(id.toLowerCase()));
+          return bad ?? null;
+        };
+      }
+    }
+    return planFromTradingApi(resp, assetIn, assetOut, amountIn, this.weth, { disallowedPool: disallowed });
+  }
+
+  /**
+   * Re-price a plan whose paths were partly dropped: each kept path gets its share of the input
+   * (as the adapter splits it) and is quoted hop by hop on-chain. Left as an estimate when a
+   * quoter is missing or a hop cannot be quoted; execution simulates the route anyway.
+   */
+  private async requote(plan: RoutePlan): Promise<RoutePlan> {
+    const shares = pathSharesBps(plan.paths);
+    let rest = plan.amountIn;
+    const amounts = shares.map((bps, i) => {
+      const a = i === shares.length - 1 ? rest : (plan.amountIn * BigInt(bps)) / BPS;
+      rest -= a;
+      return a;
+    });
+    try {
+      const outs = await Promise.all(plan.paths.map((p, i) => this.quotePath(p.hops, amounts[i])));
+      if (outs.some(o => o === 0n)) return plan;
+      return {
+        ...plan,
+        amountOut: outs.reduce((s, o) => s + o, 0n),
+        paths: plan.paths.map((p, i) => ({ ...p, amountIn: amounts[i], amountOut: outs[i] })),
+        estimated: false,
+      };
+    } catch (err) {
+      this.logger.warn(`Could not re-quote a trimmed route on-chain: ${(err as Error).message.split('\n')[0]}`);
+      return plan;
+    }
+  }
+
+  /** Output of `hops` for `amountIn`, one pool at a time with Uniswap's quoters. */
+  private async quotePath(hops: RouteHop[], amountIn: bigint): Promise<bigint> {
+    let amount = amountIn;
+    for (const h of hops) {
+      if (amount === 0n) return 0n;
+      amount = await this.quoteHop(h, amount);
+    }
+    return amount;
+  }
+
+  private async quoteHop(h: RouteHop, amountIn: bigint): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    if (h.venue === RouteVenue.v3) {
+      if (!this.v3Quoter) throw new Error('no v3 quoter configured');
+      const { result } = await client.simulateContract({
+        address: this.v3Quoter,
+        abi: V3_QUOTER_ABI,
+        functionName: 'quoteExactInputSingle',
+        args: [{ tokenIn: h.tokenIn, tokenOut: h.tokenOut, amountIn, fee: h.fee, sqrtPriceLimitX96: 0n }],
+      });
+      return (result as readonly [bigint, bigint, number, bigint])[0];
+    }
+    if (!this.v4Quoter) throw new Error('no v4 quoter configured');
+    const a = h.tokenIn.toLowerCase() as Address;
+    const b = h.tokenOut.toLowerCase() as Address;
+    const [currency0, currency1] = a < b ? [a, b] : [b, a];
+    const { result } = await client.simulateContract({
+      address: this.v4Quoter,
+      abi: V4_QUOTER_ABI,
+      functionName: 'quoteExactInputSingle',
+      args: [
+        {
+          poolKey: { currency0, currency1, fee: h.fee, tickSpacing: h.tickSpacing, hooks: NATIVE },
+          zeroForOne: a === currency0,
+          exactAmount: amountIn,
+          hookData: '0x',
+        },
+      ],
+    });
+    return (result as readonly [bigint, bigint])[0];
+  }
+
+  /**
+   * Best single path through pools the guarded adapter allowlists: direct, or through one hub token
+   * (USDG on mainnet). Candidate pools are the ones Uniswap used in its quote (`hints`) plus the
+   * standard v3 tiers and v4 keys. Null when no allowlisted path quotes.
+   */
+  private async planViaAllowlistedPools(
+    assetIn: Address,
+    assetOut: Address,
+    amountIn: bigint,
+    adapter: Address,
+    hints: RouteHop[]
+  ): Promise<RoutePlan | null> {
+    const asV3 = (t: Address) => (t === NATIVE ? this.weth : t);
+    const candidates = (a: Address, b: Address): RouteHop[] => {
+      const pair = [asV3(a), asV3(b)].sort().join();
+      const out: RouteHop[] = [];
+      for (const h of hints) {
+        if ([asV3(h.tokenIn), asV3(h.tokenOut)].sort().join() !== pair) continue;
+        // Orient the hint a → b, keeping the currencies its pool really holds.
+        const forward = asV3(h.tokenIn) === asV3(a);
+        out.push(forward ? h : { ...h, tokenIn: h.tokenOut, tokenOut: h.tokenIn });
+      }
+      for (const fee of V3_FEE_TIERS) {
+        out.push({ venue: RouteVenue.v3, tokenIn: asV3(a), tokenOut: asV3(b), fee, tickSpacing: 0 });
+      }
+      for (const c of V4_POOL_CANDIDATES) {
+        out.push({ venue: RouteVenue.v4, tokenIn: a, tokenOut: b, fee: c.fee, tickSpacing: c.tickSpacing });
+      }
+      const seen = new Set<string>();
+      return out.filter(h => {
+        const id = guardedPoolOf(h).id;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+    };
+
+    const legs: Array<[Address, Address]> = [[assetIn, assetOut]];
+    const hubs = this.hubTokens.filter(
+      h => !sameAddress(h, asV3(assetIn)) && !sameAddress(h, asV3(assetOut))
+    );
+    for (const hub of hubs) legs.push([assetIn, hub], [hub, assetOut]);
+    const byLeg = legs.map(([a, b]) => candidates(a, b));
+    const allowed = await allowedPoolIds(
+      this.contractReader.publicClient,
+      adapter,
+      byLeg.flat().map(h => guardedPoolOf(h).id)
+    );
+    if (!allowed) return null;
+    const usable = byLeg.map(hops => hops.filter(h => allowed.has(guardedPoolOf(h).id.toLowerCase())));
+
+    /** Best hop of `hops` for `amount`, or null. */
+    const best = async (hops: RouteHop[], amount: bigint) => {
+      const quoted = await Promise.all(
+        hops.map(h =>
+          this.quoteHop(h, amount)
+            .then(out => ({ hop: h, out }))
+            .catch(() => null)
+        )
+      );
+      return quoted
+        .filter((q): q is { hop: RouteHop; out: bigint } => q !== null && q.out > 0n)
+        .sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))[0] ?? null;
+    };
+
+    const options: Array<{ hops: RouteHop[]; out: bigint }> = [];
+    const direct = await best(usable[0], amountIn);
+    if (direct) options.push({ hops: [direct.hop], out: direct.out });
+    for (let i = 0; i < hubs.length; i++) {
+      const first = await best(usable[1 + 2 * i], amountIn);
+      if (!first) continue;
+      const second = await best(usable[2 + 2 * i], first.out);
+      if (second) options.push({ hops: [first.hop, second.hop], out: second.out });
+    }
+
+    for (const o of options.sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))) {
+      try {
+        validateRoutePlan([{ hops: o.hops }], assetIn, assetOut, this.weth);
+      } catch {
+        continue;
+      }
+      return {
+        assetIn,
+        assetOut,
+        amountIn,
+        amountOut: o.out,
+        source: 'onchain',
+        paths: [{ amountIn, amountOut: o.out, hops: o.hops }],
+      };
+    }
+    return null;
   }
 
   /** Best single pool (v3 any tier, or hookless v4) priced by Uniswap's on-chain quoters. */

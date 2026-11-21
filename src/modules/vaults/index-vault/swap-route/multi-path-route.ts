@@ -57,6 +57,11 @@ export interface RoutePlan {
   amountOut: bigint;
   paths: RoutePath[];
   source: 'trading_api' | 'onchain';
+  /**
+   * True when paths of the quoted route were dropped, so `amountOut` is scaled
+   * from the kept paths rather than quoted for them. Re-quote before relying on it.
+   */
+  estimated?: boolean;
 }
 
 /**
@@ -112,56 +117,67 @@ export function validateRoutePlan(
   if (paths.length === 0 || paths.length > MULTI_PATH_LIMITS.maxPaths) {
     fail(`route splits into ${paths.length} paths (max ${MULTI_PATH_LIMITS.maxPaths})`);
   }
-
   paths.forEach(({ hops }, p) => {
-    if (hops.length === 0 || hops.length > MULTI_PATH_LIMITS.maxHopsPerPath) {
-      fail(`path ${p + 1} has ${hops.length} hops (max ${MULTI_PATH_LIMITS.maxHopsPerPath})`);
-    }
-    hops.forEach((h, k) => {
-      if (lower(h.tokenIn) === lower(h.tokenOut)) fail(`path ${p + 1} hop ${k + 1} swaps a token for itself`);
-      if (h.venue === RouteVenue.v3) {
-        if (lower(h.tokenIn) === NATIVE || lower(h.tokenOut) === NATIVE) fail('a v3 pool cannot hold native ETH');
-        if (!MULTI_PATH_LIMITS.v3Fees.includes(h.fee)) fail(`v3 fee tier ${h.fee} is not allowed`);
-        if (h.tickSpacing !== 0) fail('v3 hop carries a tick spacing');
-      } else if (h.venue === RouteVenue.v4) {
-        if (!Number.isInteger(h.fee) || h.fee < 0 || h.fee > MULTI_PATH_LIMITS.v4MaxFee) {
-          fail(`v4 pool fee ${h.fee} is dynamic or out of range`);
-        }
-        if (
-          !Number.isInteger(h.tickSpacing) ||
-          h.tickSpacing < 1 ||
-          h.tickSpacing > MULTI_PATH_LIMITS.v4MaxTickSpacing
-        ) {
-          fail(`v4 tick spacing ${h.tickSpacing} is out of range`);
-        }
-      } else {
-        fail(`unknown venue ${String(h.venue)}`);
-      }
-
-      if (k > 0) {
-        const prev = hops[k - 1];
-        const linked =
-          prev.venue === h.venue
-            ? lower(prev.tokenOut) === lower(h.tokenIn)
-            : sameAsset(prev.tokenOut, h.tokenIn, weth);
-        if (!linked) fail(`path ${p + 1} is broken at hop ${k + 1}`);
-      }
-      if (k + 1 < hops.length) {
-        if (sameAsset(h.tokenOut, assetIn, weth) || sameAsset(h.tokenOut, assetOut, weth)) {
-          fail(`path ${p + 1} passes through the input or output asset`);
-        }
-      }
-    });
-
-    const first = hops[0];
-    // Native input may enter a WETH pool (the router wraps it); WETH input never enters a native pool.
-    const startOk =
-      lower(first.tokenIn) === lower(assetIn) || (lower(assetIn) === NATIVE && lower(first.tokenIn) === lower(weth));
-    if (!startOk) fail(`path ${p + 1} does not start at the input asset`);
-    if (!sameAsset(hops[hops.length - 1].tokenOut, assetOut, weth)) {
-      fail(`path ${p + 1} does not end at the output asset`);
-    }
+    const problem = pathProblem(hops, p, assetIn, assetOut, weth);
+    if (problem) fail(problem);
   });
+}
+
+/** Why the adapter would reject path `p` (0-based) on its own, or null. Same order as the contract. */
+export function pathProblem(
+  hops: RouteHop[],
+  p: number,
+  assetIn: Address,
+  assetOut: Address,
+  weth: Address
+): string | null {
+  if (hops.length === 0 || hops.length > MULTI_PATH_LIMITS.maxHopsPerPath) {
+    return `path ${p + 1} has ${hops.length} hops (max ${MULTI_PATH_LIMITS.maxHopsPerPath})`;
+  }
+  for (let k = 0; k < hops.length; k++) {
+    const h = hops[k];
+    if (lower(h.tokenIn) === lower(h.tokenOut)) return `path ${p + 1} hop ${k + 1} swaps a token for itself`;
+    if (h.venue === RouteVenue.v3) {
+      if (lower(h.tokenIn) === NATIVE || lower(h.tokenOut) === NATIVE) return 'a v3 pool cannot hold native ETH';
+      if (!MULTI_PATH_LIMITS.v3Fees.includes(h.fee)) return `v3 fee tier ${h.fee} is not allowed`;
+      if (h.tickSpacing !== 0) return 'v3 hop carries a tick spacing';
+    } else if (h.venue === RouteVenue.v4) {
+      if (!Number.isInteger(h.fee) || h.fee < 0 || h.fee > MULTI_PATH_LIMITS.v4MaxFee) {
+        return `v4 pool fee ${h.fee} is dynamic or out of range`;
+      }
+      if (
+        !Number.isInteger(h.tickSpacing) ||
+        h.tickSpacing < 1 ||
+        h.tickSpacing > MULTI_PATH_LIMITS.v4MaxTickSpacing
+      ) {
+        return `v4 tick spacing ${h.tickSpacing} is out of range`;
+      }
+    } else {
+      return `unknown venue ${String(h.venue)}`;
+    }
+
+    if (k > 0) {
+      const prev = hops[k - 1];
+      const linked =
+        prev.venue === h.venue ? lower(prev.tokenOut) === lower(h.tokenIn) : sameAsset(prev.tokenOut, h.tokenIn, weth);
+      if (!linked) return `path ${p + 1} is broken at hop ${k + 1}`;
+    }
+    if (k + 1 < hops.length) {
+      if (sameAsset(h.tokenOut, assetIn, weth) || sameAsset(h.tokenOut, assetOut, weth)) {
+        return `path ${p + 1} passes through the input or output asset`;
+      }
+    }
+  }
+
+  const first = hops[0];
+  // Native input may enter a WETH pool (the router wraps it); WETH input never enters a native pool.
+  const startOk =
+    lower(first.tokenIn) === lower(assetIn) || (lower(assetIn) === NATIVE && lower(first.tokenIn) === lower(weth));
+  if (!startOk) return `path ${p + 1} does not start at the input asset`;
+  if (!sameAsset(hops[hops.length - 1].tokenOut, assetOut, weth)) {
+    return `path ${p + 1} does not end at the output asset`;
+  }
+  return null;
 }
 
 /** Path shares in bps, as the adapter applies them (last path takes the remainder). */
@@ -242,17 +258,22 @@ export interface TradingApiHop {
 /**
  * Turn a CLASSIC Trading API quote into a plan the adapter executes exactly.
  *
- * Paths the adapter cannot carry are dropped (over-long paths, and beyond the
- * {@link MULTI_PATH_LIMITS.maxPaths} largest), and the expected output is then
- * scaled from the kept paths. Execution re-prices the encoded route by
- * simulation, so this estimate only has to be close, never exact.
+ * The API often splits a trade over several paths, and only some of them may
+ * be usable. A path is dropped, not the whole route, when the adapter cannot
+ * carry it (hooks, a v2 pool, over-long, passing back through ETH, …), when
+ * `disallowedPool` names a pool of it the guarded adapter has not allowlisted,
+ * or when it is beyond the {@link MULTI_PATH_LIMITS.maxPaths} largest. Its
+ * share goes to the kept paths in proportion, and the expected output is then
+ * scaled from them (`estimated`). The route fails only when no path is left,
+ * with the first dropped path's reason.
  */
 export function planFromTradingApi(
   resp: TradingApiQuoteResponse,
   assetIn: Address,
   assetOut: Address,
   amountIn: bigint,
-  weth: Address
+  weth: Address,
+  opts: { disallowedPool?: (hops: RouteHop[]) => Hex | null } = {}
 ): RoutePlan {
   const fail = (reason: string): never => {
     throw new NoSupportedRouteError(assetIn, assetOut, reason);
@@ -262,35 +283,78 @@ export function planFromTradingApi(
   if (failures.length) fail(`Trading API simulation failed: ${failures.join(', ')}`);
   const raw = resp.quote?.route ?? [];
   if (!raw.length) fail('Trading API returned no route');
+  if (sameAsset(assetIn, assetOut, weth)) fail('input and output are the same asset');
 
-  const parsed: RoutePath[] = raw.map((hops, p) => {
-    if (!hops.length) fail(`path ${p + 1} is empty`);
-    const out = hops.map((h, k) => parseHop(h, p, k, weth, fail));
-    return {
-      amountIn: BigInt(hops[0].amountIn ?? 0),
-      amountOut: BigInt(hops[hops.length - 1].amountOut ?? 0),
-      hops: out,
-    };
+  const dropped: string[] = [];
+  const parsed: RoutePath[] = [];
+  raw.forEach((hops, p) => {
+    const reason = (() => {
+      if (!hops.length) return `path ${p + 1} is empty`;
+      let out: RouteHop[];
+      try {
+        out = hops.map((h, k) => parseHop(h, p, k, weth));
+      } catch (err) {
+        if (err instanceof NoSupportedRouteError) return err.reason;
+        throw err;
+      }
+      const problem = pathProblem(out, p, assetIn, assetOut, weth);
+      if (problem) return problem;
+      const pool = opts.disallowedPool?.(out);
+      if (pool) return `the Uniswap route uses a pool not yet approved for vault trading (${pool})`;
+      parsed.push({
+        amountIn: BigInt(hops[0].amountIn ?? 0),
+        amountOut: BigInt(hops[hops.length - 1].amountOut ?? 0),
+        hops: out,
+      });
+      return null;
+    })();
+    if (reason) dropped.push(reason);
   });
 
+  const quotedIn = raw.reduce((s, hops) => s + BigInt(hops[0]?.amountIn ?? 0), 0n);
   const usable = parsed
-    .filter(p => p.hops.length <= MULTI_PATH_LIMITS.maxHopsPerPath)
     .sort((a, b) => (b.amountIn > a.amountIn ? 1 : b.amountIn < a.amountIn ? -1 : 0))
     .slice(0, MULTI_PATH_LIMITS.maxPaths);
-  if (!usable.length) fail(`every path is longer than ${MULTI_PATH_LIMITS.maxHopsPerPath} hops`);
+  if (!usable.length) fail(dropped[0] ?? 'Trading API returned no route');
 
-  const quotedIn = parsed.reduce((s, p) => s + p.amountIn, 0n);
   const keptIn = usable.reduce((s, p) => s + p.amountIn, 0n);
   const keptOut = usable.reduce((s, p) => s + p.amountOut, 0n);
   if (keptIn === 0n || keptOut === 0n) fail('route quotes zero output');
+  const complete = usable.length === raw.length;
   const quotedTotal = BigInt(resp.quote?.output?.amount ?? 0);
-  const amountOut = usable.length === parsed.length && quotedTotal > 0n ? quotedTotal : (keptOut * quotedIn) / keptIn;
+  const amountOut = complete && quotedTotal > 0n ? quotedTotal : (keptOut * quotedIn) / keptIn;
 
   validateRoutePlan(usable, assetIn, assetOut, weth);
-  return { assetIn, assetOut, amountIn, amountOut, paths: usable, source: 'trading_api' };
+  return {
+    assetIn,
+    assetOut,
+    amountIn,
+    amountOut,
+    paths: usable,
+    source: 'trading_api',
+    ...(complete ? {} : { estimated: true }),
+  };
 }
 
-function parseHop(h: TradingApiHop, p: number, k: number, weth: Address, fail: (reason: string) => never): RouteHop {
+/** Every v3 / hookless-v4 hop of a Trading API quote the adapter could address (others are skipped). */
+export function tradingApiHops(resp: TradingApiQuoteResponse, weth: Address): RouteHop[] {
+  const out: RouteHop[] = [];
+  (resp.quote?.route ?? []).forEach((hops, p) =>
+    hops.forEach((h, k) => {
+      try {
+        out.push(parseHop(h, p, k, weth));
+      } catch {
+        /* a hop the adapter cannot address */
+      }
+    })
+  );
+  return out;
+}
+
+function parseHop(h: TradingApiHop, p: number, k: number, weth: Address): RouteHop {
+  const fail = (reason: string): never => {
+    throw new NoSupportedRouteError(NATIVE, NATIVE, reason);
+  };
   const tokenIn = lower(h.tokenIn?.address ?? '');
   const tokenOut = lower(h.tokenOut?.address ?? '');
   const fee = Number(h.fee);

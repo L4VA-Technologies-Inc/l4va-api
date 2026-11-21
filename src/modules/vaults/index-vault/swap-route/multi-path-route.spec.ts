@@ -109,6 +109,54 @@ describe('planFromTradingApi', () => {
     expect(plan.amountOut).toBe((keptOut * 101_000_000n) / 100_000_000n);
   });
 
+  describe('drops the paths it cannot use and keeps the rest', () => {
+    it('drops a path through a pool that is not allowlisted, keeping the others', () => {
+      const plan = planFromTradingApi(cbbtcToEth as TradingApiQuoteResponse, CBBTC, NATIVE, 100_000_000n, WETH, {
+        disallowedPool: hops => (hops.some(h => h.fee === 3000) ? `0x${'ab'.repeat(32)}` : null),
+      });
+      expect(plan.paths).toHaveLength(2);
+      expect(plan.paths.some(p => p.hops.some(h => h.fee === 3000))).toBe(false);
+      expect(plan.estimated).toBe(true);
+      // Kept 50M of 100M quoted input: output scales by 2.
+      const keptOut = plan.paths.reduce((s, p) => s + p.amountOut, 0n);
+      expect(plan.amountOut).toBe(keptOut * 2n);
+      expect(pathSharesBps(plan.paths).reduce((s, x) => s + x, 0)).toBe(10_000);
+    });
+
+    it('drops a path that passes back through ETH (the SYNTHS sell of 2026-11-21)', () => {
+      const resp = clone(cbbtcToEth) as TradingApiQuoteResponse;
+      // Path 2 becomes cbBTC → WETH → USDG → WETH: an intermediate equal to the output.
+      const mid = clone(resp.quote!.route![1]);
+      mid[0].tokenOut.address = WETH;
+      mid[1].tokenIn.address = WETH;
+      mid[1].tokenOut.address = USDG;
+      const back = clone(resp.quote!.route![1][1]);
+      mid.push(back);
+      resp.quote!.route![1] = mid;
+      const plan = planFromTradingApi(resp, CBBTC, NATIVE, 100_000_000n, WETH);
+      expect(plan.paths).toHaveLength(2);
+      expect(plan.estimated).toBe(true);
+    });
+
+    it('is complete (no estimate) when nothing is dropped', () => {
+      const plan = planFromTradingApi(cbbtcToEth as TradingApiQuoteResponse, CBBTC, NATIVE, 100_000_000n, WETH, {
+        disallowedPool: () => null,
+      });
+      expect(plan.estimated).toBeUndefined();
+      expect(plan.amountOut).toBe(34961642824809288237n);
+    });
+
+    it('fails with the pool id when every path uses a pool that is not allowlisted', () => {
+      const id = `0x${'cd'.repeat(32)}` as const;
+      const run = () =>
+        planFromTradingApi(cbbtcToEth as TradingApiQuoteResponse, CBBTC, NATIVE, 100_000_000n, WETH, {
+          disallowedPool: () => id,
+        });
+      expect(run).toThrow(NoSupportedRouteError);
+      expect(run).toThrow(new RegExp(`not yet approved for vault trading \\(${id}\\)`));
+    });
+  });
+
   describe('rejects routes the adapter cannot execute', () => {
     const expectNoRoute = (fn: () => unknown, match: RegExp) => {
       expect(fn).toThrow(NoSupportedRouteError);
