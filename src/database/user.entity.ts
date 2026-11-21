@@ -97,6 +97,11 @@ export class User {
   @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   tvl: number;
 
+  /** Robinhood TVL in its native ETH, summed from each vault's own ETH value (not via ADA). */
+  @Expose({ name: 'tvlEth' })
+  @Column({ name: 'tvl_eth', type: 'decimal', precision: 30, scale: 8, default: 0 })
+  tvl_eth: number;
+
   @Expose({ name: 'totalVaults' })
   @Column({ type: 'integer', default: 0 })
   total_vaults: number;
