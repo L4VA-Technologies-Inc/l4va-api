@@ -32,6 +32,13 @@ export const GUARDED_SWAP_ADAPTER_ABI = [
   },
   {
     type: 'function',
+    name: 'poolAllowed',
+    stateMutability: 'view',
+    inputs: [{ name: 'poolId', type: 'bytes32' }],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'function',
     name: 'remainingCap',
     stateMutability: 'view',
     inputs: [
@@ -108,6 +115,42 @@ export async function disallowedPool(client: ReadClient, adapter: Address, route
     throw new Error(`Unexpected firstDisallowedPool() result from ${adapter}: ${String(id)}`);
   }
   return id.toLowerCase() === ZERO_POOL ? null : id;
+}
+
+/** Allowlist answers are re-read after this, so a pool the Safe adds or removes is picked up without a restart. */
+const POOL_ALLOWED_TTL_MS = 5 * 60_000;
+const poolAllowedCache = new Map<string, { allowed: boolean; at: number }>();
+
+/**
+ * Which of `ids` the guarded adapter allowlists. Null when the adapter is not guarded (every pool
+ * is allowed) or the allowlist could not be read: callers then skip filtering and the per-trade
+ * checks ({@link assertSwapAllowed}, `firstDisallowedPool`) still apply.
+ */
+export async function allowedPoolIds(client: ReadClient, adapter: Address, ids: Hex[]): Promise<Set<string> | null> {
+  if (!(await isGuardedSwapAdapter(client, adapter))) return null;
+  const now = Date.now();
+  const unique = [...new Set(ids.map(id => id.toLowerCase()))];
+  try {
+    const answers = await Promise.all(
+      unique.map(async id => {
+        const key = `${adapter.toLowerCase()}:${id}`;
+        const hit = poolAllowedCache.get(key);
+        if (hit && now - hit.at < POOL_ALLOWED_TTL_MS) return [id, hit.allowed] as const;
+        const allowed =
+          (await client.readContract({
+            address: adapter,
+            abi: GUARDED_SWAP_ADAPTER_ABI,
+            functionName: 'poolAllowed',
+            args: [id],
+          })) === true;
+        poolAllowedCache.set(key, { allowed, at: now });
+        return [id, allowed] as const;
+      })
+    );
+    return new Set(answers.filter(([, allowed]) => allowed).map(([id]) => id));
+  } catch {
+    return null;
+  }
 }
 
 /**

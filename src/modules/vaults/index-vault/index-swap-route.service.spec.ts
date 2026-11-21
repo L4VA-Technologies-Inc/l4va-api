@@ -8,10 +8,14 @@ import {
   SwapAdapterOutdatedError,
   SwapSimulationError,
 } from './index-swap-route.service';
+import { RouteVenue } from './swap-route/multi-path-route';
 import * as amznToEth from './swap-route/__fixtures__/amzn-to-eth.v4-v3.json';
+import * as cbbtcToEth from './swap-route/__fixtures__/cbbtc-to-eth.3-paths.json';
 import * as ethToAmzn from './swap-route/__fixtures__/eth-to-amzn.v3-v4.json';
 import { ROUTE_PROBE_ABI } from './swap-route/route-probe';
 import { TradingApiUnavailableError } from './swap-route/uniswap-trading-api.client';
+
+import { guardedPoolOf } from '@/modules/vaults/processing-tx/onchain/evm-swap-guard';
 
 const AMZN = '0x12f190a9f9d7d37a250758b26824b97ce941bf54' as Address;
 const ADAPTER = '0x3a25408d952f91e42f39587820bee5f051f4556c' as Address;
@@ -198,6 +202,68 @@ describe('IndexSwapRouteService', () => {
       expect(check.status).toBe('no_route');
       expect(check.reason).toMatch(/multi-path adapter/);
       expect(quoteExactInput).not.toHaveBeenCalled();
+    });
+  });
+  describe('guarded adapter: only allowlisted pools', () => {
+    const CBBTC = '0xcec185eb182c47d1ba1efc84e6959e18cd620be4' as Address;
+    const WETH = '0x0bd7d308f8e1639fab988df18a8011f41eacad73' as Address;
+    const USDG = '0x5fc5360d0400a0fd4f2af552add042d716f1d168' as Address;
+    const v3 = (tokenIn: Address, tokenOut: Address, fee: number) =>
+      guardedPoolOf({ venue: 0, tokenIn, tokenOut, fee, tickSpacing: 0 }).id.toLowerCase();
+    let n = 0;
+
+    /** A guarded adapter (fresh address per test: guard answers are cached per adapter) allowing `allowed`. */
+    function guarded(allowed: string[]) {
+      n += 1;
+      const adapter = `0x${n.toString(16).padStart(40, 'a')}` as Address;
+      const ctx = makeService({ EVM_SWAP_ADAPTER_ADDRESS: adapter });
+      const readContract = jest.fn(async (args: any) => {
+        if (args.functionName === 'dailyCapBps') return 2500;
+        if (args.functionName === 'poolAllowed') return allowed.includes(String(args.args[0]).toLowerCase());
+        return 'TKN';
+      });
+      (ctx.service as any).contractReader.publicClient.readContract = readContract;
+      // Quoters: every pool returns its input unchanged.
+      ctx.simulateContract.mockImplementation(async (args: any) => {
+        const p = args.args[0];
+        return { result: [p.amountIn ?? p.exactAmount, 0n, 0, 0n] };
+      });
+      ctx.quoteExactInput.mockResolvedValue(cbbtcToEth);
+      return { ...ctx, adapter, readContract };
+    }
+
+    it('drops the path through a pool that is not allowlisted and re-quotes the rest on-chain', async () => {
+      const { service, adapter } = guarded([v3(CBBTC, WETH, 500), v3(CBBTC, USDG, 500), v3(USDG, WETH, 100)]);
+      const q = await service.quote(CBBTC, NATIVE, 100_000_000n, adapter);
+      expect(q.plan!.paths).toHaveLength(2);
+      expect(q.plan!.paths.some(p => p.hops.some(h => h.fee === 3000))).toBe(false);
+      // 40M and 10M were quoted on the kept paths: the adapter splits 80% / 20%.
+      expect(q.plan!.paths.map(p => p.amountIn)).toEqual([80_000_000n, 20_000_000n]);
+      expect(q.plan!.estimated).toBe(false);
+      expect(q.amountOut).toBe(100_000_000n);
+    });
+
+    it('builds a route from allowlisted pools when every Uniswap path uses another pool', async () => {
+      const { service, adapter } = guarded([v3(CBBTC, WETH, 10_000)]);
+      const q = await service.quote(CBBTC, NATIVE, 100_000_000n, adapter);
+      expect(q.plan!.source).toBe('onchain');
+      expect(q.plan!.paths).toHaveLength(1);
+      expect(q.plan!.paths[0].hops).toEqual([
+        { venue: RouteVenue.v3, tokenIn: CBBTC, tokenOut: WETH, fee: 10_000, tickSpacing: 0 },
+      ]);
+    });
+
+    it('reports the pool to approve when no allowlisted route exists', async () => {
+      const { service, adapter } = guarded([]);
+      await expect(service.quote(CBBTC, NATIVE, 100_000_000n, adapter)).rejects.toThrow(
+        /not yet approved for vault trading/
+      );
+    });
+
+    it('values holdings at Uniswap\'s best route, ignoring the allowlist', async () => {
+      const { service, readContract } = guarded([]);
+      expect(await service.valueInNative(CBBTC, 100_000_000n)).toBe(34961642824809288237n);
+      expect(readContract.mock.calls.some(([a]: any) => a.functionName === 'poolAllowed')).toBe(false);
     });
   });
 });
