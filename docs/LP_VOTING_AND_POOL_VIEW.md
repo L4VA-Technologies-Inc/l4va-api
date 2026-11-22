@@ -33,6 +33,11 @@ covers the whole price range, so every LP always holds both tokens.
 3. Each holder gets `holderLp / activeLpSupply × vtLockedInPool` added to their snapshot balance.
 4. The pool contract address is removed from the snapshot, so pool VT is not counted twice.
 
+The LP share is merged into `snapshot.addressBalances`, the same map that voting and payouts read.
+So on Cardano LP holders are also **paid** for their pool VT, with no extra step:
+`DistributionService.calculateDistributionAmounts` (`distribution.service.ts`) and the termination
+payout (`termination.service.ts`) split the pot pro rata over `addressBalances`.
+
 ## Robinhood Chain (Uniswap v4)
 
 Code: `EvmLpVotingService.attributeLpVt`
@@ -92,9 +97,9 @@ payouts count only the VT inside a position (see the rule above).
 Uniswap V2 pools (older vaults) are always full range, so the view still uses the pair reserves
 and the vault's LP-token share.
 
-## Not covered yet
+## Known limit: positions outside the PositionManager
 
-- Whether Cardano distributions pay LP holders for pool VT the same way as the Robinhood
-  registry does has not been checked.
-- Positions added to the PoolManager directly by other contracts (not through the PositionManager)
-  are not seen, on the page or in voting.
+Discovery filters `ModifyLiquidity` on `sender = PositionManager` (`EvmV4PositionScanner.tokenIds`).
+A contract that adds liquidity to the PoolManager directly owns that position itself, with no NFT,
+so there is no wallet to attribute it to. Such positions are not shown on the page and their VT
+gets no vote or payout; it simply stays unattributed. This is by design, not a bug.
