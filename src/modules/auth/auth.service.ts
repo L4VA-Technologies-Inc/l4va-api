@@ -14,7 +14,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
-import { Brackets, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
 import {
   createPublicClient,
@@ -29,6 +29,7 @@ import { createSiweMessage, generateSiweNonce } from 'viem/siwe';
 
 import { PriceService } from '../price/price.service';
 import { UsersService } from '../users/users.service';
+import { userVaultMembership } from '../vaults/utils/user-vault-membership';
 
 import { LoginReq } from './dto/login.req';
 import { LoginRes } from './dto/login.res';
@@ -300,30 +301,7 @@ export class AuthService {
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId: user.id })
-            .orWhere(
-              `EXISTS (
-            SELECT 1 FROM assets
-            WHERE assets.vault_id = vault.id 
-            AND assets.added_by = :userId
-            AND assets.status IN ('locked', 'distributed')
-          )`,
-              { userId: user.id }
-            )
-            .orWhere(
-              `EXISTS (
-            SELECT 1 FROM snapshot
-            WHERE snapshot.vault_id = vault.id 
-            AND snapshot.address_balances -> :userAddress IS NOT NULL
-            ORDER BY snapshot.created_at DESC
-            LIMIT 1
-          )`,
-              { userAddress: user.address }
-            );
-        })
-      )
+      .andWhere(userVaultMembership(user.id, user.address))
       .getCount();
     user.total_vaults = vaultsCount || 0;
 
@@ -448,30 +426,7 @@ export class AuthService {
         .createQueryBuilder('vault')
         .andWhere('vault.deleted != :deleted', { deleted: true })
         .andWhere('vault.vault_status IN (:...statuses)', { statuses })
-        .andWhere(
-          new Brackets(qb => {
-            qb.where('vault.owner_id = :userId', { userId: user.id })
-              .orWhere(
-                `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-                { userId: user.id }
-              )
-              .orWhere(
-                `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-                { userAddress: user.address }
-              );
-          })
-        )
+        .andWhere(userVaultMembership(user.id, user.address))
         .getCount();
       user.total_vaults = vaultsCount || 0;
 

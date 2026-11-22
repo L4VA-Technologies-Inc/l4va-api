@@ -18,6 +18,11 @@
  *                               USDG only), and pools of tokens held by VAULTS — pass every
  *                               live vault there before writing a removal batch.
  *
+ * NEW_ADAPTER=1 (a guarded adapter that is not deployed yet, e.g. production before V13): skips the
+ * on-chain checks, treats every pool of a passing route as not allowlisted, and writes
+ * `<OUT_DIR>/pools.json` ({ ids }) for `script/safe-batch-guarded-adapters.sh <stack> pools.json`
+ * instead of a Safe batch. SWAPPER is then only the address the routes are quoted for.
+ *
  * Upload a batch in the Safe app (Transaction Builder → drag the JSON). Review the report first.
  *
  * Usage (from l4va-api):
@@ -41,6 +46,8 @@ import { join } from 'path';
 
 import { config } from 'dotenv';
 import { createPublicClient, encodeFunctionData, http, parseAbi, parseEther, type Address, type Hex } from 'viem';
+
+import { fetchBlockscoutTokens } from './blockscout-tokens';
 
 import {
   NATIVE,
@@ -116,22 +123,8 @@ interface PoolSeen extends GuardedPool {
 async function topTokens(n: number, apiKey: string | undefined): Promise<Address[]> {
   if (n <= 0) return [];
   if (!apiKey) throw new Error('TOP_N needs BLOCKSCOUT_API_KEY (or set TOP_N=0)');
-  const out: Address[] = [];
-  let next: Record<string, string> | null = {};
-  while (next && out.length < n) {
-    const q = new URLSearchParams({ type: 'ERC-20', apikey: apiKey, ...next });
-    const res = await fetch(`https://api.blockscout.com/${CHAIN_ID}/api/v2/tokens?${q}`);
-    if (!res.ok) throw new Error(`Blockscout tokens: HTTP ${res.status}`);
-    const body = (await res.json()) as {
-      items: { address_hash: string }[];
-      next_page_params: Record<string, string | number> | null;
-    };
-    out.push(...body.items.map(i => lower(i.address_hash)));
-    next = body.next_page_params
-      ? Object.fromEntries(Object.entries(body.next_page_params).map(([k, v]) => [k, String(v)]))
-      : null;
-  }
-  return out.slice(0, n);
+  const tokens = await fetchBlockscoutTokens(apiKey, { max: n });
+  return tokens.map(t => lower(t.address));
 }
 
 function tokensFromFile(path: string): Address[] {
@@ -203,11 +196,19 @@ async function main(): Promise<void> {
   };
   const chainId = await client.getChainId();
   if (chainId !== CHAIN_ID) throw new Error(`EVM_RPC_URL is chain ${chainId}, expected ${CHAIN_ID}`);
-  await client.readContract({ address: swapper, abi: ADAPTER_ABI, functionName: 'dailyCapBps' }).catch(() => {
-    throw new Error(`${swapper} is not a guarded swap adapter (no dailyCapBps); it has no pool allowlist`);
-  });
-  const owner = lower(String(await client.readContract({ address: swapper, abi: ADAPTER_ABI, functionName: 'owner' })));
-  if (owner !== safe) log(`WARNING: adapter ${swapper} is owned by ${owner}, not SAFE ${safe}`);
+  const newAdapter = process.env.NEW_ADAPTER === '1';
+  if (!newAdapter) {
+    await client.readContract({ address: swapper, abi: ADAPTER_ABI, functionName: 'dailyCapBps' }).catch(() => {
+      throw new Error(
+        `${swapper} is not a guarded swap adapter (no dailyCapBps); it has no pool allowlist. ` +
+          `For an adapter that is not deployed yet, run with NEW_ADAPTER=1.`
+      );
+    });
+    const owner = lower(
+      String(await client.readContract({ address: swapper, abi: ADAPTER_ABI, functionName: 'owner' }))
+    );
+    if (owner !== safe) log(`WARNING: adapter ${swapper} is owned by ${owner}, not SAFE ${safe}`);
+  }
 
   const api = new UniswapTradingApiClient({ get: (k: string) => process.env[k] } as never);
   if (!api.enabled) throw new Error('UNISWAP_API_KEY is required');
@@ -339,8 +340,12 @@ async function main(): Promise<void> {
 
   // ---- on-chain state -----------------------------------------------------
   const all = [...pools.values()];
-  log(`reading poolAllowed for ${all.length} pools…`);
-  for (let i = 0; i < all.length; i += 50) {
+  log(
+    newAdapter
+      ? `NEW_ADAPTER: ${all.length} pools, none allowlisted yet`
+      : `reading poolAllowed for ${all.length} pools…`
+  );
+  for (let i = 0; i < (newAdapter ? 0 : all.length); i += 50) {
     const chunk = all.slice(i, i + 50);
     const answers = await Promise.all(
       chunk.map(p =>
@@ -417,7 +422,16 @@ async function main(): Promise<void> {
     ) + '\n'
   );
   const today = new Date().toISOString().slice(0, 10);
-  if (toAdd.length) {
+  if (newAdapter) {
+    writeFileSync(
+      join(outDir, 'pools.json'),
+      JSON.stringify(
+        { chainId: CHAIN_ID, swapper, maxRoundTripLossBps: Number(maxLossBps), ids: toAdd.map(p => p.id) },
+        null,
+        1
+      ) + '\n'
+    );
+  } else if (toAdd.length) {
     writeFileSync(
       join(outDir, 'safe-add.json'),
       JSON.stringify(
@@ -455,7 +469,7 @@ async function main(): Promise<void> {
   log(
     `\ntokens: ${JSON.stringify(counts)}\npools seen: ${all.length}, ` +
       `to add: ${toAdd.length}, to remove: ${toRemove.length}\nwritten to ${outDir}/ ` +
-      `(${[toAdd.length && 'safe-add.json', toRemove.length && writeRemove && 'safe-remove.json', 'report.json'].filter(Boolean).join(', ')})`
+      `(${[newAdapter ? 'pools.json' : toAdd.length && 'safe-add.json', toRemove.length && writeRemove && 'safe-remove.json', 'report.json'].filter(Boolean).join(', ')})`
   );
   if (toRemove.length && !writeRemove) {
     log('removal candidates are listed in report.json `remove`; re-run with WRITE_REMOVE=1 to write safe-remove.json');

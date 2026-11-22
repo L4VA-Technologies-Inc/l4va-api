@@ -66,6 +66,7 @@ import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/typ
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 import { EvmVaultOnchainStatus, VAULT_ABI } from './processing-tx/onchain/vault.abi';
+import { snapshotHasUser, userVaultMembership } from './utils/user-vault-membership';
 
 import { buildEvmTransport } from '@/common/evm/evm-transport';
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -1891,6 +1892,7 @@ export class VaultsService {
         .select('vault.id')
         .addSelect('vault.owner_id')
         .addSelect('snapshot.address_balances')
+        .addSelect('snapshot.lp_balances')
         .addSelect('transaction.id', 'has_transaction')
         .where('vault.id = :vaultId', { vaultId })
         .andWhere('vault.deleted = false')
@@ -1909,7 +1911,12 @@ export class VaultsService {
         return true;
       }
 
-      if (result.address_balances?.[user.address]) {
+      if (
+        snapshotHasUser(
+          { address_balances: result.snapshot_address_balances, lp_balances: result.snapshot_lp_balances },
+          user.address
+        )
+      ) {
         return true;
       }
 
@@ -1985,30 +1992,7 @@ export class VaultsService {
 
       if (user) {
         if (myVaults) {
-          queryBuilder.andWhere(
-            new Brackets(qb => {
-              qb.where('vault.owner_id = :userId', { userId })
-                .orWhere(
-                  `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-                  { userId }
-                )
-                .orWhere(
-                  `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-                  { userAddress: user.address }
-                );
-            })
-          );
+          queryBuilder.andWhere(userVaultMembership(userId, user.address));
         }
 
         userWalletAddress = user.address;
