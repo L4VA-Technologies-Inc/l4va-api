@@ -65,3 +65,6 @@ gcp-bucket.json
 # Local Robinhood-mainnet test stack (contains test keys)
 .env.mainnet
 test/testnet-v13/.state.json
+
+# swap-pool-sync.ts output
+pool-sync-*/
