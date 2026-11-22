@@ -122,7 +122,15 @@ export class EvmDistributionService {
     const assetAddress = (asset || zeroAddress) as Address;
 
     const snapshot = await this.latestSnapshot(vaultId);
-    const holderCount = snapshot ? Object.keys(snapshot.addressBalances ?? {}).length : 0;
+    // Same recipient set the payout walks: direct VT holders plus Uniswap LP providers (their
+    // pool VT is paid through lpShareSource). Counted once per address, zero balances ignored.
+    const holderCount = snapshot
+      ? new Set(
+          [...Object.entries(snapshot.addressBalances ?? {}), ...Object.entries(snapshot.lpBalances ?? {})]
+            .filter(([, vt]) => BigInt(vt) > 0n)
+            .map(([address]) => address.toLowerCase())
+        ).size
+      : 0;
 
     const base: EvmDistributionValidation = {
       valid: false,
