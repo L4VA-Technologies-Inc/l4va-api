@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
-import { Brackets, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { PriceService } from '../price/price.service';
+import { userVaultMembership } from '../vaults/utils/user-vault-membership';
 
 import { OwnProfileRes } from './dto/own-profile.res';
 import { PublicProfileRes } from './dto/public-profile.res';
@@ -81,32 +82,7 @@ export class UsersService {
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId })
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-              { userId }
-            )
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND (snapshot.address_balances -> :userAddress IS NOT NULL
-                OR snapshot.address_balances -> :userAddressLower IS NOT NULL
-                OR snapshot.lp_balances -> :userAddressLower IS NOT NULL)
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-              { userAddress: user.address, userAddressLower: user.address?.toLowerCase() }
-            );
-        })
-      )
+      .andWhere(userVaultMembership(userId, user.address))
       .getCount();
 
     user.total_vaults = vaultsCount || 0;
@@ -144,32 +120,7 @@ export class UsersService {
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId })
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-              { userId }
-            )
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND (snapshot.address_balances -> :userAddress IS NOT NULL
-                OR snapshot.address_balances -> :userAddressLower IS NOT NULL
-                OR snapshot.lp_balances -> :userAddressLower IS NOT NULL)
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-              { userAddress: user.address, userAddressLower: user.address?.toLowerCase() }
-            );
-        })
-      )
+      .andWhere(userVaultMembership(userId, user.address))
       .getCount();
     user.total_vaults = vaultsCount || 0;
     const plainedUsers = instanceToPlain(user);
