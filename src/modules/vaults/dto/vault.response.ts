@@ -421,6 +421,19 @@ export class VaultFullResponse extends VaultShortResponse {
 
   @ApiProperty({
     description:
+      'Robinhood vaults: most ERC-20s the vault may hold at termination (its contract MAX_TERMINATION_ASSETS ' +
+      'minus the slot kept for native ETH). Caps the index basket of a re-weight. Null on Cardano.',
+    required: false,
+    nullable: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'maxBasketAssets' },
+  })
+  maxBasketAssets?: number | null;
+
+  @ApiProperty({
+    description:
       'V13 EVM vaults: allocation root of the latest closed cycle — when contributors can claim (unix seconds), ' +
       'and whether it is pending, approved early or cancelled',
     required: false,

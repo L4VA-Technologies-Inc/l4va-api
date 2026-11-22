@@ -14,7 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { INDEX_MAX_ASSETS } from '@/types/index-vault.types';
+import { maxBasketAssetCapAnyVersion } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 
 export class IndexBasketItemDto {
   @ApiProperty({
@@ -58,7 +58,8 @@ export class IndexBasketReq {
   @ApiProperty({ type: [IndexBasketItemDto] })
   @IsArray()
   @ArrayMinSize(1)
-  @ArrayMaxSize(INDEX_MAX_ASSETS)
+  // Loosest bound across versions; the vault's own cap is enforced in IndexVaultService.resolveBasket.
+  @ArrayMaxSize(maxBasketAssetCapAnyVersion())
   @ValidateNested({ each: true })
   @Type(() => IndexBasketItemDto)
   @Expose()

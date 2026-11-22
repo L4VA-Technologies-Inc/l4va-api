@@ -78,6 +78,14 @@ const CONTRIBUTION_VIEW = [
 // -----------------------------------------------------------------------------
 
 export const VAULT_ABI = [
+  // --- Constants -------------------------------------------------------------
+  {
+    type: 'function',
+    name: 'MAX_TERMINATION_ASSETS',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
   // --- Contributions -------------------------------------------------------
   {
     type: 'function',

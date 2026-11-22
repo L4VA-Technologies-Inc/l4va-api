@@ -9,7 +9,6 @@ import { EvmLpExitService } from './evm-lp-exit.service';
 import { EvmTerminationPreflightService, type TerminationPreflightResult } from './evm-termination-preflight.service';
 import {
   computeTerminationRates,
-  MAX_TERMINATION_ASSETS,
   MIN_SWEEP_DELAY_SECONDS,
   validateTerminationRates,
   type TerminationRateRow,
@@ -131,6 +130,18 @@ export class EvmTerminationService {
     // Must run while the vault is still Locked: the pull-back goes through `Vault.swap`.
     await this.exitV4Liquidity(vault);
 
+    // The asset cap is only enforced by `beginTermination`, which runs AFTER the one-way door. A
+    // vault over it would be stuck in TerminationPreparing, so refuse here, while it is still
+    // Locked and the surplus can be sold.
+    const capacity = await this.terminationCapacity(vaultAddress);
+    if (capacity.distributable > capacity.cap) {
+      throw new BadRequestException(
+        `Vault ${vaultAddress} holds ${capacity.distributable} distributable assets (native included), above its ` +
+          `termination cap of ${capacity.cap}. Sell at least ${capacity.distributable - capacity.cap} of them ` +
+          `(the whole balance) through a swap proposal while the vault is Locked, then terminate.`
+      );
+    }
+
     // Strict: this is the point of no return. `TerminationPreparing` has no
     // exit other than `beginTermination` — `openCycle` accepts only
     // Locked/Cancelled — so a vault that enters it and then cannot commit is
@@ -152,6 +163,30 @@ export class EvmTerminationService {
       'TerminationPrepared',
       null // no DB status transition yet
     );
+  }
+
+  /** The vault's own `MAX_TERMINATION_ASSETS`: it differs between contract versions. */
+  async maxTerminationAssets(vaultAddress: Address): Promise<number> {
+    const cap = (await this.contractReader.publicClient.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'MAX_TERMINATION_ASSETS',
+    })) as bigint;
+    return Number(cap);
+  }
+
+  /**
+   * How many assets `beginTermination` would have to commit today against the vault's cap.
+   * Receipts of withdrawn v4 LP positions are left out: they are waived automatically.
+   */
+  async terminationCapacity(vaultAddress: Address): Promise<{ cap: number; distributable: number }> {
+    const [cap, plan, receipts] = await Promise.all([
+      this.maxTerminationAssets(vaultAddress),
+      this.buildCustodyPlan(vaultAddress),
+      this.withdrawnV4Receipts(vaultAddress),
+    ]);
+    const skip = new Set(receipts.map(r => r.toLowerCase()));
+    return { cap, distributable: plan.rows.filter(r => !skip.has(r.asset.toLowerCase())).length };
   }
 
   /** Distinct position assets of the vault's protocol-owned LP positions. */
@@ -340,16 +375,17 @@ export class EvmTerminationService {
       );
     }
 
-    const errors = validateTerminationRates(rows);
+    const cap = await this.maxTerminationAssets(vaultAddress);
+    const errors = validateTerminationRates(rows, cap);
     if (errors.length > 0) {
       throw new BadRequestException(
         `Termination rates for ${vaultAddress} are invalid: ` + errors.map(e => `${e.asset}: ${e.reason}`).join('; ')
       );
     }
-    if (rows.length > MAX_TERMINATION_ASSETS) {
+    if (rows.length > cap) {
       throw new BadRequestException(
         `Vault ${vaultAddress} has ${rows.length} distributable assets, above the on-chain cap of ` +
-          `${MAX_TERMINATION_ASSETS}. Consolidate through an adapter while still Locked, or waive the tail.`
+          `${cap}. Consolidate through an adapter while still Locked, or waive the tail.`
       );
     }
 
@@ -607,8 +643,8 @@ export class EvmTerminationService {
     const now = BigInt(Math.floor(Date.now() / 1000));
     const claimWindowOpen = deadline > 0n && now < deadline;
 
-    // One batch of reads per asset, all assets in parallel — up to
-    // MAX_TERMINATION_ASSETS (16) so the fan-out is bounded.
+    // One batch of reads per asset, all assets in parallel — bounded by the vault's
+    // MAX_TERMINATION_ASSETS (16 up to V13, 56 after).
     const rows = await Promise.all(
       assets.map(async asset => {
         const [info, preview, deferredOwed] = await Promise.all([

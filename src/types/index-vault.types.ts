@@ -15,13 +15,9 @@ export enum VaultArchetype {
 
 export const BPS = 10_000;
 
-/**
- * Hard cap on basket size. `beginTermination` accepts at most 16 assets
- * (`MAX_TERMINATION_ASSETS`), counting every asset with a non-zero free balance,
- * native ETH included (it cannot be waived). 15 leaves one slot for native.
- * Assets fully sold during a re-weight free their slot.
- */
-export const INDEX_MAX_ASSETS = 15;
+// Basket size cap: `basketAssetCapFor(vault)` in evm-protocol-versions. It follows the vault's
+// `MAX_TERMINATION_ASSETS` (16 up to V13, raised later) minus one slot kept for native ETH.
+// Assets fully sold during a re-weight free their slot.
 
 /** Smallest weight a basket asset may carry (1%). */
 export const INDEX_MIN_WEIGHT_BPS = 100;

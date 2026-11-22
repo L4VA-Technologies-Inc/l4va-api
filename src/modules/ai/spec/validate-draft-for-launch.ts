@@ -2,7 +2,8 @@ import { sanitizeVaultDraft } from './sanitize-draft';
 import { FieldCondition, ResolvedVaultCreationSpec } from './spec.types';
 
 import { maxAssetsWhitelistFor } from '@/modules/vaults/dto/createVault.req';
-import { BPS, INDEX_MAX_ASSETS, INDEX_MIN_WEIGHT_BPS, VaultArchetype } from '@/types/index-vault.types';
+import { basketAssetCapFor, currentEvmVersionRef } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
+import { BPS, INDEX_MIN_WEIGHT_BPS, VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
 /** A single reason the vault cannot be launched, in a shape the assistant can act on directly. */
@@ -131,7 +132,8 @@ export function describeIndexBasketProblem(value: unknown): string | null {
   const basket = value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
   const targets = asRows(basket?.targets);
   if (targets.length === 0) return 'The index basket needs at least one token.';
-  if (targets.length > INDEX_MAX_ASSETS) return `An index basket can hold at most ${INDEX_MAX_ASSETS} tokens.`;
+  const maxAssets = basketAssetCapFor(currentEvmVersionRef());
+  if (targets.length > maxAssets) return `An index basket can hold at most ${maxAssets} tokens.`;
 
   const addresses = targets.map(target => (typeof target.assetAddress === 'string' ? target.assetAddress : ''));
   if (addresses.some(address => !EVM_CONTRACT_ADDRESS.test(address.trim()))) {

@@ -29,6 +29,11 @@ import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistC
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 
 import { IndexBasketReq } from '@/modules/vaults/index-vault/dto/index-basket.dto';
+import {
+  basketAssetCapFor,
+  currentEvmVersionRef,
+  maxBasketAssetCapAnyVersion,
+} from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { VaultArchetype } from '@/types/index-vault.types';
 import {
   ContributionWindowType,
@@ -40,21 +45,21 @@ import {
   ChainType,
 } from '@/types/vault.types';
 
-/**
- * Max entries in a vault's asset whitelist, per chain. Robinhood: `beginTermination` takes at most
- * 16 assets incl. native ETH, so 15 (same as `INDEX_MAX_ASSETS`). Cardano: 10.
- */
-export const MAX_ASSETS_WHITELIST_BY_CHAIN: Record<ChainType, number> = {
-  [ChainType.cardano]: 10,
-  [ChainType.robinhood]: 15,
-};
-/** Upper bound across chains — for payloads that don't carry a chain (drafts). */
-export const MAX_ASSETS_WHITELIST = Math.max(...Object.values(MAX_ASSETS_WHITELIST_BY_CHAIN));
+/** Max entries in a Cardano vault's asset whitelist. */
+export const MAX_ASSETS_WHITELIST_CARDANO = 10;
 
+/**
+ * Upper bound across chains and EVM versions — for payloads that don't carry a chain (drafts).
+ * The real limit is checked against the chain at create time.
+ */
+export const MAX_ASSETS_WHITELIST = Math.max(MAX_ASSETS_WHITELIST_CARDANO, maxBasketAssetCapAnyVersion());
+
+/**
+ * Max entries in a NEW vault's asset whitelist. Robinhood: the termination cap of the current
+ * factory's contracts minus the slot kept for native ETH (15 up to V13). Cardano: 10.
+ */
 export function maxAssetsWhitelistFor(chainType?: ChainType): number {
-  return (
-    MAX_ASSETS_WHITELIST_BY_CHAIN[chainType ?? ChainType.cardano] ?? MAX_ASSETS_WHITELIST_BY_CHAIN[ChainType.cardano]
-  );
+  return chainType === ChainType.robinhood ? basketAssetCapFor(currentEvmVersionRef()) : MAX_ASSETS_WHITELIST_CARDANO;
 }
 
 @ValidatorConstraint({ name: 'assetsWhitelistMaxForChain', async: false })

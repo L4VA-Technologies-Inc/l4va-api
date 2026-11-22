@@ -1,7 +1,12 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
+  basketAssetCapFor,
+  currentEvmVersionRef,
   earliestEvmDeployBlock,
+  LEGACY_MAX_TERMINATION_ASSETS,
+  maxBasketAssetCapAnyVersion,
+  terminationAssetCapFor,
   EVM_PROTOCOL_VERSIONS,
   findEvmProtocolVersionByFactory,
   findEvmProtocolVersionByFeeConverter,
@@ -94,4 +99,43 @@ describe('EVM_PROTOCOL_VERSIONS numbering (deployment ids)', () => {
       expect(new Set(f).size).toBe(f.length);
     });
   }
+});
+
+describe('termination asset caps', () => {
+  it('every registered deployment so far has the legacy cap of 16', () => {
+    for (const v of Object.values(EVM_PROTOCOL_VERSIONS).flat()) {
+      expect(v.maxTerminationAssets ?? LEGACY_MAX_TERMINATION_ASSETS).toBe(16);
+    }
+  });
+
+  it('a raised cap on a version flows into its basket cap', () => {
+    const v14 = { ...EVM_PROTOCOL_VERSIONS[46630][0], version: 9_999, maxTerminationAssets: 56 };
+    EVM_PROTOCOL_VERSIONS[46630].push(v14);
+    try {
+      const ref = { chain_id: 46630, evm_protocol_version: 9_999 };
+      expect(terminationAssetCapFor(ref)).toBe(56);
+      expect(basketAssetCapFor(ref)).toBe(55);
+      expect(maxBasketAssetCapAnyVersion()).toBe(55);
+    } finally {
+      EVM_PROTOCOL_VERSIONS[46630].pop();
+    }
+  });
+
+  it('unknown vaults and versions fall back to 16 / 15', () => {
+    expect(terminationAssetCapFor(null)).toBe(16);
+    expect(basketAssetCapFor({ chain_id: 4663, evm_protocol_version: null })).toBe(15);
+    expect(basketAssetCapFor({ chain_id: 4663, evm_protocol_version: 123_456 })).toBe(15);
+    expect(maxBasketAssetCapAnyVersion()).toBe(15);
+  });
+
+  it('currentEvmVersionRef resolves the factory in env', () => {
+    const v = EVM_PROTOCOL_VERSIONS[4663][0];
+    expect(currentEvmVersionRef({ EVM_CHAIN_ID: '4663', EVM_FACTORY_ADDRESS: v.factory })).toEqual({
+      chain_id: 4663,
+      evm_protocol_version: v.version,
+    });
+    expect(currentEvmVersionRef({ EVM_CHAIN_ID: '4663', EVM_FACTORY_ADDRESS: undefined }).evm_protocol_version).toBe(
+      null
+    );
+  });
 });

@@ -41,12 +41,12 @@ import { PriceService } from '@/modules/price/price.service';
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import { EvmAssetKind } from '@/modules/vaults/processing-tx/onchain/evm-position.service';
+import { basketAssetCapFor, currentEvmVersionRef } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { EvmSwapService, SwapNotBroadcastError } from '@/modules/vaults/processing-tx/onchain/evm-swap.service';
 import { VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
 import {
   INDEX_DEFAULT_DRIFT_TOLERANCE_BPS,
   INDEX_DEFAULT_SLIPPAGE_BPS,
-  INDEX_MAX_ASSETS,
   INDEX_MIN_WEIGHT_BPS,
   IndexConfig,
   IndexLegSide,
@@ -308,7 +308,8 @@ export class IndexVaultService implements OnApplicationBootstrap {
   async resolveBasket(items: BasketItemInput[], vault: VaultRouteRef = null): Promise<IndexTarget[]> {
     const error = validateWeights({
       weightsBps: items.map(i => Number(i.weightBps)),
-      maxAssets: INDEX_MAX_ASSETS,
+      // A new vault gets the current factory's cap; an existing one keeps its own version's.
+      maxAssets: basketAssetCapFor(vault ?? currentEvmVersionRef()),
       minWeightBps: INDEX_MIN_WEIGHT_BPS,
     });
     if (error) throw new BadRequestException(error);

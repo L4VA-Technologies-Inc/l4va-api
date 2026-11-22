@@ -65,7 +65,16 @@ export interface EvmProtocolVersion {
    * anything. Unset = LP payouts off for this version.
    */
   lpShareRegistry?: Address;
+  /**
+   * `Vault.MAX_TERMINATION_ASSETS` of this deployment's code: how many assets (native ETH included)
+   * `beginTermination` can commit. Unset = {@link LEGACY_MAX_TERMINATION_ASSETS} (16, every
+   * deployment up to V13). Basket and whitelist limits are derived from it, one slot below.
+   */
+  maxTerminationAssets?: number;
 }
+
+/** `MAX_TERMINATION_ASSETS` of every Vault deployed before the cap was raised (V8–V13). */
+export const LEGACY_MAX_TERMINATION_ASSETS = 16;
 
 export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
   4663: [
@@ -324,7 +333,7 @@ export function getEvmProtocolVersion(chainId: number, version: number | null | 
   return (EVM_PROTOCOL_VERSIONS[chainId] ?? []).find(v => v.version === version) ?? null;
 }
 
-type VaultVersionRef = { chain_id?: number | string | null; evm_protocol_version?: number | null };
+export type VaultVersionRef = { chain_id?: number | string | null; evm_protocol_version?: number | null };
 
 const versionOf = (vault: VaultVersionRef): EvmProtocolVersion | null =>
   getEvmProtocolVersion(Number(vault.chain_id), vault.evm_protocol_version);
@@ -372,4 +381,40 @@ export function earliestEvmDeployBlock(chainId: number): bigint | null {
 /** The version a fee converter belongs to, or null when it is not registered. */
 export function findEvmProtocolVersionByFeeConverter(chainId: number, feeConverter: string): EvmProtocolVersion | null {
   return (EVM_PROTOCOL_VERSIONS[chainId] ?? []).find(v => same(v.feeConverter, feeConverter)) ?? null;
+}
+
+/**
+ * Termination asset cap of a vault (native included), from its version. The contract value is
+ * authoritative; this is for limits that must be known before reading chain (DTOs, UI).
+ */
+export function terminationAssetCapFor(vault: VaultVersionRef | null | undefined): number {
+  return (vault && versionOf(vault)?.maxTerminationAssets) || LEGACY_MAX_TERMINATION_ASSETS;
+}
+
+/**
+ * Most ERC-20s a vault may be built around (index basket, asset whitelist): one termination slot
+ * stays free for native ETH, which is always distributable and cannot be waived.
+ */
+export function basketAssetCapFor(vault: VaultVersionRef | null | undefined): number {
+  return terminationAssetCapFor(vault) - 1;
+}
+
+/** Version fields of a vault the current factory (`EVM_FACTORY_ADDRESS`) would deploy. */
+export function currentEvmVersionRef(env: Record<string, string | undefined> = process.env): {
+  chain_id: number;
+  evm_protocol_version: number | null;
+} {
+  const chainId = Number(env.EVM_CHAIN_ID);
+  return {
+    chain_id: chainId,
+    evm_protocol_version: findEvmProtocolVersionByFactory(chainId, env.EVM_FACTORY_ADDRESS)?.version ?? null,
+  };
+}
+
+/** Largest basket cap any registered version allows: the static upper bound for DTOs. */
+export function maxBasketAssetCapAnyVersion(): number {
+  const caps = Object.values(EVM_PROTOCOL_VERSIONS)
+    .flat()
+    .map(v => v.maxTerminationAssets ?? LEGACY_MAX_TERMINATION_ASSETS);
+  return Math.max(LEGACY_MAX_TERMINATION_ASSETS, ...caps) - 1;
 }
