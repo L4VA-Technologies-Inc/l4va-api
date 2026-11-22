@@ -22,6 +22,8 @@ import {
   type EvmLpCarveoutRecord,
 } from './evm-lp.config';
 import { EvmLpMode, v13FromSaleRate, vaultIsV13, VAULT_V13_ABI } from './evm-v13';
+import { aggregateV4Positions } from './evm-v4-pool-view.math';
+import { EvmV4PositionScanner, type V4Position } from './evm-v4-position-scanner.service';
 import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
 import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
@@ -67,16 +69,6 @@ const LP_ADAPTER_ABI = [
   },
 ] as const;
 
-const V4_POSITION_MANAGER_ABI = [
-  {
-    type: 'function',
-    stateMutability: 'view',
-    name: 'getPositionLiquidity',
-    inputs: [{ name: 'tokenId', type: 'uint256' }],
-    outputs: [{ type: 'uint128' }],
-  },
-] as const;
-
 const V4_STATE_VIEW_ABI = [
   {
     type: 'function',
@@ -96,7 +88,6 @@ const V4_STATE_VIEW_ABI = [
 
 const V2_TAG = keccak256(toBytes('uniswap-v2-lp'));
 const V4_TAG = keccak256(toBytes('uniswap-v4-lp'));
-const Q96 = 2n ** 96n;
 
 /** Where the vault's LP goes, resolved from the adapter's protocol tag. */
 type LpVenue =
@@ -157,6 +148,22 @@ const V2_PAIR_ABI = [
 ] as const;
 
 /** Vault LP pool as shown on the vault page. Token amounts are human units (decimal strings). */
+export interface EvmLpPositionView {
+  tokenId: string;
+  owner: string;
+  /** Held by the vault or its LP adapter (protocol-owned). */
+  isVault: boolean;
+  /** Current tick inside [tickLower, tickUpper): the position earns fees and holds both tokens. */
+  inRange: boolean;
+  tickLower: number;
+  tickUpper: number;
+  vt: string;
+  native: string;
+  valueNative: string;
+  /** Share of the pool by value, 0..100. Voting/payouts count only `vt`. */
+  sharePct: number | null;
+}
+
 export interface EvmVaultLpView {
   status: EvmLpStatus;
   protocol: 'uniswap-v2' | 'uniswap-v4' | null;
@@ -180,6 +187,17 @@ export interface EvmVaultLpView {
   lpToken: string | null;
   /** The vault's share of the pool in native wei (both sides, valued at the pool price). */
   vaultValueNative: string | null;
+  /** v4: every position's value summed, in native (decimal string). */
+  totalValueNative?: string | null;
+  /** v4: tokens held by the vault's own positions (decimal strings). */
+  vaultVt?: string | null;
+  vaultNative?: string | null;
+  /** v4: in-range liquidity only (`StateView.getLiquidity`), for reference. */
+  activeLiquidity?: string | null;
+  /** v4: number of live positions in the pool (vault + other LPs). */
+  positionCount?: number;
+  /** v4: every live position, vault first, then by value. */
+  positions?: EvmLpPositionView[];
   lastError: string | null;
 }
 
@@ -215,13 +233,15 @@ export class EvmLiquidityService {
   private readonly logger = new Logger(EvmLiquidityService.name);
   private readonly processing = new Set<string>();
   private readonly viewCache = new Map<string, { at: number; view: EvmVaultLpView | null }>();
+  private readonly poolStartBlocks = new Map<Hex, bigint>();
 
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(EvmValuationSnapshot) private readonly snapshotsRepository: Repository<EvmValuationSnapshot>,
     private readonly contractReader: EvmContractReader,
     private readonly adminSigner: EvmAdminSigner,
-    private readonly alerts: AlertsService
+    private readonly alerts: AlertsService,
+    private readonly positionScanner: EvmV4PositionScanner
   ) {}
 
   /** Cron entry: every confirmed raise whose pool is not seeded yet. */
@@ -333,10 +353,10 @@ export class EvmLiquidityService {
   }
 
   /**
-   * v4 pool view. Every vault position is full range, so its token amounts are
-   *   native = L · Q96 / sqrtP,   VT = L · sqrtP / Q96
-   * (the range edges are far enough to ignore). Pool totals use the pool's
-   * in-range liquidity, which is exact as long as LPs stay full range.
+   * v4 pool view over EVERY position in the pool, not just the vault's. Positions are found
+   * through the shared scanner (PositionManager mints), each one's token amounts come from its own
+   * tick range at the current price, so out-of-range LPs (one token only) count too. Pool totals are
+   * sums over positions; shares are by value. `activeLiquidity` is the in-range liquidity only.
    */
   private async getV4View(
     base: EvmVaultLpView,
@@ -346,35 +366,51 @@ export class EvmLiquidityService {
     const client = this.contractReader.publicClient;
     const adapter = lp.adapter as Address;
     const poolId = lp.poolId as Hex;
-    const [positionManager, stateView, ids, vt] = (await Promise.all([
+    const [positionManager, poolManager, stateView, ids, vt] = (await Promise.all([
       client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'positionManager' }),
+      client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'poolManager' }),
       client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'stateView' }),
       client.readContract({ address: adapter, abi: LP_ADAPTER_ABI, functionName: 'positionsOf', args: [vaultAddress] }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: 'vaultToken' }),
-    ])) as [Address, Address, readonly bigint[], Address];
+    ])) as [Address, Address, Address, readonly bigint[], Address];
 
-    const [slot0, poolLiquidity, vtDecimals, ...positionLiquidity] = (await Promise.all([
+    const [slot0, activeLiquidity, vtDecimals, latestBlock, fromBlock] = (await Promise.all([
       client.readContract({ address: stateView, abi: V4_STATE_VIEW_ABI, functionName: 'getSlot0', args: [poolId] }),
       client.readContract({ address: stateView, abi: V4_STATE_VIEW_ABI, functionName: 'getLiquidity', args: [poolId] }),
       client.readContract({ address: vt, abi: V2_PAIR_ABI, functionName: 'decimals' }),
-      ...ids.map(id =>
-        client.readContract({
-          address: positionManager,
-          abi: V4_POSITION_MANAGER_ABI,
-          functionName: 'getPositionLiquidity',
-          args: [id],
-        })
-      ),
-    ])) as [readonly [bigint, number, number, number], bigint, number, ...bigint[]];
+      client.getBlockNumber(),
+      this.poolStartBlock(poolId, lp.provideTxHash),
+    ])) as [readonly [bigint, number, number, number], bigint, number, bigint, bigint];
+
+    const tokenIds = new Set<bigint>(ids);
+    for (const id of await this.positionScanner.tokenIds(
+      poolId,
+      poolManager,
+      positionManager,
+      fromBlock,
+      latestBlock
+    )) {
+      tokenIds.add(id);
+    }
+    const positions = (
+      await Promise.all([...tokenIds].map(id => this.positionScanner.readPosition(positionManager, id)))
+    ).filter((p): p is V4Position => p !== null);
 
     const sqrtP = slot0[0];
-    const vaultLiquidity = positionLiquidity.reduce((sum, l) => sum + l, 0n);
     const decimals = Number(vtDecimals);
-    const reserveNative = sqrtP > 0n ? formatUnits((poolLiquidity * Q96) / sqrtP, 18) : '0';
-    const reserveVt = formatUnits((poolLiquidity * sqrtP) / Q96, decimals);
+    const vaultOwners = new Set([vaultAddress.toLowerCase(), adapter.toLowerCase()]);
+    const totals = aggregateV4Positions({
+      positions,
+      sqrtPriceX96: sqrtP,
+      tick: Number(slot0[1]),
+      // The vault pool key is (native, VT); native = address(0) always sorts first.
+      vtIsCurrency0: false,
+      isVault: owner => vaultOwners.has(owner),
+    });
     // price (VT per native, raw) = sqrtP² / 2^192 → native per whole VT:
     const vtPriceNative =
       sqrtP > 0n ? (Number((2n ** 192n * 10n ** BigInt(decimals)) / (sqrtP * sqrtP)) / 1e18).toString() : null;
+    const vaultLiquidity = positions.filter(p => ids.includes(p.tokenId)).reduce((s, p) => s + p.liquidity, 0n);
 
     return {
       ...base,
@@ -382,15 +418,48 @@ export class EvmLiquidityService {
       positionManager,
       positionIds: ids.map(id => id.toString()),
       vaultToken: vt,
-      reserveVt,
-      reserveNative,
+      reserveVt: formatUnits(totals.totalVt, decimals),
+      reserveNative: formatUnits(totals.totalNative, 18),
       vtPriceNative,
       vaultLpTokens: vaultLiquidity.toString(),
-      lpTotalSupply: poolLiquidity.toString(),
-      vaultSharePct: poolLiquidity > 0n ? Number((vaultLiquidity * 1_000_000n) / poolLiquidity) / 10_000 : null,
-      // Full range: the VT side is worth the native side at the pool price.
-      vaultValueNative: sqrtP > 0n ? ((2n * vaultLiquidity * Q96) / sqrtP).toString() : null,
+      lpTotalSupply: activeLiquidity.toString(),
+      vaultSharePct: totals.vaultSharePct,
+      vaultValueNative: totals.vaultValueNative.toString(),
+      totalValueNative: formatUnits(totals.totalValueNative, 18),
+      vaultVt: formatUnits(totals.vaultVt, decimals),
+      vaultNative: formatUnits(totals.vaultNative, 18),
+      activeLiquidity: activeLiquidity.toString(),
+      positionCount: totals.positions.length,
+      positions: totals.positions.map(p => ({
+        tokenId: p.tokenId.toString(),
+        owner: p.owner,
+        isVault: p.isVault,
+        inRange: p.inRange,
+        tickLower: p.tickLower,
+        tickUpper: p.tickUpper,
+        vt: formatUnits(p.vt, decimals),
+        native: formatUnits(p.native, 18),
+        valueNative: formatUnits(p.valueNative, 18),
+        sharePct: p.sharePct,
+      })),
     };
+  }
+
+  /** Block the pool's positions are scanned from: the vault's seeding tx, cached per pool. */
+  private async poolStartBlock(poolId: Hex, provideTxHash?: string): Promise<bigint> {
+    const cached = this.poolStartBlocks.get(poolId);
+    if (cached !== undefined) return cached;
+    let block = 0n;
+    if (provideTxHash) {
+      try {
+        const receipt = await this.contractReader.publicClient.getTransactionReceipt({ hash: provideTxHash as Hex });
+        block = receipt.blockNumber;
+      } catch (error) {
+        this.logger.warn(`LP view: no receipt for ${provideTxHash}, scanning pool ${poolId} from block 0 — ${error}`);
+      }
+    }
+    this.poolStartBlocks.set(poolId, block);
+    return block;
   }
 
   async provideForSnapshot(snapshotId: string): Promise<void> {

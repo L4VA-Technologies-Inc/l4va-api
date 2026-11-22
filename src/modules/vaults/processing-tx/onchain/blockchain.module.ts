@@ -36,6 +36,7 @@ import { EvmRescueService } from './evm-rescue.service';
 import { EvmSwapService } from './evm-swap.service';
 import { EvmTerminationPreflightService } from './evm-termination-preflight.service';
 import { EvmTerminationService } from './evm-termination.service';
+import { EvmV4PositionScanner } from './evm-v4-position-scanner.service';
 import { EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmVaultEventIndexerService } from './evm-vault-event-indexer.service';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
@@ -111,6 +112,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmLockTimePricingService,
     EvmCycleCloseService,
     EvmLiquidityService,
+    EvmV4PositionScanner,
     EvmMarketStatsService,
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
@@ -153,6 +155,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
     EvmLockTimePricingService,
     EvmCycleCloseService,
     EvmLiquidityService,
+    EvmV4PositionScanner,
     EvmAirdropOrchestrator,
     EvmRefundOrchestrator,
     EvmContributionBackfillService,

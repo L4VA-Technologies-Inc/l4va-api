@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { parseAbiItem, type Address, type Hex } from 'viem';
 
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
+import { EvmV4PositionScanner } from '../../processing-tx/onchain/evm-v4-position-scanner.service';
 
 import { amountsForLiquidity, sqrtPriceAtTick } from './evm-lp-voting.math';
 
@@ -14,28 +15,16 @@ import { resolveVaultLpAdapter } from '@/modules/vaults/processing-tx/onchain/ev
 const INITIALIZE_EVENT = parseAbiItem(
   'event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)'
 );
-const MODIFY_LIQUIDITY_EVENT = parseAbiItem(
-  'event ModifyLiquidity(bytes32 indexed id, address indexed sender, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)'
-);
-
 const LP_ADAPTER_ABI = [
   parseAbiItem('function poolManager() view returns (address)'),
   parseAbiItem('function positionManager() view returns (address)'),
   parseAbiItem('function stateView() view returns (address)'),
-] as const;
-const POSITION_MANAGER_ABI = [
-  parseAbiItem('function ownerOf(uint256 tokenId) view returns (address)'),
-  parseAbiItem('function getPositionLiquidity(uint256 tokenId) view returns (uint128)'),
-  parseAbiItem('function positionInfo(uint256 tokenId) view returns (uint256)'),
 ] as const;
 const STATE_VIEW_ABI = [
   parseAbiItem(
     'function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)'
   ),
 ] as const;
-
-const MAX_LOG_CHUNK = 2_000_000n;
-const MIN_LOG_CHUNK = 5_000n;
 
 interface V4Infra {
   poolManager: Address;
@@ -66,6 +55,12 @@ const KNOWN_V4_POOL_MANAGER: Record<number, Address> = {
  *  - each position's VT is computed from its liquidity, tick range and the pool price.
  *
  * Positions held by the vault or by an LP adapter (protocol-owned liquidity) carry no vote.
+ *
+ * Rule (agreed 2026-11-22): weight = the VT INSIDE a position. An ETH-only or out-of-range
+ * position that holds no VT gets no vote and no payout, because ownership of the vault is VT and
+ * `L4VALpShareRegistry.finalize` caps recorded LP VT at what the PoolManager holds. Whether the ETH
+ * side should also earn a vote (as an LP incentive) is an open product decision; it could only
+ * ever apply to voting, never to payouts.
  * Only positions minted through the official v4 PositionManager are seen.
  */
 @Injectable()
@@ -73,12 +68,12 @@ export class EvmLpVotingService {
   private readonly logger = new Logger(EvmLpVotingService.name);
   /** Incremental log scans, so daily snapshots only read new blocks. */
   private readonly poolScans = new Map<string, { nextBlock: bigint; pools: Map<Hex, VtPool> }>();
-  private readonly positionScans = new Map<Hex, { nextBlock: bigint; tokenIds: Set<bigint> }>();
 
   constructor(
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
     private readonly contractReader: EvmContractReader,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly positionScanner: EvmV4PositionScanner
   ) {}
 
   /** VT held in v4 positions per owner (lowercase), read at `atBlock`. */
@@ -112,7 +107,7 @@ export class EvmLpVotingService {
 
       const tokenIds = await this.discoverTokenIds(pool, infra, atBlock);
       for (const tokenId of tokenIds) {
-        const position = await this.readPosition(infra.positionManager, tokenId, atBlock);
+        const position = await this.positionScanner.readPosition(infra.positionManager, tokenId, atBlock);
         if (!position || position.liquidity === 0n) continue;
 
         const owner = position.owner.toLowerCase();
@@ -211,7 +206,7 @@ export class EvmLpVotingService {
       this.poolScans.set(key, scan);
     }
     for (const vtIsCurrency0 of [true, false]) {
-      const logs = await this.getLogsChunked<{ blockNumber: bigint; args: { id?: Hex } }>(
+      const logs = await this.positionScanner.getLogsChunked<{ blockNumber: bigint; args: { id?: Hex } }>(
         scan.nextBlock,
         atBlock,
         (from, to) =>
@@ -231,87 +226,13 @@ export class EvmLpVotingService {
     return [...scan.pools.values()];
   }
 
-  private async discoverTokenIds(pool: VtPool, infra: V4Infra, atBlock: bigint): Promise<Set<bigint>> {
-    let scan = this.positionScans.get(pool.poolId);
-    if (!scan) {
-      scan = { nextBlock: pool.initBlock, tokenIds: new Set() };
-      this.positionScans.set(pool.poolId, scan);
-    }
-    const logs = await this.getLogsChunked<{ args: { salt?: Hex } }>(scan.nextBlock, atBlock, (from, to) =>
-      this.contractReader.publicClient.getLogs({
-        address: infra.poolManager,
-        event: MODIFY_LIQUIDITY_EVENT,
-        args: { id: pool.poolId, sender: infra.positionManager },
-        fromBlock: from,
-        toBlock: to,
-      })
+  private discoverTokenIds(pool: VtPool, infra: V4Infra, atBlock: bigint): Promise<Set<bigint>> {
+    return this.positionScanner.tokenIds(
+      pool.poolId,
+      infra.poolManager,
+      infra.positionManager,
+      pool.initBlock,
+      atBlock
     );
-    for (const log of logs) if (log.args.salt) scan.tokenIds.add(BigInt(log.args.salt));
-    scan.nextBlock = atBlock + 1n;
-    return scan.tokenIds;
-  }
-
-  private async readPosition(
-    positionManager: Address,
-    tokenId: bigint,
-    atBlock: bigint
-  ): Promise<{ owner: Address; liquidity: bigint; tickLower: number; tickUpper: number } | null> {
-    const client = this.contractReader.publicClient;
-    try {
-      const [owner, liquidity, info] = (await Promise.all([
-        client.readContract({
-          address: positionManager,
-          abi: POSITION_MANAGER_ABI,
-          functionName: 'ownerOf',
-          args: [tokenId],
-          blockNumber: atBlock,
-        }),
-        client.readContract({
-          address: positionManager,
-          abi: POSITION_MANAGER_ABI,
-          functionName: 'getPositionLiquidity',
-          args: [tokenId],
-          blockNumber: atBlock,
-        }),
-        client.readContract({
-          address: positionManager,
-          abi: POSITION_MANAGER_ABI,
-          functionName: 'positionInfo',
-          args: [tokenId],
-          blockNumber: atBlock,
-        }),
-      ])) as [Address, bigint, bigint];
-      // positionInfo packs | 200 bits poolId | 24 tickUpper | 24 tickLower | 8 hasSubscriber |
-      return { owner, liquidity, tickLower: int24(info >> 8n), tickUpper: int24(info >> 32n) };
-    } catch {
-      return null; // burned position
-    }
-  }
-
-  /** getLogs over [from, to], halving the range when the RPC rejects it. */
-  private async getLogsChunked<T>(
-    from: bigint,
-    to: bigint,
-    fetch: (from: bigint, to: bigint) => Promise<T[]>
-  ): Promise<T[]> {
-    const out: T[] = [];
-    let chunk = MAX_LOG_CHUNK;
-    let start = from;
-    while (start <= to) {
-      const end = start + chunk - 1n < to ? start + chunk - 1n : to;
-      try {
-        out.push(...(await fetch(start, end)));
-        start = end + 1n;
-      } catch (error) {
-        if (chunk <= MIN_LOG_CHUNK) throw error;
-        chunk /= 4n;
-      }
-    }
-    return out;
   }
 }
-
-const int24 = (v: bigint): number => {
-  const x = Number(v & 0xffffffn);
-  return x >= 0x800000 ? x - 0x1000000 : x;
-};
