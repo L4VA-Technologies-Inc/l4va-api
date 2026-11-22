@@ -10,6 +10,7 @@ import { SystemSettingsService } from './system-settings.service';
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
+import { basketAssetCapFor, currentEvmVersionRef } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { ChainType } from '@/types/vault.types';
 
 @ApiTags('System Settings')
@@ -75,6 +76,7 @@ export class SystemSettingsController {
         [ChainType.cardano]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.cardano),
         [ChainType.robinhood]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.robinhood),
       },
+      evm_max_basket_assets: basketAssetCapFor(currentEvmVersionRef()),
     };
   }
 

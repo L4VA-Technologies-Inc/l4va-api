@@ -59,7 +59,7 @@ import { EvmContributionBackfillService } from './processing-tx/onchain/evm-cont
 import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
 import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
 import { buildOperationId } from './processing-tx/onchain/evm-position.service';
-import { findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
+import { basketAssetCapFor, findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
 import { readV13RootStatus, vaultIsV13, type V13RootStatus } from './processing-tx/onchain/evm-v13';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
@@ -1614,6 +1614,7 @@ export class VaultsService {
 
     const additionalData = {
       evmV13,
+      maxBasketAssets: isRobinhoodVault ? basketAssetCapFor(vault) : null,
       maxContributeAssets: Number(vault.max_contribute_assets),
       requireReservedCostUsd,
       requireReservedCostAda,

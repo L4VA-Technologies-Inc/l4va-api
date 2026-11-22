@@ -16,4 +16,12 @@ export class VaultCreationFlagsResponseDto {
     example: { [ChainType.cardano]: [VaultArchetype.standard], [ChainType.robinhood]: [VaultArchetype.index_weighted] },
   })
   vault_archetypes_enabled: Record<string, VaultArchetype[]>;
+
+  @ApiProperty({
+    description:
+      'Most ERC-20s a NEW Robinhood vault may be built around (index basket, asset whitelist): the current ' +
+      "factory's MAX_TERMINATION_ASSETS minus the slot kept for native ETH.",
+    example: 15,
+  })
+  evm_max_basket_assets: number;
 }

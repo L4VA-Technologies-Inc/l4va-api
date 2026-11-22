@@ -22,7 +22,8 @@ import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PresetsService } from '@/modules/presets/presets.service';
 import { IndexSupportedAsset, IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
-import { INDEX_MAX_ASSETS, VaultArchetype } from '@/types/index-vault.types';
+import { basketAssetCapFor, currentEvmVersionRef } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
+import { VaultArchetype } from '@/types/index-vault.types';
 
 const BPS = 10_000;
 
@@ -389,7 +390,7 @@ export class VaultAssistantService {
           .filter((asset): asset is IndexSupportedAsset => !!asset)
           .map(asset => [asset.assetAddress, asset])
       ).values(),
-    ].slice(0, INDEX_MAX_ASSETS);
+    ].slice(0, basketAssetCapFor(currentEvmVersionRef()));
     if (!picked.length) return null;
 
     // Whole bps that always sum to 10000; the rounding remainder goes to the first assets.

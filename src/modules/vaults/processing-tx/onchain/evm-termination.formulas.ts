@@ -36,8 +36,8 @@ export const MIN_DISTRIBUTION_BPS = 9_900n;
 /** Mirrors `Vault.sol#MIN_SWEEP_DELAY`, in seconds. */
 export const MIN_SWEEP_DELAY_SECONDS = 90n * 24n * 60n * 60n;
 
-/** Mirrors `Vault.sol#MAX_TERMINATION_ASSETS`. */
-export const MAX_TERMINATION_ASSETS = 16;
+// `Vault.sol#MAX_TERMINATION_ASSETS` differs per deployment (16 up to V13): callers pass the
+// vault's own value, read from chain.
 
 /** Mirrors `Vault.sol#MAX_WAIVED_ASSETS`. */
 export const MAX_WAIVED_ASSETS = 8;
@@ -137,17 +137,17 @@ export interface RateValidationError {
  * Re-run every bound `Vault.sol#beginTermination` applies, so a bad commit
  * fails here with a readable message instead of as an opaque on-chain revert.
  */
-export function validateTerminationRates(rows: TerminationRateRow[]): RateValidationError[] {
+export function validateTerminationRates(rows: TerminationRateRow[], maxAssets: number): RateValidationError[] {
   const errors: RateValidationError[] = [];
   const seen = new Set<string>();
 
   if (rows.length === 0) {
     errors.push({ asset: '0x0000000000000000000000000000000000000000', reason: 'no assets to distribute' });
   }
-  if (rows.length > MAX_TERMINATION_ASSETS) {
+  if (rows.length > maxAssets) {
     errors.push({
       asset: '0x0000000000000000000000000000000000000000',
-      reason: `${rows.length} assets exceeds MAX_TERMINATION_ASSETS (${MAX_TERMINATION_ASSETS})`,
+      reason: `${rows.length} assets exceeds MAX_TERMINATION_ASSETS (${maxAssets})`,
     });
   }
 
