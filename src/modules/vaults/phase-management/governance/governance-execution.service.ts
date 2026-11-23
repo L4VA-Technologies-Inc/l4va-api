@@ -375,6 +375,7 @@ export class GovernanceExecutionService {
     // A passed proposal waiting for the vault (an expansion running, VT still to be claimed, …)
     // re-checks every tick without spending its retry budget (see EvmGovernanceExecutionService).
     if (proposal.metadata?.executionError?.errorCode === PROPOSAL_WAIT_CODE) {
+      await this.alertIfWaitingTooLong(proposal);
       await this.executePassedProposalLocked(proposal.id);
       return;
     }
@@ -434,6 +435,39 @@ export class GovernanceExecutionService {
 
     // Already holding the lock: call the locked body directly.
     await this.executePassedProposalLocked(proposal.id);
+  }
+
+  /** A passed proposal waiting for the vault longer than this gets one Slack alert. */
+  private readonly WAITING_ALERT_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Waiting has no time limit, so a condition that never clears (e.g. VT nobody claims) would
+   * hold a proposal forever. Tell someone once when it has waited too long.
+   */
+  private async alertIfWaitingTooLong(proposal: Proposal): Promise<void> {
+    const wait = proposal.metadata?.executionError;
+    if (!wait?.waitingSince || wait.waitingAlertedAt) return;
+    if (Date.now() - new Date(wait.waitingSince).getTime() < this.WAITING_ALERT_AFTER_MS) return;
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          executionError: { ...wait, waitingAlertedAt: new Date().toISOString() },
+        },
+      }
+    );
+    this.logger.warn(
+      `Proposal ${proposal.id} (${proposal.proposalType}) has waited since ${wait.waitingSince}: ${wait.reason}`
+    );
+    void this.alertsService.sendAlert('proposal_waiting_too_long', {
+      proposalId: proposal.id,
+      vaultId: proposal.vaultId,
+      type: proposal.proposalType,
+      title: proposal.title,
+      waitingSince: wait.waitingSince,
+      reason: wait.reason ?? wait.message,
+    });
   }
 
   async activateProposal(proposalId: string): Promise<void> {

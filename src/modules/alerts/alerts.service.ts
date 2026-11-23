@@ -8,6 +8,7 @@ export interface SlackAlertData {
 
 export type SlackAlertType =
   | 'proposal_execution_gave_up'
+  | 'proposal_waiting_too_long'
   | 'asset_price_fetch_failed'
   | 'asset_price_deviation_batch_exceeded'
   | 'wallet_fetch_failed'

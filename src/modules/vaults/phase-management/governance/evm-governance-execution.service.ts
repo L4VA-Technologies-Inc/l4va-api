@@ -129,7 +129,18 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * Returns `true` on success so the caller can mark the proposal EXECUTED.
    */
   async executeProposal(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
-    const wait = await this.waitReason(proposal, vault.id);
+    let wait: ProposalWait | null;
+    try {
+      wait = await this.waitReason(proposal, vault.id);
+    } catch (err) {
+      // An RPC hiccup (e.g. 429 on a free endpoint) while checking is not a failed attempt: wait
+      // and check again on the next tick instead of spending the retry budget.
+      this.logger.warn(`Proposal ${proposal.id}: could not check the vault state — ${(err as Error).message}`);
+      wait = {
+        reason: 'the vault state could not be read; checking again shortly',
+        userFriendlyMessage: 'Checking whether this proposal can run; it will continue automatically.',
+      };
+    }
     if (wait) {
       await this.markWaiting(proposal, wait);
       return false;
@@ -264,12 +275,16 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     if (metadata.executionError?.errorCode !== PROPOSAL_WAIT_CODE || metadata.executionError?.reason !== wait.reason) {
       this.logger.log(`Proposal ${proposal.id} (${proposal.proposalType}) waiting: ${wait.reason}`);
     }
+    const previous = metadata.executionError?.errorCode === PROPOSAL_WAIT_CODE ? metadata.executionError : undefined;
     metadata.executionError = {
       message: `Waiting: ${wait.reason}.`,
       reason: wait.reason,
       timestamp: new Date().toISOString(),
       errorCode: PROPOSAL_WAIT_CODE,
       userFriendlyMessage: wait.userFriendlyMessage,
+      // Kept across checks: when the wait began, and whether the "waiting too long" alert went out.
+      waitingSince: previous?.waitingSince ?? new Date().toISOString(),
+      waitingAlertedAt: previous?.waitingAlertedAt,
     };
     // Waiting is not a failed attempt: keep the retry budget for real failures.
     delete metadata._executionRetry;

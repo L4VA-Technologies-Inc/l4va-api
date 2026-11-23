@@ -242,6 +242,10 @@ export class Proposal {
       userFriendlyMessage?: string;
       /** WAITING_FOR_VAULT_STATE: what the proposal is waiting for. */
       reason?: string;
+      /** WAITING_FOR_VAULT_STATE: when the wait began (ISO). */
+      waitingSince?: string;
+      /** WAITING_FOR_VAULT_STATE: set once the "waiting too long" alert was sent. */
+      waitingAlertedAt?: string;
     };
   };
 
