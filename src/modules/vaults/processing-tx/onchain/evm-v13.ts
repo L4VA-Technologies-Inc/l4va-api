@@ -166,6 +166,7 @@ const V13_ENTRIES = [
   view('lpNativeBudget', [], [u256('')]),
   view('lpSaleProceeds', [], [u256('')]),
   view('raiseCycleId', [], [u256('')]),
+  view('activeDistributions', [], [u256('')]),
   view('lpSeeded', [], [{ name: '', type: 'bool' }]),
   write('swapForLp', [{ name: 'p', type: 'tuple', components: SWAP_PARAMS_COMPONENTS }], [u256('netOut')]),
   view('lpSliceTokens', [], [{ name: '', type: 'address[]' }]),
