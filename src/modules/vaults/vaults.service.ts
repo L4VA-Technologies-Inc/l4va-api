@@ -1355,6 +1355,9 @@ export class VaultsService {
     let acquireExpansionCurrentAdaLovelace: number | undefined;
     let acquireExpansionMaxAdaLovelace: number | undefined;
     let acquireExpansionNoMax: boolean | undefined;
+    let acquireExpansionPriceType: 'limit' | 'market' | undefined;
+    let acquireExpansionLimitPrice: number | undefined;
+    let acquireExpansionMarketPrice: number | undefined;
 
     // Only check vault_status to determine if vault is currently in expansion
     // expansion_phase_start is preserved as a historical timestamp
@@ -1479,6 +1482,9 @@ export class VaultsService {
         acquireExpansionNoMax = config.noMax;
         acquireExpansionMaxAdaLovelace = config.maxAda;
         acquireExpansionCurrentAdaLovelace = config.currentAdaRaised || 0;
+        acquireExpansionPriceType = config.priceType;
+        acquireExpansionLimitPrice = config.limitPrice;
+        acquireExpansionMarketPrice = config.marketPriceSnapshot;
       }
     }
 
@@ -1647,29 +1653,17 @@ export class VaultsService {
       expansionAssetsByPolicy,
       expansionWhitelist,
       // Acquire expansion data
-      acquireExpansionCurrentAdaLovelace,
-      acquireExpansionCurrentAda: acquireExpansionCurrentAdaLovelace
-        ? acquireExpansionCurrentAdaLovelace / 1_000_000
-        : undefined,
-      acquireExpansionCurrentUsd: acquireExpansionCurrentAdaLovelace
-        ? (acquireExpansionCurrentAdaLovelace / 1_000_000) * adaPrice
-        : undefined,
-      // EVM: the raise is summed from wei amounts and then scaled by 1e6 like lovelace,
-      // and the max is ETH × 1e6 from the proposal form — undo both for ETH display.
-      acquireExpansionCurrentEth:
-        vault.chain_type === ChainType.robinhood && acquireExpansionCurrentAdaLovelace
-          ? Number(acquireExpansionCurrentAdaLovelace) / 1e24
-          : undefined,
-      acquireExpansionMaxEth:
-        vault.chain_type === ChainType.robinhood && acquireExpansionMaxAdaLovelace
-          ? acquireExpansionMaxAdaLovelace / 1_000_000
-          : undefined,
-      acquireExpansionMaxAdaLovelace,
-      acquireExpansionMaxAda: acquireExpansionMaxAdaLovelace ? acquireExpansionMaxAdaLovelace / 1_000_000 : undefined,
-      acquireExpansionMaxUsd: acquireExpansionMaxAdaLovelace
-        ? (acquireExpansionMaxAdaLovelace / 1_000_000) * adaPrice
-        : undefined,
+      ...this.acquireExpansionAmounts(
+        vault.chain_type === ChainType.robinhood,
+        acquireExpansionCurrentAdaLovelace,
+        acquireExpansionMaxAdaLovelace,
+        adaPrice,
+        ethPrice
+      ),
       acquireExpansionNoMax,
+      acquireExpansionPriceType,
+      acquireExpansionLimitPrice,
+      acquireExpansionMarketPrice,
       // Protocol fees
       // Per-asset rate: total fee = assetCount × protocolFeePerAssetLovelace
       protocolFeePerAssetLovelace: this.systemSettingsService.protocolFeePerAsset,
@@ -3278,6 +3272,54 @@ export class VaultsService {
           created_at: run.completed_at ?? run.created_at,
         };
       });
+  }
+
+  /**
+   * Acquire-expansion raised / max in every display unit. Both are stored on the lovelace scale:
+   * Cardano in lovelace; EVM raised = wei × 1e6 and max = ETH × 1e6 (the proposal form's scale).
+   * On EVM the ETH values are the real amounts, so USD uses the ETH price and ADA is derived.
+   */
+  private acquireExpansionAmounts(
+    isEvm: boolean,
+    currentScaled: number | undefined,
+    maxScaled: number | undefined,
+    adaPrice: number,
+    ethPrice: number
+  ): {
+    acquireExpansionCurrentAdaLovelace?: number;
+    acquireExpansionCurrentAda?: number;
+    acquireExpansionCurrentUsd?: number;
+    acquireExpansionCurrentEth?: number;
+    acquireExpansionMaxAdaLovelace?: number;
+    acquireExpansionMaxAda?: number;
+    acquireExpansionMaxUsd?: number;
+    acquireExpansionMaxEth?: number;
+  } {
+    if (!isEvm) {
+      return {
+        acquireExpansionCurrentAdaLovelace: currentScaled,
+        acquireExpansionCurrentAda: currentScaled ? currentScaled / 1_000_000 : undefined,
+        acquireExpansionCurrentUsd: currentScaled ? (currentScaled / 1_000_000) * adaPrice : undefined,
+        acquireExpansionMaxAdaLovelace: maxScaled,
+        acquireExpansionMaxAda: maxScaled ? maxScaled / 1_000_000 : undefined,
+        acquireExpansionMaxUsd: maxScaled ? (maxScaled / 1_000_000) * adaPrice : undefined,
+      };
+    }
+    const currentEth = currentScaled ? Number(currentScaled) / 1e24 : undefined;
+    const maxEth = maxScaled ? maxScaled / 1_000_000 : undefined;
+    const toAda = (eth: number | undefined) =>
+      eth !== undefined && adaPrice > 0 ? (eth * ethPrice) / adaPrice : undefined;
+    return {
+      acquireExpansionCurrentAdaLovelace: currentScaled,
+      acquireExpansionCurrentEth: currentEth,
+      acquireExpansionCurrentUsd: currentEth !== undefined ? currentEth * ethPrice : undefined,
+      acquireExpansionCurrentAda: toAda(currentEth),
+      // Raw scaled max kept for callers that compare against the stored proposal value.
+      acquireExpansionMaxAdaLovelace: maxScaled,
+      acquireExpansionMaxEth: maxEth,
+      acquireExpansionMaxUsd: maxEth !== undefined ? maxEth * ethPrice : undefined,
+      acquireExpansionMaxAda: toAda(maxEth),
+    };
   }
 
   /** Lock outcome for the activity feed; null when it cannot be derived (yet). */

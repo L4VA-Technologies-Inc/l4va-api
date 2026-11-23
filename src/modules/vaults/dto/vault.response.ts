@@ -1041,12 +1041,47 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   acquireExpansionMaxUsd?: number;
 
+  @ApiProperty({ description: 'ETH raised in the current acquire expansion (EVM only)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionCurrentEth' },
+  })
+  acquireExpansionCurrentEth?: number;
+
+  @ApiProperty({ description: 'ETH maximum of the current acquire expansion (EVM only)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxEth' },
+  })
+  acquireExpansionMaxEth?: number;
+
   @ApiProperty({ description: 'Whether acquire expansion has no max limit', required: false })
   @DtoRepresent({
     transform: false,
     expose: { name: 'acquireExpansionNoMax' },
   })
   acquireExpansionNoMax?: boolean;
+
+  @ApiProperty({ description: 'Acquire expansion pricing: limit (fixed) or market', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionPriceType' },
+  })
+  acquireExpansionPriceType?: 'limit' | 'market';
+
+  @ApiProperty({ description: 'Acquire expansion fixed price: VT per 1 native unit (ETH/ADA)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionLimitPrice' },
+  })
+  acquireExpansionLimitPrice?: number;
+
+  @ApiProperty({ description: 'Acquire expansion market price snapshot: VT per 1 native unit', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMarketPrice' },
+  })
+  acquireExpansionMarketPrice?: number;
 
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({
