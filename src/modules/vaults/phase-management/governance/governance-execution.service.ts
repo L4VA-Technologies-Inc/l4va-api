@@ -9,7 +9,7 @@ import { Between, DataSource, In, Not, Repository } from 'typeorm';
 import { DistributionService, UNFINISHED_BATCH_STATUSES } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { DistributionBatch } from './dto/distribution.dto';
-import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
+import { EvmGovernanceExecutionService, EXPANSION_WAIT_CODE } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
@@ -370,6 +370,13 @@ export class GovernanceExecutionService {
         }
         return; // Skip normal retry logic for distribution proposals with unfinished batches
       }
+    }
+
+    // A passed expansion queued behind a running one re-checks every tick without spending its
+    // retry budget; it opens as soon as the vault is free (see EvmGovernanceExecutionService).
+    if (proposal.metadata?.executionError?.errorCode === EXPANSION_WAIT_CODE) {
+      await this.executePassedProposalLocked(proposal.id);
+      return;
     }
 
     const retryInfo = proposal.metadata?._executionRetry;

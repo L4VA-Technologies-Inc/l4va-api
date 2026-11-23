@@ -27,6 +27,9 @@ import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.serv
 import { MarketplaceAction, ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
+/** `executionError.errorCode` of a passed expansion queued behind a running one. */
+export const EXPANSION_WAIT_CODE = 'WAITING_FOR_EXPANSION_SLOT';
+
 type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
 
 /** The vault rejects `deadline == 0`; adapter calls get this much headroom. */
@@ -108,6 +111,13 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * Returns `true` on success so the caller can mark the proposal EXECUTED.
    */
   async executeProposal(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
+    if (proposal.proposalType === ProposalType.EXPANSION || proposal.proposalType === ProposalType.ACQUIRE_EXPANSION) {
+      const wait = await this.expansionWaitReason(vault.id);
+      if (wait) {
+        await this.markWaitingForExpansionSlot(proposal, wait);
+        return false;
+      }
+    }
     switch (proposal.proposalType) {
       case ProposalType.MARKETPLACE_ACTION:
       case ProposalType.BUY_SELL:
@@ -145,6 +155,39 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // ---------------------------------------------------------------------------
   // Expansion: open a new cycle with an asset-contribution window
   // ---------------------------------------------------------------------------
+
+  /**
+   * A new cycle can open only from a locked vault (`openCycle` reverts otherwise), and only after
+   * the last cycle's LP seed and basket buy ran. A passed expansion that meets a running one waits
+   * in line, with no time limit, and runs once the vault is free.
+   */
+  private async expansionWaitReason(vaultId: string): Promise<string | null> {
+    const v = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'vault_status', 'evm_current_cycle_id', 'vault_archetype'],
+    });
+    if (!v) return null;
+    if (v.vault_status !== VaultStatus.locked) return 'another expansion is still running';
+    return this.indexVaultService.postLockWorkPending(v);
+  }
+
+  private async markWaitingForExpansionSlot(proposal: Proposal, reason: string): Promise<void> {
+    const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id }, select: ['id', 'metadata'] });
+    const metadata = { ...(fresh?.metadata ?? proposal.metadata) };
+    if (metadata.executionError?.errorCode !== EXPANSION_WAIT_CODE) {
+      this.logger.log(`Proposal ${proposal.id}: waiting to open its expansion — ${reason}`);
+    }
+    metadata.executionError = {
+      message: `Waiting to open the expansion: ${reason}.`,
+      timestamp: new Date().toISOString(),
+      errorCode: EXPANSION_WAIT_CODE,
+      userFriendlyMessage:
+        'This expansion starts automatically once the current expansion has finished and the vault is locked again.',
+    };
+    // Waiting is not a failed attempt: keep the retry budget for real failures.
+    delete metadata._executionRetry;
+    await this.proposalRepository.update({ id: proposal.id }, { metadata });
+  }
 
   private async executeEvmExpansion(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     const cfg = proposal.metadata?.expansion;
