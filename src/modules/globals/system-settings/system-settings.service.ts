@@ -41,6 +41,10 @@ export interface SystemSettingsData {
   auto_create_treasury_wallets_testnet: boolean;
   vault_creator_whitelist: string[];
   hidden_mainnet_vault_ids: string[];
+  // Closed launch: while on, the client shows a maintenance page to everyone except
+  // wallets in `maintenance_allowlist` (any chain; EVM compared case-insensitively).
+  maintenance_mode: boolean;
+  maintenance_allowlist: string[];
   // Kill switches for sensitive flows
   vault_creation_enabled: boolean;
   contribution_enabled: boolean;
@@ -187,6 +191,8 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   index_rebalance_jitter_hours: 6,
   evm_termination_allow_waivers: false,
   hidden_mainnet_vault_ids: ['00000000-0000-0000-0000-000000000000'],
+  maintenance_mode: false,
+  maintenance_allowlist: [],
   vault_creator_whitelist: [
     'addr1q9j4eqs7v5pz08fddkfng2kvj762jhkhnpen4shr5jtht3evu56kfxkaqdjl4he2d6nguzl489fsvwsnx5554fe4lsjqe0ygg5',
     'addr1q90jnj7v8qmd3ypa668tufp7r663ppkctfd34dfwdfmam9eu2heaaj7eknfhahkydax07wqmvszndrcmh83adfph4umsskaxm5',
@@ -358,6 +364,17 @@ export class SystemSettingsService implements OnModuleInit {
 
   get hiddenMainnetVaultIds(): string[] {
     return this.settings.hidden_mainnet_vault_ids || [];
+  }
+
+  get maintenanceMode(): boolean {
+    return this.settings.maintenance_mode === true;
+  }
+
+  /** Whether `address` may use the site while maintenance mode is on. */
+  isAllowedDuringMaintenance(address?: string | null): boolean {
+    if (!address) return false;
+    const needle = address.toLowerCase();
+    return (this.settings.maintenance_allowlist || []).some(a => a?.toLowerCase() === needle);
   }
 
   isAddressWhitelistedForVaultCreation(address: string): boolean {

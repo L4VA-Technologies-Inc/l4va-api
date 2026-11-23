@@ -1,4 +1,5 @@
-import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Controller, Get, Headers, Post, UseGuards } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { NftFlagsResponseDto } from './dto/nft-flags-response.dto';
@@ -16,7 +17,37 @@ import { ChainType } from '@/types/vault.types';
 @ApiTags('System Settings')
 @Controller('system-settings')
 export class SystemSettingsController {
-  constructor(private readonly systemSettingsService: SystemSettingsService) {}
+  constructor(
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly jwtService: JwtService
+  ) {}
+
+  // No auth guard on purpose: an expired or invalid token must read as "anonymous", not 401 —
+  // the client would otherwise treat the error as an outage.
+  @Get('site-access')
+  @ApiDoc({
+    summary: 'Whether the caller may use the site',
+    description:
+      'Closed-launch gate: `maintenance` is the site-wide flag, `allowed` is true when maintenance is off or the signed-in wallet is allowlisted.',
+    status: 200,
+  })
+  async getSiteAccess(
+    @Headers('authorization') authorization?: string
+  ): Promise<{ maintenance: boolean; allowed: boolean }> {
+    const maintenance = this.systemSettingsService.maintenanceMode;
+    if (!maintenance) return { maintenance, allowed: true };
+
+    const [type, token] = authorization?.split(' ') ?? [];
+    let address: string | undefined;
+    if (type === 'Bearer' && token) {
+      try {
+        address = (await this.jwtService.verifyAsync<{ address?: string }>(token))?.address;
+      } catch {
+        address = undefined;
+      }
+    }
+    return { maintenance, allowed: this.systemSettingsService.isAllowedDuringMaintenance(address) };
+  }
 
   @Get('vlrm-fee')
   @UseGuards(AuthGuard)

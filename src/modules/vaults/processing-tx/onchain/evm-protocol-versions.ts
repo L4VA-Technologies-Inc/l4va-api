@@ -76,6 +76,12 @@ export interface EvmProtocolVersion {
 /** `MAX_TERMINATION_ASSETS` of every Vault deployed before the cap was raised (V8–V13). */
 export const LEGACY_MAX_TERMINATION_ASSETS = 16;
 
+/**
+ * Product limit on the ERC-20s of one vault (basket / whitelist), below the contract cap: the 56-asset
+ * contract (stage id 15) leaves headroom (native ETH + spare slots) so termination never hits the cap.
+ */
+export const PRODUCT_MAX_BASKET_ASSETS = 50;
+
 export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
   4663: [
     {
@@ -205,6 +211,30 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // LP V2 and exit V2; the previous ones (0x9197…, 0xA5eC…, 0xB791…, 0xB292…) are revoked.
       // LP payouts (2026-11-20): backend records LP providers' pool VT here before each distribution.
       lpShareRegistry: '0xd763D8dCf064413fd5BC82bc9a6c9ca7A99B783d',
+    },
+    {
+      // STAGE, V13 code with MAX_TERMINATION_ASSETS = 56 (vault-contract-solidity
+      // script/deploy-stage-v15.sh, 2026-11-23): own stack, stage keys, registry + fee config on the
+      // stage Safe. Guarded swap / LP V2 / exit V2; unguarded swap + V1 LP revoked. Safe batch
+      // deployments/safe-batch-stage-v15.json: pools, creditor, FeeConverter caller, delays 24 h / 1 h,
+      // lpShareSource.
+      version: 15,
+      stack: 'stage',
+      codeVersion: 13,
+      factory: '0x23a9e7AB6AD5390f965205153CF83505fc2A1A3B',
+      deployBlock: 121408960n,
+      adapterRegistry: '0xd2E116039f58E4d9A890860E4565C99c6c94473F',
+      protocolFeeConfig: '0x1C9B6636c2e9518aBb37F516e6e31b78F3602757',
+      batchDeployer: '0xd16c9F0eec987A1f88dEBb83741bDd8B1B362C2C',
+      swapAdapter: '0x50EE7bCe45A4Be0390BF08C8EB1509fE270d1E5D',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0xF9502dCFBa82d610D7D9ca4F935C845eb830eb5b',
+      lpExitAdapter: '0xA09577981E5429f2c32Dcd08Ea2e5B652EfD3E9B',
+      feeConverter: '0x6291a8b5E3dC056F78447ab365e9bA7fC4e4A438',
+      feeController: '0x57e53Ab912c4dd69cA8c3158325019AcaD36D88F',
+      guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
+      lpShareRegistry: '0x06e09da01712BDbf73490691E72462fE693EA05E',
+      maxTerminationAssets: 56,
     },
   ],
   46630: [
@@ -396,7 +426,7 @@ export function terminationAssetCapFor(vault: VaultVersionRef | null | undefined
  * stays free for native ETH, which is always distributable and cannot be waived.
  */
 export function basketAssetCapFor(vault: VaultVersionRef | null | undefined): number {
-  return terminationAssetCapFor(vault) - 1;
+  return Math.min(terminationAssetCapFor(vault) - 1, PRODUCT_MAX_BASKET_ASSETS);
 }
 
 /** Version fields of a vault the current factory (`EVM_FACTORY_ADDRESS`) would deploy. */
@@ -416,5 +446,5 @@ export function maxBasketAssetCapAnyVersion(): number {
   const caps = Object.values(EVM_PROTOCOL_VERSIONS)
     .flat()
     .map(v => v.maxTerminationAssets ?? LEGACY_MAX_TERMINATION_ASSETS);
-  return Math.max(LEGACY_MAX_TERMINATION_ASSETS, ...caps) - 1;
+  return Math.min(Math.max(LEGACY_MAX_TERMINATION_ASSETS, ...caps) - 1, PRODUCT_MAX_BASKET_ASSETS);
 }
