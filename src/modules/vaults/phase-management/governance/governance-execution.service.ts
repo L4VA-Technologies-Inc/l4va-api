@@ -9,7 +9,7 @@ import { Between, DataSource, In, Not, Repository } from 'typeorm';
 import { DistributionService, UNFINISHED_BATCH_STATUSES } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { DistributionBatch } from './dto/distribution.dto';
-import { EvmGovernanceExecutionService, EXPANSION_WAIT_CODE } from './evm-governance-execution.service';
+import { EvmGovernanceExecutionService, PROPOSAL_WAIT_CODE } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
@@ -372,9 +372,9 @@ export class GovernanceExecutionService {
       }
     }
 
-    // A passed expansion queued behind a running one re-checks every tick without spending its
-    // retry budget; it opens as soon as the vault is free (see EvmGovernanceExecutionService).
-    if (proposal.metadata?.executionError?.errorCode === EXPANSION_WAIT_CODE) {
+    // A passed proposal waiting for the vault (an expansion running, VT still to be claimed, …)
+    // re-checks every tick without spending its retry budget (see EvmGovernanceExecutionService).
+    if (proposal.metadata?.executionError?.errorCode === PROPOSAL_WAIT_CODE) {
       await this.executePassedProposalLocked(proposal.id);
       return;
     }
@@ -383,8 +383,27 @@ export class GovernanceExecutionService {
     const retryCount = retryInfo?.count || 0;
     const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
 
-    // Check if max retries exceeded
+    // Check if max retries exceeded. Tell someone once: the proposal stays PASSED and nothing
+    // retries it again on its own.
     if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+      if (!retryInfo?.alertedAt) {
+        await this.proposalRepository.update(
+          { id: proposal.id },
+          { metadata: { ...proposal.metadata, _executionRetry: { ...retryInfo, alertedAt: new Date().toISOString() } } }
+        );
+        this.logger.error(
+          `Proposal ${proposal.id} (${proposal.proposalType}) gave up after ${retryCount} attempts: ` +
+            (proposal.metadata?.executionError?.message ?? 'no error recorded')
+        );
+        void this.alertsService.sendAlert('proposal_execution_gave_up', {
+          proposalId: proposal.id,
+          vaultId: proposal.vaultId,
+          type: proposal.proposalType,
+          title: proposal.title,
+          attempts: retryCount,
+          error: proposal.metadata?.executionError?.message ?? null,
+        });
+      }
       return;
     }
 

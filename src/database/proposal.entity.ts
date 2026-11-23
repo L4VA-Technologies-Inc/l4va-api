@@ -207,6 +207,8 @@ export class Proposal {
     _executionRetry?: {
       count: number;
       lastAttempt: string; // ISO date string
+      /** Set once the "gave up" alert was sent. */
+      alertedAt?: string;
     };
 
     // Pending payment tracking (for UNPAID proposals)
@@ -238,6 +240,8 @@ export class Proposal {
       timestamp: string;
       errorCode?: string;
       userFriendlyMessage?: string;
+      /** WAITING_FOR_VAULT_STATE: what the proposal is waiting for. */
+      reason?: string;
     };
   };
 

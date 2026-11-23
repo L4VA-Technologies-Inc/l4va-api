@@ -2,9 +2,10 @@ import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleIni
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { type Address } from 'viem';
+import { parseAbi, type Address } from 'viem';
 
 import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
+import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
 import { EvmOpenCycleService, type EvmOpenCycleConfig } from '../../processing-tx/onchain/evm-open-cycle.service';
 import {
   buildOperationId,
@@ -28,7 +29,23 @@ import { MarketplaceAction, ProposalStatus, ProposalType } from '@/types/proposa
 import { ChainType, VaultStatus } from '@/types/vault.types';
 
 /** `executionError.errorCode` of a passed expansion queued behind a running one. */
-export const EXPANSION_WAIT_CODE = 'WAITING_FOR_EXPANSION_SLOT';
+/**
+ * `executionError.errorCode` of a passed proposal waiting for the vault to reach a state the
+ * contract accepts it in. Waiting never spends the retry budget; the retry cron re-checks it.
+ */
+export const PROPOSAL_WAIT_CODE = 'WAITING_FOR_VAULT_STATE';
+
+const OUTSTANDING_ABI = parseAbi([
+  'function totalOutstandingClaimVt() view returns (uint256)',
+  'function totalOutstandingClaimNative() view returns (uint256)',
+  'function totalOutstandingAcquireRefund() view returns (uint256)',
+]);
+
+/** Why a passed proposal waits, and what the proposal page says meanwhile. */
+interface ProposalWait {
+  reason: string;
+  userFriendlyMessage: string;
+}
 
 type EvmGovernanceVaultRef = Pick<Vault, 'id' | 'vault_status' | 'chain_type'>;
 
@@ -70,6 +87,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     private readonly positionsRepository: Repository<EvmExternalPosition>,
     private readonly positionService: EvmPositionService,
     private readonly terminationService: EvmTerminationService,
+    private readonly contractReader: EvmContractReader,
     private readonly distributionService: EvmDistributionService,
     private readonly adapterRegistryService: EvmAdapterRegistryService,
     private readonly swapService: EvmSwapService,
@@ -111,12 +129,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * Returns `true` on success so the caller can mark the proposal EXECUTED.
    */
   async executeProposal(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
-    if (proposal.proposalType === ProposalType.EXPANSION || proposal.proposalType === ProposalType.ACQUIRE_EXPANSION) {
-      const wait = await this.expansionWaitReason(vault.id);
-      if (wait) {
-        await this.markWaitingForExpansionSlot(proposal, wait);
-        return false;
-      }
+    const wait = await this.waitReason(proposal, vault.id);
+    if (wait) {
+      await this.markWaiting(proposal, wait);
+      return false;
     }
     switch (proposal.proposalType) {
       case ProposalType.MARKETPLACE_ACTION:
@@ -157,32 +173,103 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   /**
-   * A new cycle can open only from a locked vault (`openCycle` reverts otherwise), and only after
-   * the last cycle's LP seed and basket buy ran. A passed expansion that meets a running one waits
-   * in line, with no time limit, and runs once the vault is free.
+   * Conditions a passed proposal waits for instead of failing on-chain. A proposal created while
+   * the vault was locked can pass while an expansion runs, or right after a cycle closed while its
+   * VT are still unclaimed; the contract refuses it then, and five quick retries would give up long
+   * before the vault is ready. These wait with no time limit and run once the vault is free.
    */
-  private async expansionWaitReason(vaultId: string): Promise<string | null> {
+  private async waitReason(proposal: Proposal, vaultId: string): Promise<ProposalWait | null> {
     const v = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      select: ['id', 'vault_status', 'evm_current_cycle_id', 'vault_archetype'],
+      select: ['id', 'vault_status', 'evm_current_cycle_id', 'vault_archetype', 'contract_address'],
     });
     if (!v) return null;
-    if (v.vault_status !== VaultStatus.locked) return 'another expansion is still running';
-    return this.indexVaultService.postLockWorkPending(v);
+    const locked = v.vault_status === VaultStatus.locked;
+    const afterExpansion =
+      'This proposal runs automatically once the current expansion has finished and the vault is locked again.';
+
+    switch (proposal.proposalType) {
+      case ProposalType.EXPANSION:
+      case ProposalType.ACQUIRE_EXPANSION: {
+        // `openCycle` needs a locked vault; the last cycle's LP seed and basket buy run only then.
+        if (!locked) return { reason: 'another expansion is still running', userFriendlyMessage: afterExpansion };
+        const pending = await this.indexVaultService.postLockWorkPending(v);
+        return pending ? { reason: pending, userFriendlyMessage: afterExpansion } : null;
+      }
+
+      case ProposalType.TERMINATION: {
+        // A retry after preparing resumes there; only the first step waits.
+        if ((await this.terminationService.onchainStatus(v.id)) === EvmVaultOnchainStatus.TerminationPreparing) {
+          return null;
+        }
+        if (!locked) return { reason: 'an expansion is still running', userFriendlyMessage: afterExpansion };
+        const owed = await this.outstanding(v.contract_address as Address);
+        if (owed) {
+          return {
+            reason: `${owed} still to be claimed from the last cycle`,
+            userFriendlyMessage:
+              'Termination starts automatically once every vault token and ETH from the last cycle has been claimed.',
+          };
+        }
+        return null;
+      }
+
+      case ProposalType.DISTRIBUTION: {
+        // `openDistribution` reverts while allocated VT is unminted: the snapshot supply would miss it.
+        const owed = await this.outstanding(v.contract_address as Address, true);
+        if (owed) {
+          return {
+            reason: `${owed} still to be claimed from the last cycle`,
+            userFriendlyMessage:
+              'The distribution opens automatically once the vault tokens from the last cycle have been claimed.',
+          };
+        }
+        return null;
+      }
+
+      // Swaps, marketplace actions, staking and re-weights do not wait for an expansion: the contract
+      // trades only `availableNativeForOperations` / `availableErc20`, which leave out the open
+      // cycle's ETH and refundable contributions, and `swap` runs while a cycle is Active.
+
+      default:
+        return null;
+    }
   }
 
-  private async markWaitingForExpansionSlot(proposal: Proposal, reason: string): Promise<void> {
+  /**
+   * What the vault still owes from closed cycles, read on-chain; null when nothing. `vtOnly` checks
+   * just allocated VT (what blocks a distribution). A vault without these views (pre-V13) owes none.
+   */
+  private async outstanding(vaultAddress: Address, vtOnly = false): Promise<string | null> {
+    const read = (
+      functionName: 'totalOutstandingClaimVt' | 'totalOutstandingClaimNative' | 'totalOutstandingAcquireRefund'
+    ) =>
+      this.contractReader.publicClient
+        .readContract({ address: vaultAddress, abi: OUTSTANDING_ABI, functionName })
+        .then(v => v as bigint)
+        .catch(() => 0n);
+    const vt = await read('totalOutstandingClaimVt');
+    if (vtOnly) return vt > 0n ? 'vault tokens' : null;
+    const [native, refund] = await Promise.all([
+      read('totalOutstandingClaimNative'),
+      read('totalOutstandingAcquireRefund'),
+    ]);
+    const owed = [vt > 0n && 'vault tokens', native > 0n && 'ETH', refund > 0n && 'acquire refunds'].filter(Boolean);
+    return owed.length ? owed.join(', ') : null;
+  }
+
+  private async markWaiting(proposal: Proposal, wait: ProposalWait): Promise<void> {
     const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id }, select: ['id', 'metadata'] });
     const metadata = { ...(fresh?.metadata ?? proposal.metadata) };
-    if (metadata.executionError?.errorCode !== EXPANSION_WAIT_CODE) {
-      this.logger.log(`Proposal ${proposal.id}: waiting to open its expansion — ${reason}`);
+    if (metadata.executionError?.errorCode !== PROPOSAL_WAIT_CODE || metadata.executionError?.reason !== wait.reason) {
+      this.logger.log(`Proposal ${proposal.id} (${proposal.proposalType}) waiting: ${wait.reason}`);
     }
     metadata.executionError = {
-      message: `Waiting to open the expansion: ${reason}.`,
+      message: `Waiting: ${wait.reason}.`,
+      reason: wait.reason,
       timestamp: new Date().toISOString(),
-      errorCode: EXPANSION_WAIT_CODE,
-      userFriendlyMessage:
-        'This expansion starts automatically once the current expansion has finished and the vault is locked again.',
+      errorCode: PROPOSAL_WAIT_CODE,
+      userFriendlyMessage: wait.userFriendlyMessage,
     };
     // Waiting is not a failed attempt: keep the retry budget for real failures.
     delete metadata._executionRetry;
