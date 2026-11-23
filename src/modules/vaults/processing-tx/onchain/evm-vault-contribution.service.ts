@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, EntityManager, Repository } from 'typeorm';
 import { decodeEventLog, formatEther, parseEther, type Address, type Hex } from 'viem';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -13,6 +13,7 @@ import { EvmContributionCapsService } from './evm-contribution-caps.service';
 import { deriveContributionNonce } from './evm-contribution-nonce';
 import { EvmKmsSigners } from './evm-kms-signers.service';
 import { readVaultFrozen } from './evm-pause.service';
+import { acquireExpansionVtForWei, isV13Version, toV13CycleView, VAULT_V13_ABI } from './evm-v13';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
 import { VAULT_ABI } from './vault.abi';
 
@@ -339,7 +340,7 @@ export class EvmVaultContributionService {
     if (vault.vault_status === VaultStatus.acquire_expansion && transaction.type === TransactionType.acquire) {
       const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
       await this.reserveAcquireExpansionSignature(
-        vault.id,
+        vault,
         vaultAddress,
         currentCycleId,
         transaction,
@@ -366,13 +367,14 @@ export class EvmVaultContributionService {
    * maximum is reached (instead of waiting a fixed hour).
    */
   private async reserveAcquireExpansionSignature(
-    vaultId: string,
+    vault: Pick<Vault, 'id' | 'evm_protocol_version' | 'ft_token_decimals'>,
     vaultAddress: Address,
     cycleId: bigint,
     transaction: Transaction,
     nativeWei: bigint,
     deadline: number
   ): Promise<void> {
+    const vaultId = vault.id;
     const proposal = await this.transactionRepository.manager.findOne(Proposal, {
       where: { vaultId, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
       order: { executionDate: 'DESC' },
@@ -383,6 +385,13 @@ export class EvmVaultContributionService {
         ? // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
           BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n
         : null;
+    // V13 caps the VT an expansion cycle can mint (`vtCap`, `maxExpansionBps` of supply by default);
+    // a root above `vtCap − fixedVtTotal` makes closeCycle revert (AllocationExceedsPool) and the
+    // cycle cannot close. At a fixed price the VT is known up front, so refuse ETH that would
+    // push it over the cap. Market-priced expansions are sized at close and not checked here.
+    const vtPerEth =
+      isV13Version(vault.evm_protocol_version) && cfg?.priceType === 'limit' ? Number(cfg.limitPrice) : 0;
+    const checkVtCap = vtPerEth > 0 && nativeWei > 0n;
 
     // Check-and-reserve must be atomic: two concurrent requests could each see room and together
     // overfill the maximum. A transaction-scoped advisory lock per vault serialises them across
@@ -390,13 +399,38 @@ export class EvmVaultContributionService {
     await this.transactionRepository.manager.transaction(async em => {
       await em.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`acquire-expansion:${vaultId}`]);
 
-      if (maxWei !== null) {
-        const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
-        const reservedWei = await sumOutstandingAcquireSignatures(
-          em.getRepository(Transaction),
-          vaultId,
-          transaction.id
+      if (maxWei === null && !checkVtCap) return this.recordAuthDeadline(em, transaction, deadline, nativeWei);
+
+      const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
+      const reservedWei = await sumOutstandingAcquireSignatures(em.getRepository(Transaction), vaultId, transaction.id);
+
+      if (checkVtCap) {
+        const view = toV13CycleView(
+          (await this.contractReader.publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_V13_ABI,
+            functionName: 'cycleV13',
+            args: [cycleId],
+          })) as readonly unknown[]
         );
+        const vtDecimals = Number(vault.ft_token_decimals ?? 18);
+        const room = view.vtCap > view.fixedVtTotal ? view.vtCap - view.fixedVtTotal : 0n;
+        const projectedVt = acquireExpansionVtForWei(nativeCollected + reservedWei + nativeWei, vtPerEth, vtDecimals);
+        if (projectedVt > room) {
+          const usedVt = acquireExpansionVtForWei(nativeCollected + reservedWei, vtPerEth, vtDecimals);
+          // ETH that still fits: invert the price, rounded down.
+          const leftVt = room > usedVt ? room - usedVt : 0n;
+          const leftWei =
+            (leftVt * 10n ** 18n * 1_000_000n) / (BigInt(Math.round(vtPerEth * 1_000_000)) * 10n ** BigInt(vtDecimals));
+          throw new BadRequestException(
+            leftWei === 0n
+              ? 'This acquire expansion has reached the most vault tokens it can mint. No more ETH can be accepted.'
+              : `This acquire expansion can mint vault tokens for only ${formatEther(leftWei)} more ETH.`
+          );
+        }
+      }
+
+      if (maxWei !== null) {
         if (nativeCollected + reservedWei + nativeWei > maxWei) {
           const used = nativeCollected + reservedWei;
           const left = maxWei > used ? maxWei - used : 0n;
@@ -411,18 +445,28 @@ export class EvmVaultContributionService {
         }
       }
 
-      // Re-read under the lock so the reservation is written onto the latest metadata.
-      const current = await em.getRepository(Transaction).findOne({ where: { id: transaction.id } });
-      const meta = (current?.metadata ?? transaction.metadata) as any; // jsonb, as in confirmContribution
-      if (meta && !Array.isArray(meta)) {
-        await em
-          .getRepository(Transaction)
-          .update(
-            { id: transaction.id },
-            { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
-          );
-      }
+      await this.recordAuthDeadline(em, transaction, deadline, nativeWei);
     });
+  }
+
+  /** Stores the signature's deadline and ETH on the transaction (read under the expansion lock). */
+  private async recordAuthDeadline(
+    em: EntityManager,
+    transaction: Transaction,
+    deadline: number,
+    nativeWei: bigint
+  ): Promise<void> {
+    // Re-read under the lock so the reservation is written onto the latest metadata.
+    const current = await em.getRepository(Transaction).findOne({ where: { id: transaction.id } });
+    const meta = (current?.metadata ?? transaction.metadata) as any; // jsonb, as in confirmContribution
+    if (meta && !Array.isArray(meta)) {
+      await em
+        .getRepository(Transaction)
+        .update(
+          { id: transaction.id },
+          { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
+        );
+    }
   }
 
   /**

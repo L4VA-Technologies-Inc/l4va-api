@@ -389,6 +389,17 @@ export const v13FromSaleRate = (lpSaleVt: bigint, proceeds: bigint): bigint =>
 /** The slice of `held` that FromSale must sell for the pool: lp%/2 (floor, as the contract). */
 export const v13LpSlice = (held: bigint, lpBps: number): bigint => mulDiv(held, BigInt(lpBps), 2n * BigInt(V13_BPS));
 
+/**
+ * VT an acquire expansion at a fixed price mints for `wei`: `limitPrice` is VT per 1 ETH (the
+ * proposal form stores it as a float, scaled by 1e6 here). Same formula as the lifecycle's
+ * limit-price override, so the cap check and the root agree.
+ */
+export const acquireExpansionVtForWei = (wei: bigint, limitPrice: number, vtDecimals: number): bigint => {
+  const SCALE = 1_000_000n;
+  const limitPriceScaled = BigInt(Math.round(limitPrice * 1_000_000));
+  return (wei * limitPriceScaled * 10n ** BigInt(vtDecimals)) / (10n ** 18n * SCALE);
+};
+
 /** Whether a V13 root may be claimed now (`cycleV13` read). */
 export const v13RootOpen = (c: { rootActivatesAt: bigint | number; rootCancelled: boolean; rootApproved: boolean }) =>
   !c.rootCancelled && (c.rootApproved || BigInt(c.rootActivatesAt) <= BigInt(Math.floor(Date.now() / 1000)));

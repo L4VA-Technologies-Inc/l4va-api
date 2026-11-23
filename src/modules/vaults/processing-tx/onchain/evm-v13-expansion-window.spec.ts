@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { V13_MIN_EXPANSION_WINDOW_SEC, v13ExpansionEarliestClose } from './evm-v13';
+import { acquireExpansionVtForWei, V13_MIN_EXPANSION_WINDOW_SEC, v13ExpansionEarliestClose } from './evm-v13';
 
 describe('v13ExpansionEarliestClose', () => {
   const openedAt = 1_795_885_360n; // 2026-11-23 17:02:40 UTC
@@ -22,5 +22,19 @@ describe('v13ExpansionEarliestClose', () => {
 
   it('does not apply without an on-chain open time', () => {
     expect(v13ExpansionEarliestClose({ evm_protocol_version: 15 }, true, 0n)).toBeNull();
+  });
+});
+
+describe('acquireExpansionVtForWei', () => {
+  it('matches the stage snapshot root for 0.04558 ETH at 1755.1 VT/ETH', () => {
+    // Snapshot 033472ac: limitPrice=1755.1, totalVt=79998435873919047818 (two contributions).
+    const vt = acquireExpansionVtForWei(45_580_557_161_369_180n, 1755.1, 18);
+    // Per-contribution rounding in the snapshot can differ by a few base units from the sum.
+    expect(vt - 79_998_435_873_919_047_818n).toBeLessThanOrEqual(2n);
+    expect(79_998_435_873_919_047_818n - vt).toBeLessThanOrEqual(2n);
+  });
+
+  it('is 0 for 0 wei', () => {
+    expect(acquireExpansionVtForWei(0n, 1755.1, 18)).toBe(0n);
   });
 });
