@@ -13,6 +13,7 @@ import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
 import { EvmSnapshotService } from './evm-snapshot.service';
+import { countSnapshotRecipients } from './snapshot-recipients.util';
 import { votingBalances } from './voting-power.util';
 
 import { Proposal } from '@/database/proposal.entity';
@@ -122,15 +123,7 @@ export class EvmDistributionService {
     const assetAddress = (asset || zeroAddress) as Address;
 
     const snapshot = await this.latestSnapshot(vaultId);
-    // Same recipient set the payout walks: direct VT holders plus Uniswap LP providers (their
-    // pool VT is paid through lpShareSource). Counted once per address, zero balances ignored.
-    const holderCount = snapshot
-      ? new Set(
-          [...Object.entries(snapshot.addressBalances ?? {}), ...Object.entries(snapshot.lpBalances ?? {})]
-            .filter(([, vt]) => BigInt(vt) > 0n)
-            .map(([address]) => address.toLowerCase())
-        ).size
-      : 0;
+    const holderCount = await this.recipientCount(snapshot, vaultAddress);
 
     const base: EvmDistributionValidation = {
       valid: false,
@@ -580,6 +573,25 @@ export class EvmDistributionService {
     return String(amount);
   }
 
+  /**
+   * How many addresses a distribution at `snapshot` pays: the same set the payout walks, direct VT
+   * holders plus Uniswap LP providers (paid through lpShareSource), once per address, zero balances
+   * ignored. LP balances are attributed on demand when the snapshot does not carry them yet; if that
+   * fails the stored ones (or none) are used, so the count can only be low, never block the form.
+   */
+  private async recipientCount(snapshot: Snapshot | null, vaultAddress: Address): Promise<number> {
+    if (!snapshot) return 0;
+    let lp = snapshot.lpBalances ?? {};
+    if (!snapshot.lpBalances) {
+      try {
+        lp = await this.evmSnapshotService.lpBalancesForSnapshot(snapshot, vaultAddress);
+      } catch (err) {
+        this.logger.warn(`LP attribution for snapshot ${snapshot.id} failed: ${(err as Error).message}`);
+      }
+    }
+    return countSnapshotRecipients({ addressBalances: snapshot.addressBalances, lpBalances: lp });
+  }
+
   async getDistributionInfo(vaultId: string, asset: string = zeroAddress) {
     const vault = await this.requireEvmVault(vaultId);
     const vaultAddress = vault.contract_address as Address;
@@ -596,7 +608,7 @@ export class EvmDistributionService {
       vaultAddress,
       asset,
       availableAmount: String(available),
-      vtHolderCount: snapshot ? Object.keys(snapshot.addressBalances ?? {}).length : 0,
+      vtHolderCount: await this.recipientCount(snapshot, vaultAddress),
       circulatingSupply: String(supply),
       timepoint: snapshot?.snapshotTimepoint ?? null,
       minClaimWindowSeconds: MIN_CLAIM_WINDOW_SECONDS,
