@@ -102,9 +102,12 @@ describe('EVM_PROTOCOL_VERSIONS numbering (deployment ids)', () => {
 });
 
 describe('termination asset caps', () => {
-  it('every registered deployment so far has the legacy cap of 16', () => {
-    for (const v of Object.values(EVM_PROTOCOL_VERSIONS).flat()) {
-      expect(v.maxTerminationAssets ?? LEGACY_MAX_TERMINATION_ASSETS).toBe(16);
+  it('only stage id 15 on 4663 has the raised cap of 56; every other deployment has 16', () => {
+    for (const [chain, list] of Object.entries(EVM_PROTOCOL_VERSIONS)) {
+      for (const v of list) {
+        const want = chain === '4663' && v.version === 15 ? 56 : 16;
+        expect(v.maxTerminationAssets ?? LEGACY_MAX_TERMINATION_ASSETS).toBe(want);
+      }
     }
   });
 
@@ -125,7 +128,9 @@ describe('termination asset caps', () => {
     expect(terminationAssetCapFor(null)).toBe(16);
     expect(basketAssetCapFor({ chain_id: 4663, evm_protocol_version: null })).toBe(15);
     expect(basketAssetCapFor({ chain_id: 4663, evm_protocol_version: 123_456 })).toBe(15);
-    expect(maxBasketAssetCapAnyVersion()).toBe(15);
+    // The DTO upper bound follows the largest registered cap (stage id 15: 56 → 55), clamped to 50.
+    expect(maxBasketAssetCapAnyVersion()).toBe(50);
+    expect(basketAssetCapFor({ chain_id: 4663, evm_protocol_version: 15 })).toBe(50);
   });
 
   it('currentEvmVersionRef resolves the factory in env', () => {

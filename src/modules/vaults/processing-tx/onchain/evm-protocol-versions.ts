@@ -212,6 +212,30 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       // LP payouts (2026-11-20): backend records LP providers' pool VT here before each distribution.
       lpShareRegistry: '0xd763D8dCf064413fd5BC82bc9a6c9ca7A99B783d',
     },
+    {
+      // STAGE, V13 code with MAX_TERMINATION_ASSETS = 56 (vault-contract-solidity
+      // script/deploy-stage-v15.sh, 2026-11-23): own stack, stage keys, registry + fee config on the
+      // stage Safe. Guarded swap / LP V2 / exit V2; unguarded swap + V1 LP revoked. Safe batch
+      // deployments/safe-batch-stage-v15.json: pools, creditor, FeeConverter caller, delays 24 h / 1 h,
+      // lpShareSource.
+      version: 15,
+      stack: 'stage',
+      codeVersion: 13,
+      factory: '0x23a9e7AB6AD5390f965205153CF83505fc2A1A3B',
+      deployBlock: 121408960n,
+      adapterRegistry: '0xd2E116039f58E4d9A890860E4565C99c6c94473F',
+      protocolFeeConfig: '0x1C9B6636c2e9518aBb37F516e6e31b78F3602757',
+      batchDeployer: '0xd16c9F0eec987A1f88dEBb83741bDd8B1B362C2C',
+      swapAdapter: '0x50EE7bCe45A4Be0390BF08C8EB1509fE270d1E5D',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0xF9502dCFBa82d610D7D9ca4F935C845eb830eb5b',
+      lpExitAdapter: '0xA09577981E5429f2c32Dcd08Ea2e5B652EfD3E9B',
+      feeConverter: '0x6291a8b5E3dC056F78447ab365e9bA7fC4e4A438',
+      feeController: '0x57e53Ab912c4dd69cA8c3158325019AcaD36D88F',
+      guardian: '0xcC3679a762F41C6f9727a6659bab519c3FbbF7c1',
+      lpShareRegistry: '0x06e09da01712BDbf73490691E72462fE693EA05E',
+      maxTerminationAssets: 56,
+    },
   ],
   46630: [
     {
