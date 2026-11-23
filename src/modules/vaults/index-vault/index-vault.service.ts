@@ -241,6 +241,21 @@ export class IndexVaultService implements OnApplicationBootstrap {
   }
 
   /**
+   * Same allow-list as baskets (`INDEX_BASKET_ALLOWED_ASSETS`): when it is set, a market-swap
+   * proposal may only buy ETH or a listed token. Unset means no restriction.
+   */
+  assertMarketSwapOutputsAllowed(actions: Array<Record<string, any>>): void {
+    if (!this.allowedAssets.length) return;
+    for (const a of actions) {
+      if (a?.exec === 'CLOSE_POSITION') continue;
+      const assetOut = String(a?.expectedOutputAsset ?? a?.outputAsset ?? NATIVE).toLowerCase();
+      if (assetOut !== NATIVE && !this.allowedAssets.includes(assetOut as Address)) {
+        throw new BadRequestException(`${assetOut} is not a supported asset; swaps can only buy ETH or listed tokens`);
+      }
+    }
+  }
+
+  /**
    * Reject a market-swap proposal whose token trades Uniswap cannot route for
    * this vault right now, using the same routing as execution. NFT sales and
    * position closes are not swaps and are left to their own checks.

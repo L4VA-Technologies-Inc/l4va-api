@@ -2790,6 +2790,13 @@ export class VaultsService {
 
     if (shouldFetchRebalances) {
       rebalanceEvents = await this.getIndexRebalancesActivity(vault_id);
+      // A basket buy / rebalance lists its own swaps; don't repeat each one as a separate item.
+      const legHashes = new Set(
+        rebalanceEvents.flatMap(run => run.legs.map(leg => leg.txHash?.toLowerCase()).filter(Boolean))
+      );
+      transactionEvents = transactionEvents.filter(
+        tx => tx.type !== TransactionType.evmSwap || !legHashes.has(tx.tx_hash?.toLowerCase())
+      );
     }
 
     if (shouldFetchProposals) {
