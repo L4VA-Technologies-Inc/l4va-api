@@ -669,6 +669,24 @@ export class GovernanceService {
       }
     }
 
+    // One termination vote at a time: two passing together would both try to terminate the vault.
+    if (vault.chain_type === ChainType.robinhood && createProposalReq.type === ProposalType.TERMINATION) {
+      const pendingTermination = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.TERMINATION,
+          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE]),
+        },
+        select: ['id', 'title', 'status'],
+      });
+      if (pendingTermination) {
+        throw new BadRequestException(
+          `A termination proposal ("${pendingTermination.title}") is already ${pendingTermination.status}. ` +
+            'Vote on it instead of creating another.'
+        );
+      }
+    }
+
     // Expansions run one at a time: a vault opens a new cycle only from locked. A second expansion
     // proposal while one is upcoming, in voting or passed but not yet run would only queue behind it.
     const expansionTypes = [ProposalType.EXPANSION, ProposalType.ACQUIRE_EXPANSION];

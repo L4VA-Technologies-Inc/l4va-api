@@ -7,6 +7,7 @@ import { parseAbi, type Address } from 'viem';
 import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
 import { EvmOpenCycleService, type EvmOpenCycleConfig } from '../../processing-tx/onchain/evm-open-cycle.service';
+import { readVaultFrozen } from '../../processing-tx/onchain/evm-pause.service';
 import {
   buildOperationId,
   encodeMockAdapterParams,
@@ -195,6 +196,18 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       select: ['id', 'vault_status', 'evm_current_cycle_id', 'vault_archetype', 'contract_address'],
     });
     if (!v) return null;
+    // While the guardian has frozen the vault (or every vault), every authority call reverts
+    // (VaultFrozen). A freeze can outlast the retry budget, so any proposal waits it out.
+    if (
+      v.contract_address &&
+      (await readVaultFrozen(this.contractReader.publicClient, v.contract_address as Address))
+    ) {
+      return {
+        reason: 'the vault is frozen by the guardian',
+        userFriendlyMessage:
+          'The vault is temporarily frozen for a safety review. This proposal runs once it is unfrozen.',
+      };
+    }
     const locked = v.vault_status === VaultStatus.locked;
     const afterExpansion =
       'This proposal runs automatically once the current expansion has finished and the vault is locked again.';
