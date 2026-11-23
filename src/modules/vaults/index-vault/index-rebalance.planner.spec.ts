@@ -267,4 +267,57 @@ describe('index rebalance planner', () => {
       expect(validateWeights({ ...base, weightsBps: [9950, 50] })).toMatch(/at least 1%/);
     });
   });
+
+  describe('50-asset basket', () => {
+    // 50 equal weights = 200 bps each; with a 10% reserve each target is 1.8% of
+    // NAV, below the 2% NAV tolerance. Regression: stage vault bought nothing.
+    const assets = Array.from({ length: 50 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, '0')}`);
+    const targets = assets.map(asset => ({ asset, weightBps: 200 }));
+    const o = opts({ reserveBps: 1000, driftToleranceBps: 200 });
+
+    it('buys every asset on the initial rebalance', () => {
+      const skipped: SkippedLeg[] = [];
+      const buys = planBuys({ nativeAvailable: 10n * ETH, holdings: [] }, targets, o, skipped);
+      expect(skipped).toEqual([]);
+      expect(buys).toHaveLength(50);
+      for (const b of buys) expect(b.nativeIn).toBe((18n * ETH) / 100n);
+    });
+
+    it('trades nothing when every asset sits on target', () => {
+      const state: PortfolioState = {
+        nativeAvailable: ETH,
+        holdings: assets.map(asset => ({ asset, balance: 1n, valueNative: (18n * ETH) / 100n })),
+      };
+      const skipped: SkippedLeg[] = [];
+      expect(planSells(state, targets, o, skipped)).toEqual([]);
+      expect(planBuys(state, targets, o, skipped)).toEqual([]);
+      expect(skipped).toEqual([]);
+    });
+
+    it('rebalances an asset that drifted more than half its target', () => {
+      // Asset 0 at 2× target, asset 1 at zero; NAV stays 10 ETH.
+      const holdings = assets.map((asset, i) => ({
+        asset,
+        balance: 100n,
+        valueNative: i === 0 ? (36n * ETH) / 100n : i === 1 ? 0n : (18n * ETH) / 100n,
+      }));
+      const state: PortfolioState = { nativeAvailable: ETH, holdings };
+      const skipped: SkippedLeg[] = [];
+      const sells = planSells(state, targets, o, skipped);
+      expect(sells.map(s => [s.asset, s.valueNative])).toEqual([[assets[0], (18n * ETH) / 100n]]);
+      planBuys({ ...state, nativeAvailable: ETH + (18n * ETH) / 100n }, targets, o, skipped);
+      expect(skipped.filter(s => s.reason !== 'within_tolerance')).toEqual([]);
+    });
+
+    it('still skips small drift inside half the target', () => {
+      const holdings = assets.map((asset, i) => ({
+        asset,
+        balance: 100n,
+        valueNative: i === 0 ? (13n * ETH) / 100n : (18n * ETH) / 100n,
+      }));
+      const skipped: SkippedLeg[] = [];
+      expect(planBuys({ nativeAvailable: ETH + (5n * ETH) / 100n, holdings }, targets, o, skipped)).toEqual([]);
+      expect(skipped.map(s => [s.asset, s.reason])).toEqual([[assets[0], 'within_tolerance']]);
+    });
+  });
 });

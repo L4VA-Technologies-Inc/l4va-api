@@ -84,6 +84,17 @@ export function targetValue(nav: bigint, reserveBps: number, weightBps: number):
   return (investable * BigInt(weightBps)) / BigInt(BPS);
 }
 
+/**
+ * Drift an asset may have before it is traded: `driftToleranceBps` of NAV, but
+ * never more than half the asset's own target. Without the cap a basket whose
+ * per-asset target is at or below the NAV tolerance (e.g. 50 equal weights at
+ * 2% each vs a 2% tolerance) would never buy anything, even from zero.
+ */
+export function assetTolerance(navTolerance: bigint, target: bigint): bigint {
+  const half = target / 2n;
+  return half < navTolerance ? half : navTolerance;
+}
+
 function bpsOf(part: bigint, whole: bigint): number {
   if (whole <= 0n) return 0;
   return Number((part * BigInt(BPS)) / whole);
@@ -169,9 +180,10 @@ export function planSells(
       continue;
     }
 
-    const excess = h.valueNative - targetValue(nav, opts.reserveBps, weightBps);
+    const target = targetValue(nav, opts.reserveBps, weightBps);
+    const excess = h.valueNative - target;
     if (excess <= 0n) continue;
-    if (excess <= tolerance) {
+    if (excess <= assetTolerance(tolerance, target)) {
       skipped?.push({
         asset,
         side: 'sell',
@@ -216,9 +228,10 @@ export function planBuys(
   const wants: PlannedBuy[] = [];
   for (const t of targets) {
     const asset = t.asset.toLowerCase();
-    const deficit = targetValue(nav, opts.reserveBps, t.weightBps) - (held.get(asset) ?? 0n);
+    const target = targetValue(nav, opts.reserveBps, t.weightBps);
+    const deficit = target - (held.get(asset) ?? 0n);
     if (deficit <= 0n) continue;
-    if (deficit <= tolerance) {
+    if (deficit <= assetTolerance(tolerance, target)) {
       skipped?.push({
         asset,
         side: 'buy',

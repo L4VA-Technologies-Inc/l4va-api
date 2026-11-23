@@ -1,5 +1,11 @@
 import { Transaction } from '@/database/transaction.entity';
-import { IndexLegSide, IndexLegStatus, IndexRebalanceStatus, IndexRebalanceTrigger } from '@/types/index-vault.types';
+import {
+  IndexLegSide,
+  IndexLegStatus,
+  type IndexRebalanceSkippedLeg,
+  IndexRebalanceStatus,
+  IndexRebalanceTrigger,
+} from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultFailureReason, VaultStatus } from '@/types/vault.types';
 
@@ -181,6 +187,8 @@ export interface IndexRebalanceActivityEvent {
   proposalId?: string | null;
   navNative?: string | null;
   legs: IndexRebalanceActivityLeg[];
+  /** Adjustments the planner left out on purpose; within-tolerance ones are omitted. */
+  skipped: IndexRebalanceSkippedLeg[];
   lastError?: string | null;
   completedAt?: Date | null;
   created_at: Date;
