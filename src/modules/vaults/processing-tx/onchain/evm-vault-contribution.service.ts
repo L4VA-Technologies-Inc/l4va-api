@@ -1,36 +1,50 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
-import { decodeEventLog, formatEther, parseEther, type Address, type Hex } from 'viem';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Brackets, Repository } from "typeorm";
+import {
+  decodeEventLog,
+  formatEther,
+  parseEther,
+  type Address,
+  type Hex,
+} from "viem";
 
-import { TransactionsService } from '../offchain-tx/transactions.service';
+import { TransactionsService } from "../offchain-tx/transactions.service";
 
-import { BlockchainWebhookService } from './blockchain-webhook.service';
-import { sumOutstandingAcquireSignatures } from './evm-acquire-signatures';
-import { EvmContractReader } from './evm-contract-reader.service';
-import { EvmContributionCapsService } from './evm-contribution-caps.service';
-import { deriveContributionNonce } from './evm-contribution-nonce';
-import { EvmKmsSigners } from './evm-kms-signers.service';
-import { readVaultFrozen } from './evm-pause.service';
-import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
-import { VAULT_ABI } from './vault.abi';
+import { BlockchainWebhookService } from "./blockchain-webhook.service";
+import {
+  evmMinAcquireWei,
+  sumOutstandingAcquireSignatures,
+} from "./evm-acquire-signatures";
+import { EvmContractReader } from "./evm-contract-reader.service";
+import { EvmContributionCapsService } from "./evm-contribution-caps.service";
+import { deriveContributionNonce } from "./evm-contribution-nonce";
+import { EvmKmsSigners } from "./evm-kms-signers.service";
+import { readVaultFrozen } from "./evm-pause.service";
+import { EvmVaultEventReconciler } from "./evm-vault-event-reconciler.service";
+import { VAULT_ABI } from "./vault.abi";
 
-import { Asset } from '@/database/asset.entity';
-import { Proposal } from '@/database/proposal.entity';
-import { Transaction } from '@/database/transaction.entity';
-import { Vault } from '@/database/vault.entity';
-import { AlertsService } from '@/modules/alerts/alerts.service';
-import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { Asset } from "@/database/asset.entity";
+import { Proposal } from "@/database/proposal.entity";
+import { Transaction } from "@/database/transaction.entity";
+import { Vault } from "@/database/vault.entity";
+import { AlertsService } from "@/modules/alerts/alerts.service";
+import { SystemSettingsService } from "@/modules/globals/system-settings/system-settings.service";
 import {
   EvmGovernanceFeeService,
   FeePaymentNotVisibleError,
   type EvmGovernanceFeePayment,
-} from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
-import { AssetType } from '@/types/asset.types';
-import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ChainType, VaultStatus } from '@/types/vault.types';
+} from "@/modules/vaults/phase-management/governance/evm-governance-fee.service";
+import { AssetType } from "@/types/asset.types";
+import { ProposalStatus, ProposalType } from "@/types/proposal.types";
+import { TransactionStatus, TransactionType } from "@/types/transaction.types";
+import { ChainType, VaultStatus } from "@/types/vault.types";
 
 /**
  * Numeric values mirror the on-chain enum in
@@ -44,10 +58,10 @@ export enum EvmAssetKind {
 }
 
 const KIND_TO_FUNCTION: Record<EvmAssetKind, string> = {
-  [EvmAssetKind.Native]: 'contributeNative',
-  [EvmAssetKind.ERC20]: 'contributeERC20',
-  [EvmAssetKind.ERC721]: 'contributeERC721',
-  [EvmAssetKind.ERC1155]: 'contributeERC1155',
+  [EvmAssetKind.Native]: "contributeNative",
+  [EvmAssetKind.ERC20]: "contributeERC20",
+  [EvmAssetKind.ERC721]: "contributeERC721",
+  [EvmAssetKind.ERC1155]: "contributeERC1155",
 };
 
 export interface EvmContributionAuthorization {
@@ -76,7 +90,12 @@ export interface EvmContributionCall {
    */
   approval:
     | { required: false }
-    | { required: true; standard: 'ERC20' | 'ERC721' | 'ERC1155'; token: Address; amountOrTokenId: string };
+    | {
+        required: true;
+        standard: "ERC20" | "ERC721" | "ERC1155";
+        token: Address;
+        amountOrTokenId: string;
+      };
   /** Native ETH value that must be forwarded with the call (contributeNative only). */
   value: string;
 }
@@ -99,34 +118,28 @@ export interface EvmContributionPrepareResponse {
 }
 
 /** Metadata `purpose` on the `payment` row that records a verified fee. */
-const CONTRIBUTION_FEE_PURPOSE = 'evm-contribution-fee';
+const CONTRIBUTION_FEE_PURPOSE = "evm-contribution-fee";
 
 // ---------------------------------------------------------------------------
 // EIP-712 typed data — MUST mirror
 // `vault-contract-solidity/src/libraries/VaultAuthorizations.sol`.
 // ---------------------------------------------------------------------------
 
-const DOMAIN_NAME = 'L4VA Vault';
-const DOMAIN_VERSION = '3';
+const DOMAIN_NAME = "L4VA Vault";
+const DOMAIN_VERSION = "3";
 
 const CONTRIBUTION_TYPES = {
   ContributionAuthorization: [
-    { name: 'cycleId', type: 'uint256' },
-    { name: 'contributor', type: 'address' },
-    { name: 'kind', type: 'uint8' },
-    { name: 'asset', type: 'address' },
-    { name: 'tokenId', type: 'uint256' },
-    { name: 'amount', type: 'uint256' },
-    { name: 'nonce', type: 'uint256' },
-    { name: 'deadline', type: 'uint256' },
+    { name: "cycleId", type: "uint256" },
+    { name: "contributor", type: "address" },
+    { name: "kind", type: "uint8" },
+    { name: "asset", type: "address" },
+    { name: "tokenId", type: "uint256" },
+    { name: "amount", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
   ],
 } as const;
-
-/** Minimum ETH per acquire. Override with EVM_MIN_ACQUIRE_WEI; matches the UI's 0.001 ETH by default. */
-export function evmMinAcquireWei(): bigint {
-  const raw = process.env.EVM_MIN_ACQUIRE_WEI?.trim();
-  return raw && /^\d+$/.test(raw) ? BigInt(raw) : 10n ** 15n;
-}
 
 /**
  * V3 EVM contribution flow.
@@ -164,8 +177,10 @@ export class EvmVaultContributionService {
   private readonly ACQUIRE_AUTH_VALIDITY_SECONDS = 15 * 60;
 
   constructor(
-    @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
-    @InjectRepository(Transaction) private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Vault)
+    private readonly vaultsRepository: Repository<Vault>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
@@ -175,13 +190,15 @@ export class EvmVaultContributionService {
     private readonly evmFeeService: EvmGovernanceFeeService,
     private readonly alerts: AlertsService,
     private readonly signers: EvmKmsSigners,
-    private readonly contributionCaps: EvmContributionCapsService
+    private readonly contributionCaps: EvmContributionCapsService,
   ) {
-    this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
+    this.chainId = Number(
+      this.configService.get<string>("EVM_CHAIN_ID") || "46630",
+    );
 
     // The key itself is in KMS (EVM_MINTING_SIGNER_KMS_KEY), checked against this address on load.
     if (!this.signers.mintingAddress) {
-      throw new Error('EVM_MINTING_SIGNER_ADDRESS is not configured.');
+      throw new Error("EVM_MINTING_SIGNER_ADDRESS is not configured.");
     }
     this.mintingSignerAddress = this.signers.mintingAddress;
   }
@@ -190,40 +207,62 @@ export class EvmVaultContributionService {
   // Public API
   // --------------------------------------------------------------------------
 
-  async prepareContribution(txId: string, userId: string, feeTxHash?: string): Promise<EvmContributionPrepareResponse> {
+  async prepareContribution(
+    txId: string,
+    userId: string,
+    feeTxHash?: string,
+  ): Promise<EvmContributionPrepareResponse> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
-      relations: ['user'],
+      relations: ["user"],
     });
-    if (!transaction) throw new NotFoundException('Transaction not found');
-    if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
-    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
-      throw new BadRequestException('Transaction is not a contribution or acquire');
+    if (!transaction) throw new NotFoundException("Transaction not found");
+    if (transaction.user_id !== userId)
+      throw new BadRequestException("Transaction does not belong to caller");
+    if (
+      transaction.type !== TransactionType.contribute &&
+      transaction.type !== TransactionType.acquire
+    ) {
+      throw new BadRequestException(
+        "Transaction is not a contribution or acquire",
+      );
     }
 
-    const vault = await this.vaultsRepository.findOne({ where: { id: transaction.vault_id } });
-    if (!vault) throw new NotFoundException('Vault not found');
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: transaction.vault_id },
+    });
+    if (!vault) throw new NotFoundException("Vault not found");
     if (vault.chain_type !== ChainType.robinhood) {
-      throw new BadRequestException('Vault is not an EVM (Robinhood) vault');
+      throw new BadRequestException("Vault is not an EVM (Robinhood) vault");
     }
     if (!this.systemSettingsService.evmEnabled) {
       throw new BadRequestException(
-        'Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.'
+        "Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.",
       );
     }
     if (!vault.contract_address) {
-      throw new BadRequestException('Vault contract address is not set — the vault may not yet be created on-chain');
+      throw new BadRequestException(
+        "Vault contract address is not set — the vault may not yet be created on-chain",
+      );
     }
 
     const isPaused = (await this.contractReader.publicClient.readContract({
       address: vault.contract_address as Address,
       abi: VAULT_ABI,
-      functionName: 'paused',
+      functionName: "paused",
     })) as boolean;
-    if (isPaused) throw new BadRequestException('Vault is paused — contributions are temporarily suspended');
-    if (await readVaultFrozen(this.contractReader.publicClient, vault.contract_address as Address)) {
+    if (isPaused)
       throw new BadRequestException(
-        'This vault is temporarily frozen by the protocol guardian — contributions are suspended'
+        "Vault is paused — contributions are temporarily suspended",
+      );
+    if (
+      await readVaultFrozen(
+        this.contractReader.publicClient,
+        vault.contract_address as Address,
+      )
+    ) {
+      throw new BadRequestException(
+        "This vault is temporarily frozen by the protocol guardian — contributions are suspended",
       );
     }
 
@@ -234,29 +273,40 @@ export class EvmVaultContributionService {
       vault.vault_status === VaultStatus.acquire_expansion &&
       vault.expansion_phase_start &&
       vault.expansion_duration != null
-        ? new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration)
+        ? new Date(vault.expansion_phase_start).getTime() +
+          Number(vault.expansion_duration)
         : null;
     if (expansionEndMs !== null && expansionEndMs <= Date.now()) {
-      throw new BadRequestException('The acquire expansion window has closed');
+      throw new BadRequestException("The acquire expansion window has closed");
     }
 
     const contributor = transaction.user?.address as Address | undefined;
-    if (!contributor) throw new BadRequestException('User has no EVM address on record');
+    if (!contributor)
+      throw new BadRequestException("User has no EVM address on record");
 
     // Metadata shape varies by tx type:
     //  - contribute: metadata is the raw assets array
     //  - acquire   : metadata is { assets: [...] } (see AcquireService)
     const meta = transaction.metadata as any;
-    const rawAssets: any[] = Array.isArray(meta) ? meta : Array.isArray(meta?.assets) ? meta.assets : [];
+    const rawAssets: any[] = Array.isArray(meta)
+      ? meta
+      : Array.isArray(meta?.assets)
+        ? meta.assets
+        : [];
     if (rawAssets.length === 0) {
-      throw new BadRequestException('Transaction has no assets to contribute');
+      throw new BadRequestException("Transaction has no assets to contribute");
     }
 
     const vaultAddress = vault.contract_address as Address;
 
     // Protocol fee gate. Signatures are what let the user contribute at all,
     // so withholding them until the fee is verified is the enforcement point.
-    const feePayment = await this.resolveFeePayment(transaction, rawAssets.length, contributor, feeTxHash);
+    const feePayment = await this.resolveFeePayment(
+      transaction,
+      rawAssets.length,
+      contributor,
+      feeTxHash,
+    );
     if (feePayment) {
       return {
         txId,
@@ -273,11 +323,12 @@ export class EvmVaultContributionService {
         (transaction.type === TransactionType.acquire
           ? this.ACQUIRE_AUTH_VALIDITY_SECONDS
           : this.AUTH_VALIDITY_SECONDS),
-      ...(expansionEndMs !== null ? [Math.floor(expansionEndMs / 1000)] : [])
+      ...(expansionEndMs !== null ? [Math.floor(expansionEndMs / 1000)] : []),
     );
 
     // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
-    const currentCycleId = await this.contractReader.currentCycleId(vaultAddress);
+    const currentCycleId =
+      await this.contractReader.currentCycleId(vaultAddress);
 
     const calls: EvmContributionCall[] = [];
     for (let i = 0; i < rawAssets.length; i++) {
@@ -302,7 +353,10 @@ export class EvmVaultContributionService {
         deadline,
       };
 
-      const signature = await this.signAuthorization(vaultAddress, authorization);
+      const signature = await this.signAuthorization(
+        vaultAddress,
+        authorization,
+      );
 
       calls.push({
         assetIndex: i,
@@ -310,7 +364,7 @@ export class EvmVaultContributionService {
         authorization,
         signature,
         approval: this.buildApproval(kind, assetAddress, amount, tokenId),
-        value: kind === EvmAssetKind.Native ? amount.toString() : '0',
+        value: kind === EvmAssetKind.Native ? amount.toString() : "0",
       });
     }
 
@@ -322,7 +376,7 @@ export class EvmVaultContributionService {
       const minWei = evmMinAcquireWei();
       if (nativeWei < minWei) {
         throw new BadRequestException(
-          `Minimum acquire is ${formatEther(minWei)} ETH (requested ${formatEther(nativeWei)} ETH)`
+          `Minimum acquire is ${formatEther(minWei)} ETH (requested ${formatEther(nativeWei)} ETH)`,
         );
       }
     }
@@ -333,16 +387,19 @@ export class EvmVaultContributionService {
       await this.contributionCaps.reserveForTransaction(
         vault,
         transaction.id,
-        calls.map(c => ({
+        calls.map((c) => ({
           kind: c.authorization.kind,
           asset: c.authorization.asset,
           amount: c.authorization.amount,
         })),
-        deadline
+        deadline,
       );
     }
 
-    if (vault.vault_status === VaultStatus.acquire_expansion && transaction.type === TransactionType.acquire) {
+    if (
+      vault.vault_status === VaultStatus.acquire_expansion &&
+      transaction.type === TransactionType.acquire
+    ) {
       const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
       await this.reserveAcquireExpansionSignature(
         vault.id,
@@ -350,7 +407,7 @@ export class EvmVaultContributionService {
         currentCycleId,
         transaction,
         nativeWei,
-        deadline
+        deadline,
       );
     }
 
@@ -377,12 +434,19 @@ export class EvmVaultContributionService {
     cycleId: bigint,
     transaction: Transaction,
     nativeWei: bigint,
-    deadline: number
+    deadline: number,
   ): Promise<void> {
-    const proposal = await this.transactionRepository.manager.findOne(Proposal, {
-      where: { vaultId, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
-      order: { executionDate: 'DESC' },
-    });
+    const proposal = await this.transactionRepository.manager.findOne(
+      Proposal,
+      {
+        where: {
+          vaultId,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: "DESC" },
+      },
+    );
     const cfg = proposal?.metadata?.acquireExpansion;
     const maxWei =
       cfg && !cfg.noMax && cfg.maxAda && nativeWei > 0n
@@ -393,39 +457,52 @@ export class EvmVaultContributionService {
     // Check-and-reserve must be atomic: two concurrent requests could each see room and together
     // overfill the maximum. A transaction-scoped advisory lock per vault serialises them across
     // every API instance; each one sees the reservation the previous one committed.
-    await this.transactionRepository.manager.transaction(async em => {
-      await em.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`acquire-expansion:${vaultId}`]);
+    await this.transactionRepository.manager.transaction(async (em) => {
+      await em.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        `acquire-expansion:${vaultId}`,
+      ]);
 
       if (maxWei !== null) {
-        const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
+        const { nativeCollected } = await this.contractReader.getCycle(
+          vaultAddress,
+          cycleId,
+        );
         const reservedWei = await sumOutstandingAcquireSignatures(
           em.getRepository(Transaction),
           vaultId,
-          transaction.id
+          transaction.id,
         );
         if (nativeCollected + reservedWei + nativeWei > maxWei) {
           const used = nativeCollected + reservedWei;
           const left = maxWei > used ? maxWei - used : 0n;
           throw new BadRequestException(
             nativeCollected >= maxWei
-              ? 'This acquire expansion has reached its maximum. No more ETH can be accepted.'
+              ? "This acquire expansion has reached its maximum. No more ETH can be accepted."
               : left === 0n
-                ? 'The rest of this acquire expansion is reserved by contributions in progress. ' +
-                  'Try again in a few minutes in case some of them are not completed.'
-                : `This acquire expansion can accept only ${formatEther(left)} more ETH right now.`
+                ? "The rest of this acquire expansion is reserved by contributions in progress. " +
+                  "Try again in a few minutes in case some of them are not completed."
+                : `This acquire expansion can accept only ${formatEther(left)} more ETH right now.`,
           );
         }
       }
 
       // Re-read under the lock so the reservation is written onto the latest metadata.
-      const current = await em.getRepository(Transaction).findOne({ where: { id: transaction.id } });
+      const current = await em
+        .getRepository(Transaction)
+        .findOne({ where: { id: transaction.id } });
       const meta = (current?.metadata ?? transaction.metadata) as any; // jsonb, as in confirmContribution
       if (meta && !Array.isArray(meta)) {
         await em
           .getRepository(Transaction)
           .update(
             { id: transaction.id },
-            { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
+            {
+              metadata: {
+                ...meta,
+                evmAuthDeadline: deadline,
+                evmAuthWei: nativeWei.toString(),
+              },
+            },
           );
       }
     });
@@ -441,16 +518,22 @@ export class EvmVaultContributionService {
     txId: string,
     txHash: string,
     userId: string,
-    childTxHashes?: string[]
+    childTxHashes?: string[],
   ): Promise<{ success: boolean; txHash: string }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
-      relations: ['user'],
+      relations: ["user"],
     });
-    if (!transaction) throw new NotFoundException('Transaction not found');
-    if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
-    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
-      throw new BadRequestException('Transaction is not a contribution or acquire');
+    if (!transaction) throw new NotFoundException("Transaction not found");
+    if (transaction.user_id !== userId)
+      throw new BadRequestException("Transaction does not belong to caller");
+    if (
+      transaction.type !== TransactionType.contribute &&
+      transaction.type !== TransactionType.acquire
+    ) {
+      throw new BadRequestException(
+        "Transaction is not a contribution or acquire",
+      );
     }
     await this.assertConfirmHashes(transaction, txHash, childTxHashes ?? []);
 
@@ -459,22 +542,34 @@ export class EvmVaultContributionService {
     // array (contribute) and { assets: [...] } (acquire).
     if (childTxHashes && childTxHashes.length > 0) {
       const meta = transaction.metadata as any;
-      const assets = Array.isArray(meta) ? meta : Array.isArray(meta?.assets) ? meta.assets : [];
+      const assets = Array.isArray(meta)
+        ? meta
+        : Array.isArray(meta?.assets)
+          ? meta.assets
+          : [];
       const preservedMeta = Array.isArray(meta) ? {} : { ...(meta || {}) };
       await this.transactionRepository.update(
         { id: txId },
         {
-          metadata: { ...preservedMeta, assets, evmChildTxHashes: childTxHashes },
-        }
+          metadata: {
+            ...preservedMeta,
+            assets,
+            evmChildTxHashes: childTxHashes,
+          },
+        },
       );
     }
 
     try {
       // The vault event reconciler may already have bound a contribution sent without /confirm.
-      const assetRows = await this.transactionRepository.manager.count(Asset, { where: { transaction: { id: txId } } });
+      const assetRows = await this.transactionRepository.manager.count(Asset, {
+        where: { transaction: { id: txId } },
+      });
       if (assetRows === 0) await this.transactionsService.createAssets(txId);
       await this.transactionsService.updateTransactionHash(txId, txHash);
-      this.logger.log(`EVM contribution confirmed — txId=${txId} txHash=${txHash}`);
+      this.logger.log(
+        `EVM contribution confirmed — txId=${txId} txHash=${txHash}`,
+      );
 
       // The Alchemy webhook almost always fires before this endpoint is called
       // (block confirmed → Alchemy fires → frontend calls /confirm). By the time
@@ -482,16 +577,23 @@ export class EvmVaultContributionService {
       // to find the TX. Immediately check whether the receipt is already
       // on-chain and apply the confirmation side-effects (lock assets, reward
       // event) right now instead of waiting for the next health-check cron.
-      this.applyReceiptIfAlreadyMined(txHash).catch(err =>
-        this.logger.warn(`Post-confirm catch-up failed for ${txHash}: ${(err as Error).message}`)
+      this.applyReceiptIfAlreadyMined(txHash).catch((err) =>
+        this.logger.warn(
+          `Post-confirm catch-up failed for ${txHash}: ${(err as Error).message}`,
+        ),
       );
 
       return { success: true, txHash };
     } catch (err) {
-      await this.transactionsService.updateTransactionStatusById(txId, TransactionStatus.failed);
-      this.logger.error(`Failed to confirm EVM contribution ${txId}: ${(err as Error).message}`);
-      void this.alerts.sendAlert('evm_contribution_confirm_failed', {
-        chain: 'robinhood',
+      await this.transactionsService.updateTransactionStatusById(
+        txId,
+        TransactionStatus.failed,
+      );
+      this.logger.error(
+        `Failed to confirm EVM contribution ${txId}: ${(err as Error).message}`,
+      );
+      void this.alerts.sendAlert("evm_contribution_confirm_failed", {
+        chain: "robinhood",
         txId,
         error: (err as Error).message,
       });
@@ -510,43 +612,64 @@ export class EvmVaultContributionService {
    * not visible yet is accepted: nothing is confirmed from the hash anyway — the vault event
    * reconciler confirms the transaction only from a contribution signed for it.
    */
-  private async assertConfirmHashes(transaction: Transaction, txHash: string, childTxHashes: string[]): Promise<void> {
+  private async assertConfirmHashes(
+    transaction: Transaction,
+    txHash: string,
+    childTxHashes: string[],
+  ): Promise<void> {
     const hashes = Array.from(new Set([txHash, ...childTxHashes]));
     for (const h of hashes) {
-      if (!/^0x[0-9a-fA-F]{64}$/.test(h)) throw new BadRequestException(`Invalid transaction hash ${h}`);
+      if (!/^0x[0-9a-fA-F]{64}$/.test(h))
+        throw new BadRequestException(`Invalid transaction hash ${h}`);
     }
-    const lower = hashes.map(h => h.toLowerCase());
+    const lower = hashes.map((h) => h.toLowerCase());
 
     const clash = await this.transactionRepository
-      .createQueryBuilder('t')
-      .where('t.id != :id', { id: transaction.id })
+      .createQueryBuilder("t")
+      .where("t.id != :id", { id: transaction.id })
       .andWhere(
-        new Brackets(qb =>
+        new Brackets((qb) =>
           qb
-            .where('LOWER(t.tx_hash) IN (:...lower)', { lower })
-            .orWhere(`jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...hashes]::text[])`, { hashes })
-            .orWhere(`jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...lower]::text[])`, { lower })
-        )
+            .where("LOWER(t.tx_hash) IN (:...lower)", { lower })
+            .orWhere(
+              `jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...hashes]::text[])`,
+              { hashes },
+            )
+            .orWhere(
+              `jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...lower]::text[])`,
+              { lower },
+            ),
+        ),
       )
       .getExists();
-    if (clash) throw new BadRequestException('This transaction hash is already recorded for another transaction');
+    if (clash)
+      throw new BadRequestException(
+        "This transaction hash is already recorded for another transaction",
+      );
 
-    let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>> | null = null;
+    let receipt: Awaited<
+      ReturnType<EvmContractReader["getTransactionReceipt"]>
+    > | null = null;
     try {
       receipt = await this.contractReader.getTransactionReceipt(txHash as Hex);
     } catch {
       receipt = null; // not mined or not visible yet
     }
-    if (!receipt || receipt.status !== 'success') return;
+    if (!receipt || receipt.status !== "success") return;
 
     const vault = await this.vaultsRepository.findOne({
       where: { id: transaction.vault_id },
-      select: ['id', 'contract_address'],
+      select: ["id", "contract_address"],
     });
     const vaultAddress = vault?.contract_address?.toLowerCase();
     const contributor = transaction.user?.address?.toLowerCase();
-    const hasOwnContribution = (receipt.logs ?? []).some(log => {
-      if (!vaultAddress || !contributor || String(log.address).toLowerCase() !== vaultAddress) return false;
+    const hasOwnContribution = (receipt.logs ?? []).some((log) => {
+      if (
+        !vaultAddress ||
+        !contributor ||
+        String(log.address).toLowerCase() !== vaultAddress
+      )
+        return false;
       try {
         const decoded = decodeEventLog({
           abi: VAULT_ABI,
@@ -557,23 +680,32 @@ export class EvmVaultContributionService {
           args?: { contributor?: string };
         };
         return (
-          decoded.eventName === 'ContributionMade' && String(decoded.args?.contributor).toLowerCase() === contributor
+          decoded.eventName === "ContributionMade" &&
+          String(decoded.args?.contributor).toLowerCase() === contributor
         );
       } catch {
         return false;
       }
     });
     if (!hasOwnContribution) {
-      throw new BadRequestException('This transaction is not a contribution of yours to this vault');
+      throw new BadRequestException(
+        "This transaction is not a contribution of yours to this vault",
+      );
     }
   }
 
   /** Per asset entry for contribute (NFT or FT type, quantity ignored), flat for acquire. */
-  private quoteProtocolFeeWei(type: TransactionType, assetCount: number): bigint {
+  private quoteProtocolFeeWei(
+    type: TransactionType,
+    assetCount: number,
+  ): bigint {
     if (type === TransactionType.acquire) {
       return BigInt(this.systemSettingsService.protocolAcquiresFeeEvm);
     }
-    return BigInt(assetCount) * BigInt(this.systemSettingsService.protocolFeePerAssetEvm);
+    return (
+      BigInt(assetCount) *
+      BigInt(this.systemSettingsService.protocolFeePerAssetEvm)
+    );
   }
 
   /**
@@ -586,13 +718,17 @@ export class EvmVaultContributionService {
     transaction: Transaction,
     assetCount: number,
     contributor: Address,
-    feeTxHash?: string
+    feeTxHash?: string,
   ): Promise<EvmGovernanceFeePayment | null> {
     const alreadyPaid = await this.transactionRepository
-      .createQueryBuilder('tx')
-      .where('tx.type = :type', { type: TransactionType.payment })
-      .andWhere("tx.metadata->>'purpose' = :purpose", { purpose: CONTRIBUTION_FEE_PURPOSE })
-      .andWhere("tx.metadata->>'contributionTxId' = :txId", { txId: transaction.id })
+      .createQueryBuilder("tx")
+      .where("tx.type = :type", { type: TransactionType.payment })
+      .andWhere("tx.metadata->>'purpose' = :purpose", {
+        purpose: CONTRIBUTION_FEE_PURPOSE,
+      })
+      .andWhere("tx.metadata->>'contributionTxId' = :txId", {
+        txId: transaction.id,
+      })
       .getExists();
     if (alreadyPaid) return null;
 
@@ -601,10 +737,17 @@ export class EvmVaultContributionService {
 
     const recipient = this.evmFeeService.feeRecipient;
     if (!feeTxHash) {
-      return { to: recipient, value: feeWei.toString(), chainId: this.chainId, feeAmount: feeWei.toString() };
+      return {
+        to: recipient,
+        value: feeWei.toString(),
+        chainId: this.chainId,
+        feeAmount: feeWei.toString(),
+      };
     }
 
-    let verified: Awaited<ReturnType<EvmGovernanceFeeService['verifyFeePayment']>>;
+    let verified: Awaited<
+      ReturnType<EvmGovernanceFeeService["verifyFeePayment"]>
+    >;
     try {
       verified = await this.evmFeeService.verifyFeePayment({
         txHash: feeTxHash,
@@ -614,7 +757,9 @@ export class EvmVaultContributionService {
       });
     } catch (error) {
       if (error instanceof FeePaymentNotVisibleError) {
-        throw new BadRequestException(`${error.message}. Please retry once the transaction is confirmed.`);
+        throw new BadRequestException(
+          `${error.message}. Please retry once the transaction is confirmed.`,
+        );
       }
       throw error;
     }
@@ -636,7 +781,7 @@ export class EvmVaultContributionService {
       },
     });
     this.logger.log(
-      `Protocol fee ${verified.txHash} (${verified.value} wei) recorded for EVM ${transaction.type} ${transaction.id}`
+      `Protocol fee ${verified.txHash} (${verified.value} wei) recorded for EVM ${transaction.type} ${transaction.id}`,
     );
     return null;
   }
@@ -648,29 +793,44 @@ export class EvmVaultContributionService {
    * webhook arrives before the frontend calls /confirm.
    */
   private async applyReceiptIfAlreadyMined(txHash: string): Promise<void> {
-    let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>;
+    let receipt: Awaited<
+      ReturnType<EvmContractReader["getTransactionReceipt"]>
+    >;
     try {
-      receipt = await this.contractReader.getTransactionReceipt(txHash as `0x${string}`);
+      receipt = await this.contractReader.getTransactionReceipt(
+        txHash as `0x${string}`,
+      );
     } catch {
       // Receipt not found or RPC error — health-check cron will retry.
       return;
     }
     if (!receipt) return;
 
-    const status = receipt.status === 'success' ? 1 : receipt.status === 'reverted' ? 0 : null;
+    const status =
+      receipt.status === "success"
+        ? 1
+        : receipt.status === "reverted"
+          ? 0
+          : null;
     if (status === null) return;
 
-    const logs: { topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
-      topics: (l.topics ?? []) as string[],
-      data: String(l.data ?? '0x'),
-    }));
+    const logs: { topics: string[]; data: string }[] = (receipt.logs ?? []).map(
+      (l: any) => ({
+        topics: (l.topics ?? []) as string[],
+        data: String(l.data ?? "0x"),
+      }),
+    );
 
-    this.logger.debug(`Post-confirm catch-up: applying receipt for ${txHash} (status=${receipt.status})`);
+    this.logger.debug(
+      `Post-confirm catch-up: applying receipt for ${txHash} (status=${receipt.status})`,
+    );
     await this.blockchainWebhookService.applyEvmTransactionStatus(
       txHash,
-      typeof receipt.transactionIndex === 'number' ? receipt.transactionIndex : 0,
+      typeof receipt.transactionIndex === "number"
+        ? receipt.transactionIndex
+        : 0,
       status === 1 ? TransactionStatus.confirmed : TransactionStatus.failed,
-      logs
+      logs,
     );
 
     // Also reconcile vault events (ContributionMade, etc.) so the
@@ -678,26 +838,32 @@ export class EvmVaultContributionService {
     // health-check cron needed for the happy path.
     if (status === 1) {
       const vaultLogs = (receipt.logs ?? []).map((l: any) => ({
-        address: String(l.address ?? ''),
-        data: String(l.data ?? '0x'),
+        address: String(l.address ?? ""),
+        data: String(l.data ?? "0x"),
         topics: (l.topics ?? []) as string[],
         txHash,
-        blockNumber: receipt.blockNumber != null ? String(receipt.blockNumber) : null,
-        logIndex: typeof l.logIndex === 'number' ? l.logIndex : null,
+        blockNumber:
+          receipt.blockNumber != null ? String(receipt.blockNumber) : null,
+        logIndex: typeof l.logIndex === "number" ? l.logIndex : null,
       }));
       try {
         const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
         this.logger.debug(
-          `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
+          `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`,
         );
       } catch (err) {
         // Non-fatal — backfill cron is the safety net.
-        this.logger.warn(`Post-confirm reconciler failed for ${txHash}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Post-confirm reconciler failed for ${txHash}: ${(err as Error).message}`,
+        );
       }
     }
   }
 
-  private async signAuthorization(vaultAddress: Address, auth: EvmContributionAuthorization): Promise<Hex> {
+  private async signAuthorization(
+    vaultAddress: Address,
+    auth: EvmContributionAuthorization,
+  ): Promise<Hex> {
     const account = await this.signers.minting();
     return account.signTypedData({
       domain: {
@@ -707,7 +873,7 @@ export class EvmVaultContributionService {
         verifyingContract: vaultAddress,
       },
       types: CONTRIBUTION_TYPES,
-      primaryType: 'ContributionAuthorization',
+      primaryType: "ContributionAuthorization",
       message: {
         cycleId: BigInt(auth.cycleId),
         contributor: auth.contributor,
@@ -723,32 +889,41 @@ export class EvmVaultContributionService {
 
   private resolveAssetKind(asset: any): EvmAssetKind {
     // Explicit override wins.
-    const explicit = (asset.standard || asset.metadata?.standard || asset.metadata?.onchainMetadata?.tokenType) as
-      | string
-      | undefined;
+    const explicit = (asset.standard ||
+      asset.metadata?.standard ||
+      asset.metadata?.onchainMetadata?.tokenType) as string | undefined;
     if (explicit) {
       const upper = String(explicit).toUpperCase();
-      if (upper === 'ERC20') return EvmAssetKind.ERC20;
-      if (upper === 'ERC721') return EvmAssetKind.ERC721;
-      if (upper === 'ERC1155') return EvmAssetKind.ERC1155;
-      if (upper === 'NATIVE' || upper === 'ETH') return EvmAssetKind.Native;
+      if (upper === "ERC20") return EvmAssetKind.ERC20;
+      if (upper === "ERC721") return EvmAssetKind.ERC721;
+      if (upper === "ERC1155") return EvmAssetKind.ERC1155;
+      if (upper === "NATIVE" || upper === "ETH") return EvmAssetKind.Native;
     }
 
     // Fall back to legacy AssetType.
-    if (asset.type === AssetType.ADA || asset.type === 'ada') return EvmAssetKind.Native;
+    if (asset.type === AssetType.ADA || asset.type === "ada")
+      return EvmAssetKind.Native;
     // AcquireModal (EVM branch) sends { type: 'ETH', ... } — treat as Native.
-    if (asset.type === 'ETH' || asset.type === 'eth') return EvmAssetKind.Native;
-    if (asset.type === AssetType.FT || asset.type === 'ft') return EvmAssetKind.ERC20;
-    if (asset.type === AssetType.NFT || asset.type === 'nft') return EvmAssetKind.ERC721;
+    if (asset.type === "ETH" || asset.type === "eth")
+      return EvmAssetKind.Native;
+    if (asset.type === AssetType.FT || asset.type === "ft")
+      return EvmAssetKind.ERC20;
+    if (asset.type === AssetType.NFT || asset.type === "nft")
+      return EvmAssetKind.ERC721;
 
-    throw new BadRequestException(`Cannot resolve EVM AssetKind for asset: ${JSON.stringify(asset)}`);
+    throw new BadRequestException(
+      `Cannot resolve EVM AssetKind for asset: ${JSON.stringify(asset)}`,
+    );
   }
 
   private resolveAssetAddress(kind: EvmAssetKind, asset: any): Address {
-    if (kind === EvmAssetKind.Native) return '0x0000000000000000000000000000000000000000';
-    const raw = (asset.policyId || asset.metadata?.policyId || '') as string;
+    if (kind === EvmAssetKind.Native)
+      return "0x0000000000000000000000000000000000000000";
+    const raw = (asset.policyId || asset.metadata?.policyId || "") as string;
     if (!raw || !/^0x[0-9a-fA-F]{40}$/.test(raw)) {
-      throw new BadRequestException(`Invalid EVM asset address for kind=${EvmAssetKind[kind]}: ${raw}`);
+      throw new BadRequestException(
+        `Invalid EVM asset address for kind=${EvmAssetKind[kind]}: ${raw}`,
+      );
     }
     return raw.toLowerCase() as Address;
   }
@@ -757,14 +932,21 @@ export class EvmVaultContributionService {
     if (kind === EvmAssetKind.Native || kind === EvmAssetKind.ERC20) return 0n;
     // ERC721 / ERC1155: tokenId is in `assetName` (numeric string) or
     // `metadata.onchainMetadata.tokenId`.
-    const raw = asset.assetName ?? asset.metadata?.onchainMetadata?.tokenId ?? asset.tokenId;
-    if (raw === undefined || raw === null || String(raw).trim() === '') {
-      throw new BadRequestException(`Missing tokenId for ${EvmAssetKind[kind]} contribution`);
+    const raw =
+      asset.assetName ??
+      asset.metadata?.onchainMetadata?.tokenId ??
+      asset.tokenId;
+    if (raw === undefined || raw === null || String(raw).trim() === "") {
+      throw new BadRequestException(
+        `Missing tokenId for ${EvmAssetKind[kind]} contribution`,
+      );
     }
     try {
       return BigInt(raw);
     } catch {
-      throw new BadRequestException(`Invalid tokenId for ${EvmAssetKind[kind]} contribution: ${raw}`);
+      throw new BadRequestException(
+        `Invalid tokenId for ${EvmAssetKind[kind]} contribution: ${raw}`,
+      );
     }
   }
 
@@ -772,7 +954,7 @@ export class EvmVaultContributionService {
     if (kind === EvmAssetKind.ERC721) return 1n;
 
     const raw = asset.quantity ?? asset.amount ?? 0;
-    const rawText = typeof raw === 'string' ? raw.trim() : String(raw);
+    const rawText = typeof raw === "string" ? raw.trim() : String(raw);
     const isIntegerString = /^[0-9]+$/.test(rawText);
     // Backward-compatible heuristic: old acquire rows may already store wei as
     // a large integer string but miss metadata.rawWei=true.
@@ -781,10 +963,15 @@ export class EvmVaultContributionService {
     // Native ETH: AcquireModal sends display units (e.g. 0.05 ETH). Convert to
     // wei via parseEther. Callers who already have wei can pass a string like
     // "50000000000000000" and set asset.metadata.rawWei = true to bypass.
-    if (kind === EvmAssetKind.Native && asset.metadata?.rawWei !== true && !isLikelyRawWei) {
+    if (
+      kind === EvmAssetKind.Native &&
+      asset.metadata?.rawWei !== true &&
+      !isLikelyRawWei
+    ) {
       try {
         const value = parseEther(String(raw));
-        if (value <= 0n) throw new BadRequestException('Native amount must be > 0');
+        if (value <= 0n)
+          throw new BadRequestException("Native amount must be > 0");
         return value;
       } catch (err) {
         if (err instanceof BadRequestException) throw err;
@@ -796,11 +983,16 @@ export class EvmVaultContributionService {
     // (decimal-scaled for FTs, wei for native when rawWei=true).
     let value: bigint;
     try {
-      value = BigInt(typeof raw === 'number' ? Math.trunc(raw) : String(raw));
+      value = BigInt(typeof raw === "number" ? Math.trunc(raw) : String(raw));
     } catch {
-      throw new BadRequestException(`Invalid amount for ${EvmAssetKind[kind]} contribution: ${raw}`);
+      throw new BadRequestException(
+        `Invalid amount for ${EvmAssetKind[kind]} contribution: ${raw}`,
+      );
     }
-    if (value <= 0n) throw new BadRequestException(`Amount must be > 0 for ${EvmAssetKind[kind]} contribution`);
+    if (value <= 0n)
+      throw new BadRequestException(
+        `Amount must be > 0 for ${EvmAssetKind[kind]} contribution`,
+      );
     return value;
   }
 
@@ -808,15 +1000,30 @@ export class EvmVaultContributionService {
     kind: EvmAssetKind,
     asset: Address,
     amount: bigint,
-    tokenId: bigint
-  ): EvmContributionCall['approval'] {
+    tokenId: bigint,
+  ): EvmContributionCall["approval"] {
     switch (kind) {
       case EvmAssetKind.ERC20:
-        return { required: true, standard: 'ERC20', token: asset, amountOrTokenId: amount.toString() };
+        return {
+          required: true,
+          standard: "ERC20",
+          token: asset,
+          amountOrTokenId: amount.toString(),
+        };
       case EvmAssetKind.ERC721:
-        return { required: true, standard: 'ERC721', token: asset, amountOrTokenId: tokenId.toString() };
+        return {
+          required: true,
+          standard: "ERC721",
+          token: asset,
+          amountOrTokenId: tokenId.toString(),
+        };
       case EvmAssetKind.ERC1155:
-        return { required: true, standard: 'ERC1155', token: asset, amountOrTokenId: '0' };
+        return {
+          required: true,
+          standard: "ERC1155",
+          token: asset,
+          amountOrTokenId: "0",
+        };
       case EvmAssetKind.Native:
       default:
         return { required: false };
