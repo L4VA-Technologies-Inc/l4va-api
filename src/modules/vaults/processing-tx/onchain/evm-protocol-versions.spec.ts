@@ -114,8 +114,8 @@ describe('termination asset caps', () => {
     try {
       const ref = { chain_id: 46630, evm_protocol_version: 9_999 };
       expect(terminationAssetCapFor(ref)).toBe(56);
-      expect(basketAssetCapFor(ref)).toBe(55);
-      expect(maxBasketAssetCapAnyVersion()).toBe(55);
+      expect(basketAssetCapFor(ref)).toBe(50);
+      expect(maxBasketAssetCapAnyVersion()).toBe(50);
     } finally {
       EVM_PROTOCOL_VERSIONS[46630].pop();
     }
