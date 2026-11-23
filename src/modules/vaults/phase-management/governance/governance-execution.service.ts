@@ -636,7 +636,9 @@ export class GovernanceExecutionService {
         where: {
           vaultId,
           id: Not(terminationProposalId),
-          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE]),
+          // PASSED too: a passed-but-unexecuted proposal (e.g. a distribution waiting for a retry)
+          // would otherwise still run, and could reserve the funds termination needs.
+          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.PASSED]),
         },
         select: ['id', 'metadata'],
       });
@@ -660,7 +662,7 @@ export class GovernanceExecutionService {
           })
           .where('id = :id AND status IN (:...statuses)', {
             id: other.id,
-            statuses: [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE],
+            statuses: [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.PASSED],
           })
           .execute();
         if (!result.affected) continue;
@@ -764,8 +766,11 @@ export class GovernanceExecutionService {
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
-        // Clear executionError from metadata on successful execution
-        const updatedMetadata = { ...proposal.metadata };
+        // Clear executionError from metadata on successful execution. Re-read the row first:
+        // execution writes its own results into metadata (e.g. `evmDistribution` with the
+        // openDistribution tx hash), and the in-memory copy predates them.
+        const fresh = await this.proposalRepository.findOne({ where: { id: proposalId } });
+        const updatedMetadata = { ...(fresh?.metadata ?? proposal.metadata) };
         delete updatedMetadata.executionError;
 
         await this.proposalRepository.update(

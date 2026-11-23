@@ -173,7 +173,7 @@ jobs:
             echo "Disk usage elevated. Running cleanup..."
             docker container prune -f || true
             docker image prune -f || true
-            docker builder prune -f || true
+            docker builder prune -f --keep-storage 4GB || true
             echo "Cleanup completed"
           else
             echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."
@@ -332,7 +332,7 @@ jobs:
             echo "Disk usage elevated. Running cleanup..."
             docker container prune -f || true
             docker image prune -f || true
-            docker builder prune -f || true
+            docker builder prune -f --keep-storage 4GB || true
             echo "Cleanup completed"
           else
             echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."
@@ -490,7 +490,7 @@ jobs:
             echo "Disk usage elevated. Running cleanup..."
             docker container prune -f || true
             docker image prune -f || true
-            docker builder prune -f || true
+            docker builder prune -f --keep-storage 4GB || true
             echo "Cleanup completed"
           else
             echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."

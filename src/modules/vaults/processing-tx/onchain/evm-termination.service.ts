@@ -134,6 +134,15 @@ export class EvmTerminationService {
     // vault over it would be stuck in TerminationPreparing, so refuse here, while it is still
     // Locked and the surplus can be sold.
     const capacity = await this.terminationCapacity(vaultAddress);
+    // `beginTermination` reverts on an empty asset list (BatchEmpty). Pots reserved by open
+    // distributions are not free, so a vault whose balance is all reserved would enter
+    // TerminationPreparing and never leave it. Refuse while it is still Locked.
+    if (capacity.distributable === 0) {
+      throw new BadRequestException(
+        `Vault ${vaultAddress} has nothing free to distribute at termination (open distribution pots are ` +
+          `reserved for their holders). Wait for those payouts or add assets, then terminate.`
+      );
+    }
     if (capacity.distributable > capacity.cap) {
       throw new BadRequestException(
         `Vault ${vaultAddress} holds ${capacity.distributable} distributable assets (native included), above its ` +

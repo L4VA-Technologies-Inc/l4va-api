@@ -19,6 +19,7 @@ import { formatUnits } from 'viem';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
+import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
@@ -102,6 +103,9 @@ import { VoteType } from '@/types/vote.types';
 
 /** `address(0)` — native asset sentinel on EVM vaults. */
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const EMPTY_VAULT_TERMINATION_REASON =
+  'The vault holds nothing to distribute, so there is nothing to terminate. ' +
+  'Holders can open an expansion to bring new assets in, if the vault allows it.';
 
 /**
  * How long an unpaid index re-weight keeps the vault's single re-weight slot.
@@ -598,6 +602,7 @@ export class GovernanceService {
       | 'chain_type'
       | 'chain_id'
       | 'evm_protocol_version'
+      | 'contract_address'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -611,6 +616,7 @@ export class GovernanceService {
         'chain_type',
         'chain_id',
         'evm_protocol_version',
+        'contract_address',
       ],
       relations: ['assets_whitelist'],
     });
@@ -633,6 +639,20 @@ export class GovernanceService {
       vault.vault_status !== VaultStatus.acquire_expansion
     ) {
       throw new BadRequestException('Governance is only available for locked, expansion, or acquire expansion vaults');
+    }
+
+    // A passed termination is a one-way door: the vault's DB status only becomes `terminating`
+    // once rates are committed, so until then block new proposals here. Anything executed in
+    // that window (a distribution, a swap) would fail on-chain or eat the termination pot.
+    const terminationUnderway = await this.proposalRepository.exist({
+      where: {
+        vaultId,
+        proposalType: ProposalType.TERMINATION,
+        status: In([ProposalStatus.PASSED, ProposalStatus.EXECUTED]),
+      },
+    });
+    if (terminationUnderway) {
+      throw new BadRequestException('This vault is being terminated; new proposals are not accepted.');
     }
 
     // During expansion or acquire expansion, only Distribution proposals are allowed
@@ -939,6 +959,14 @@ export class GovernanceService {
       }
 
       case ProposalType.TERMINATION: {
+        // Termination redeems VT for the vault's free assets; with none it cannot run on-chain
+        // (`beginTermination` needs at least one asset), so refuse at creation.
+        if (vault.chain_type === ChainType.robinhood && vault.contract_address) {
+          const free = await this.evmFreeTerminationAssets(vault.contract_address);
+          if (free.native === 0n && free.erc20Count === 0) {
+            throw new BadRequestException(EMPTY_VAULT_TERMINATION_REASON);
+          }
+        }
         if (createProposalReq.metadata) {
           proposal.terminationDate = createProposalReq.metadata.terminationDate
             ? new Date(createProposalReq.metadata.terminationDate)
@@ -3002,9 +3030,24 @@ export class GovernanceService {
       });
     }
 
+    const evmMeta = proposal.metadata?.evmDistribution;
+    const evmDistribution =
+      proposal.proposalType === ProposalType.DISTRIBUTION && proposal.vault?.chain_type === ChainType.robinhood
+        ? {
+            asset: evmMeta?.asset ?? proposal.metadata?.distributionAsset ?? ZERO_ADDRESS,
+            // Requested pot before the fee; `netPot` is what holders share once opened.
+            requestedAmount: proposal.metadata?.distributionAmount ?? null,
+            netPot: evmMeta?.netPot ?? null,
+            openTxHash: evmMeta?.txHash ?? null,
+            payouts: evmMeta?.payouts ?? [],
+            paidOutAt: evmMeta?.autoClaimCompletedAt ?? null,
+          }
+        : undefined;
+
     const response = {
       proposal: proposalDto,
       evmDistributionTiming,
+      evmDistribution,
       votes,
       totals,
       canVote,
@@ -3834,9 +3877,8 @@ export class GovernanceService {
         // as a contributed asset row (index vaults already list their reserve above).
         if (vault.vault_archetype !== VaultArchetype.index_weighted && vault.contract_address) {
           try {
-            const wei = await this.evmContractReader.publicClient.getBalance({
-              address: vault.contract_address as `0x${string}`,
-            });
+            // Free ETH only: pots reserved for open distributions are not part of termination.
+            const wei = (await this.evmFreeTerminationAssets(vault.contract_address)).native;
             if (wei > 0n) {
               assetDtos.push({
                 id: 'onchain:native',
@@ -3873,6 +3915,12 @@ export class GovernanceService {
       // Get LP validation info
       const lpValidation = await this.validateLpForTermination(vault);
 
+      let emptyVault = false;
+      if (vault.chain_type === ChainType.robinhood && vault.contract_address) {
+        const free = await this.evmFreeTerminationAssets(vault.contract_address).catch(() => null);
+        emptyVault = free !== null && free.native === 0n && free.erc20Count === 0;
+      }
+
       return {
         assets: assetDtos,
         lpInfo: {
@@ -3882,9 +3930,9 @@ export class GovernanceService {
           totalUnrecoverableAda: lpValidation.totalUnrecoverableAda,
         },
         validation: {
-          canCreateProposal: lpValidation.canTerminate,
+          canCreateProposal: lpValidation.canTerminate && !emptyVault,
           warnings: lpValidation.warning ? [lpValidation.warning] : [],
-          blockingReason: lpValidation.blockingReason,
+          blockingReason: emptyVault ? EMPTY_VAULT_TERMINATION_REASON : lpValidation.blockingReason,
         },
         ...(evm ? { evm } : {}),
       };
@@ -3904,6 +3952,28 @@ export class GovernanceService {
    * Validate LP pools for termination (internal helper method)
    * Returns LP pool information and validation status
    */
+  /** What an EVM vault could pay out at termination: free ETH and the ERC-20s with a free balance. */
+  private async evmFreeTerminationAssets(vaultAddress: string): Promise<{ native: bigint; erc20Count: number }> {
+    const client = this.evmContractReader.publicClient;
+    const address = vaultAddress as `0x${string}`;
+    const [native, tokens] = await Promise.all([
+      client.readContract({ address, abi: VAULT_ABI, functionName: 'availableNativeForOperations' }) as Promise<bigint>,
+      client.readContract({ address, abi: VAULT_ABI, functionName: 'custodyTokens' }) as Promise<`0x${string}`[]>,
+    ]);
+    const free = await Promise.all(
+      tokens.map(
+        token =>
+          client.readContract({
+            address,
+            abi: VAULT_ABI,
+            functionName: 'availableErc20ForOperations',
+            args: [token],
+          }) as Promise<bigint>
+      )
+    );
+    return { native, erc20Count: free.filter(f => f > 0n).length };
+  }
+
   private async validateLpForTermination(vault: Vault): Promise<{
     hasLp: boolean;
     canTerminate: boolean;

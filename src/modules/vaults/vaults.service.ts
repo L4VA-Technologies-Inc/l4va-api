@@ -3443,6 +3443,14 @@ export class VaultsService {
         creatorId: proposal.creatorId,
         created_at: new Date(latest),
         executionError: proposal.metadata?.executionError?.message,
+        distribution: proposal.metadata?.evmDistribution
+          ? {
+              asset: proposal.metadata.evmDistribution.asset,
+              netPot: proposal.metadata.evmDistribution.netPot,
+              openTxHash: proposal.metadata.evmDistribution.txHash ?? null,
+              payouts: proposal.metadata.evmDistribution.payouts ?? [],
+            }
+          : undefined,
       });
     }
 
