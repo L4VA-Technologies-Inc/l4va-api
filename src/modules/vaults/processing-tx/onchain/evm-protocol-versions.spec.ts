@@ -102,10 +102,10 @@ describe('EVM_PROTOCOL_VERSIONS numbering (deployment ids)', () => {
 });
 
 describe('termination asset caps', () => {
-  it('only stage id 15 on 4663 has the raised cap of 56; every other deployment has 16', () => {
+  it('only ids 15 (stage) and 16 (production) on 4663 have the raised cap of 56; every other deployment has 16', () => {
     for (const [chain, list] of Object.entries(EVM_PROTOCOL_VERSIONS)) {
       for (const v of list) {
-        const want = chain === '4663' && v.version === 15 ? 56 : 16;
+        const want = chain === '4663' && (v.version === 15 || v.version === 16) ? 56 : 16;
         expect(v.maxTerminationAssets ?? LEGACY_MAX_TERMINATION_ASSETS).toBe(want);
       }
     }
