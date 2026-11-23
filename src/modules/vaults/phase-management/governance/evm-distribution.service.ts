@@ -37,6 +37,10 @@ const AUTO_CLAIM_MAX_FAILURES_PER_HOLDER = 5;
 /** Shared across API replicas: only one worker sends claims at a time (one admin key, one nonce). */
 const AUTO_CLAIM_LOCK_KEY = 'evm:distribution:auto-claim:lock';
 const AUTO_CLAIM_LOCK_TTL_SECONDS = 300;
+const SWEEP_LOCK_KEY = 'evm:distribution:sweep:lock';
+const SWEEP_LOCK_TTL_SECONDS = 600;
+/** Mirrors `Vault.sol#MAX_ACTIVE_DISTRIBUTIONS` (V13): a slot is freed by a cancel or a sweep. */
+export const MAX_ACTIVE_DISTRIBUTIONS = 8;
 
 export interface EvmDistributionValidation {
   valid: boolean;
@@ -169,6 +173,34 @@ export class EvmDistributionService {
         ...base,
         reason: `Requested ${requested} exceeds the vault's available ${assetAddress === zeroAddress ? 'native' : 'token'} balance of ${available}`,
       };
+    }
+
+    // V13 holds at most MAX_ACTIVE_DISTRIBUTIONS open pots; one more reverts on execution. A slot
+    // frees when a pot is cancelled or swept after its claim window. Passed proposals that have not
+    // opened their pot yet take a slot too.
+    if (vaultIsV13(vault)) {
+      const active = Number(
+        (await this.contractReader.publicClient.readContract({
+          address: vaultAddress,
+          abi: VAULT_V13_ABI,
+          functionName: 'activeDistributions',
+          args: [],
+        })) as bigint
+      );
+      const queued = await this.proposalRepository
+        .createQueryBuilder('p')
+        .where('p.vault_id = :vaultId', { vaultId })
+        .andWhere('p.proposal_type = :type', { type: ProposalType.DISTRIBUTION })
+        .andWhere('p.status IN (:...statuses)', { statuses: [ProposalStatus.ACTIVE, ProposalStatus.PASSED] })
+        .getCount();
+      if (active + queued >= MAX_ACTIVE_DISTRIBUTIONS) {
+        return {
+          ...base,
+          reason:
+            `This vault already has ${active} open distribution(s) and ${queued} in voting or awaiting execution; ` +
+            `at most ${MAX_ACTIVE_DISTRIBUTIONS} can be open at once. A slot frees when a distribution's claim window ends.`,
+        };
+      }
     }
 
     return { ...base, valid: true };
@@ -371,6 +403,87 @@ export class EvmDistributionService {
   }
 
   private autoClaimRunning = false;
+
+  /**
+   * Hourly: close every EVM distribution whose claim window has ended with `sweepDistributionRemainder`.
+   * That frees its slot (`activeDistributions`, at most 8 on V13) and sends what nobody claimed to the
+   * vault's treasury, as the contract defines. Auto-claim pays every snapshot holder first, so the
+   * remainder is usually only shares nobody could be paid (failed claims, excluded holders, rounding).
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async sweepEndedDistributions(): Promise<void> {
+    if (['false', '0'].includes(process.env.EVM_DISTRIBUTION_SWEEP ?? '')) return;
+    const lockToken = `${process.pid}:${Date.now()}`;
+    const locked = await this.redis
+      .set(SWEEP_LOCK_KEY, lockToken, 'EX', SWEEP_LOCK_TTL_SECONDS, 'NX')
+      .catch(() => null);
+    if (locked !== 'OK') return;
+    try {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const proposals = await this.proposalRepository
+        .createQueryBuilder('p')
+        .innerJoin(Vault, 'v', 'v.id = p.vault_id')
+        .where('p.proposal_type = :type', { type: ProposalType.DISTRIBUTION })
+        .andWhere('p.status = :status', { status: ProposalStatus.EXECUTED })
+        .andWhere('v.chain_type = :chain', { chain: ChainType.robinhood })
+        .andWhere("(p.metadata -> 'evmDistribution' ->> 'distributionId') IS NOT NULL")
+        .andWhere("(p.metadata -> 'evmDistribution' ->> 'sweptAt') IS NULL")
+        .andWhere("(p.metadata -> 'evmDistribution' ->> 'deadline')::bigint <= :now", { now: nowSec })
+        .getMany();
+      for (const proposal of proposals) {
+        await this.sweepDistribution(proposal).catch(err =>
+          this.logger.error(`Distribution sweep for proposal ${proposal.id} failed: ${(err as Error).message}`)
+        );
+      }
+    } catch (err) {
+      this.logger.error(`EVM distribution sweep failed: ${(err as Error).message}`);
+    } finally {
+      if ((await this.redis.get(SWEEP_LOCK_KEY).catch(() => null)) === lockToken) {
+        await this.redis.del(SWEEP_LOCK_KEY).catch(() => undefined);
+      }
+    }
+  }
+
+  private async sweepDistribution(proposal: Proposal): Promise<void> {
+    const dist = proposal.metadata?.evmDistribution;
+    if (!dist?.distributionId) return;
+    const vault = await this.requireEvmVault(proposal.vaultId);
+    const vaultAddress = vault.contract_address as Address;
+    const id = BigInt(dist.distributionId);
+
+    let txHash: string | null = null;
+    try {
+      const result = await this.adminSigner.sendAndConfirm(
+        { address: vaultAddress, abi: VAULT_ABI, functionName: 'sweepDistributionRemainder', args: [id] },
+        ['DistributionRemainderSwept'],
+        async () => {}
+      );
+      txHash = result.hash;
+    } catch (err) {
+      // Swept earlier (e.g. the receipt or the DB write was lost): only the bookkeeping is missing.
+      if (!/DistributionAlreadySwept/.test((err as Error).message)) throw err;
+    }
+
+    const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id } });
+    if (!fresh?.metadata?.evmDistribution) return;
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...fresh.metadata,
+          evmDistribution: {
+            ...fresh.metadata.evmDistribution,
+            sweptAt: new Date().toISOString(),
+            sweepTxHash: txHash,
+          },
+        },
+      }
+    );
+    this.logger.log(
+      `Distribution ${dist.distributionId} on ${vaultAddress} swept after its claim window` +
+        (txHash ? ` tx=${txHash}` : ' (already swept on-chain)')
+    );
+  }
 
   /** Pays up to `budget` holders of one distribution; returns how many transactions it sent. */
   private async autoClaimDistribution(proposal: Proposal, budget: number): Promise<number> {

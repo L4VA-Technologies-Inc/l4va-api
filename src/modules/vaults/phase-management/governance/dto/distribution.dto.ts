@@ -117,6 +117,9 @@ export interface EvmDistributionMetadata {
   autoClaimFailures?: Record<string, number>;
   /** Payout transactions sent by the auto-claim cron (`claimDistributionFor`), oldest first. */
   payouts?: EvmDistributionPayout[];
+  /** Set once `sweepDistributionRemainder` ran after the deadline (frees the vault's distribution slot). */
+  sweptAt?: string;
+  sweepTxHash?: string | null;
 }
 
 export interface EvmDistributionPayout {

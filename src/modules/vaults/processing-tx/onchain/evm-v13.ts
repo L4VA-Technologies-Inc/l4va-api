@@ -166,6 +166,7 @@ const V13_ENTRIES = [
   view('lpNativeBudget', [], [u256('')]),
   view('lpSaleProceeds', [], [u256('')]),
   view('raiseCycleId', [], [u256('')]),
+  view('activeDistributions', [], [u256('')]),
   view('lpSeeded', [], [{ name: '', type: 'bool' }]),
   write('swapForLp', [{ name: 'p', type: 'tuple', components: SWAP_PARAMS_COMPONENTS }], [u256('netOut')]),
   view('lpSliceTokens', [], [{ name: '', type: 'address[]' }]),
@@ -453,6 +454,13 @@ export interface V13RootStatus {
   rootCancelled: boolean;
   /** Root closed, not cancelled, not open yet. */
   rootPending: boolean;
+  /** An expansion cycle (not the first raise): acquirers' VT also comes from the root and waits. */
+  isExpansion: boolean;
+  /**
+   * Expansion cycles: unix seconds before which the cycle cannot close on-chain (opened + 24 h);
+   * the phase countdown must not end before it. 0 for the first raise.
+   */
+  expansionEarliestCloseAt: number;
 }
 
 export async function readV13RootStatus(
@@ -469,6 +477,14 @@ export async function readV13RootStatus(
         args: [cycleId],
       })) as readonly unknown[]
     );
+    const [raiseCycleId, cycle] = await Promise.all([
+      client.readContract({ address: vaultAddress, abi: VAULT_V13_ABI, functionName: 'raiseCycleId', args: [] }),
+      client.readContract({ address: vaultAddress, abi: VAULT_V13_ABI, functionName: 'getCycle', args: [cycleId] }),
+    ]);
+    // raiseCycleId is set when the first cycle locks; until then the open cycle is the raise.
+    const raiseId = BigInt(raiseCycleId as bigint);
+    const isExpansion = raiseId !== 0n && cycleId !== raiseId;
+    const openedAt = BigInt((cycle as { openedAt: bigint | number }).openedAt ?? 0);
     const activatesAt = Number(view.rootActivatesAt);
     return {
       cycleId: cycleId.toString(),
@@ -476,6 +492,8 @@ export async function readV13RootStatus(
       rootApproved: view.rootApproved,
       rootCancelled: view.rootCancelled,
       rootPending: activatesAt > 0 && !view.rootCancelled && !v13RootOpen(view),
+      isExpansion,
+      expansionEarliestCloseAt: isExpansion && openedAt > 0n ? Number(openedAt + V13_MIN_EXPANSION_WINDOW_SEC) : 0,
     };
   });
 }

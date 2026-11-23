@@ -159,6 +159,40 @@ export class EvmContractReader {
     return Number(bps);
   }
 
+  private readonly feeConfigOf = new Map<string, Address>();
+  private readonly feeBpsCache = new Map<string, { at: number; bps: number }>();
+
+  /**
+   * `protocolFeeBps` for display, cached so vault pages do not hit the RPC on every view: the
+   * vault's fee config address is kept per vault, its rate for 10 minutes per fee config (one fee
+   * config serves every vault of a factory). Money paths read `protocolFeeBps` directly.
+   */
+  async protocolFeeBpsCached(vault: Address, feeType: ProtocolFeeType): Promise<number> {
+    const vaultKey = vault.toLowerCase();
+    let feeConfig = this.feeConfigOf.get(vaultKey);
+    if (!feeConfig) {
+      feeConfig = (await this.client.readContract({
+        address: vault,
+        abi: VAULT_ABI,
+        functionName: 'protocolFeeConfig',
+      })) as Address;
+      this.feeConfigOf.set(vaultKey, feeConfig);
+    }
+    const key = `${feeConfig.toLowerCase()}:${feeType}`;
+    const hit = this.feeBpsCache.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.bps;
+    const bps = Number(
+      await this.client.readContract({
+        address: feeConfig,
+        abi: PROTOCOL_FEE_CONFIG_ABI,
+        functionName: 'feeBps',
+        args: [feeType],
+      })
+    );
+    this.feeBpsCache.set(key, { at: Date.now(), bps });
+    return bps;
+  }
+
   async getTransactionReceipt(hash: Hex) {
     return this.client.getTransactionReceipt({ hash });
   }

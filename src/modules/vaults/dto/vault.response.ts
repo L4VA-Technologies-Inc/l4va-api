@@ -448,6 +448,8 @@ export class VaultFullResponse extends VaultShortResponse {
     rootApproved: boolean;
     rootCancelled: boolean;
     rootPending: boolean;
+    isExpansion: boolean;
+    expansionEarliestCloseAt: number;
   };
 
   @ApiProperty({

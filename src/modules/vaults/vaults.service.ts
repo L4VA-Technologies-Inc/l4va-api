@@ -63,6 +63,7 @@ import { buildOperationId } from './processing-tx/onchain/evm-position.service';
 import { basketAssetCapFor, findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
 import { readV13RootStatus, vaultIsV13, type V13RootStatus } from './processing-tx/onchain/evm-v13';
 import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
+import { ProtocolFeeType } from './processing-tx/onchain/protocol-fee-config.abi';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
@@ -1610,6 +1611,18 @@ export class VaultsService {
       });
     }
 
+    // The acquire fee the vault actually takes at close, from its fee config (cached); the system
+    // setting is only the target the fee-sync job tries to set, and can differ (e.g. without the role).
+    let evmAcquireFeeBps = this.systemSettingsService.evmAcquireFeeBps ?? 0;
+    if (vault.chain_type === ChainType.robinhood && vault.contract_address) {
+      evmAcquireFeeBps = await this.evmContractReader
+        .protocolFeeBpsCached(vault.contract_address as `0x${string}`, ProtocolFeeType.Contribution)
+        .catch(err => {
+          this.logger.warn(`Acquire fee for vault ${vault.id}: ${(err as Error).message}`);
+          return evmAcquireFeeBps;
+        });
+    }
+
     const additionalData = {
       evmV13,
       maxBasketAssets: isRobinhoodVault ? basketAssetCapFor(vault) : null,
@@ -1675,7 +1688,7 @@ export class VaultsService {
       // EVM (Robinhood) rates, wei as decimal strings
       protocolFeePerAssetWei: this.systemSettingsService.protocolFeePerAssetEvm,
       protocolAcquiresFeeWei: this.systemSettingsService.protocolAcquiresFeeEvm,
-      protocolAcquireFeeBps: this.systemSettingsService.evmAcquireFeeBps ?? 0,
+      protocolAcquireFeeBps: evmAcquireFeeBps,
       protocolEnabled: this.systemSettingsService.protocolEnabled,
       // Max acquire amount (vault-specific override or protocol default)
       maxAcquireAmountAda: vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda,

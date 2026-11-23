@@ -15,7 +15,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
-import { formatUnits } from 'viem';
+import { parseAbi, formatUnits } from 'viem';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
@@ -60,7 +60,10 @@ import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-co
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import { EvmLpStatus } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
 import {
+  acquireExpansionVtForWei,
   readV13DistributionTiming,
+  V13_MIN_EXPANSION_WINDOW_SEC,
+  VAULT_V13_ABI,
   vaultIsV13,
   type V13DistributionTiming,
 } from '@/modules/vaults/processing-tx/onchain/evm-v13';
@@ -2135,6 +2138,21 @@ export class GovernanceService {
               );
             }
           }
+          if (vaultIsV13(vault)) {
+            // V13 keeps an expansion that mints VT open for at least 24 h, whatever the duration.
+            const minMs = Number(V13_MIN_EXPANSION_WINDOW_SEC) * 1000;
+            if (acquireExpansionDuration < minMs) {
+              throw new BadRequestException('Acquire expansion on this vault must last at least 24 hours.');
+            }
+            if (!acquireExpansionNoMax && acquireExpansionPriceType === 'limit' && vault.contract_address) {
+              await this.assertAcquireExpansionFitsVtCap(
+                vault.contract_address as `0x${string}`,
+                Number(vaultForAcquireExpansionCheck.ft_token_decimals ?? 18),
+                acquireExpansionMaxAda,
+                acquireExpansionLimitPrice
+              );
+            }
+          }
           proposal.metadata.acquireExpansion = {
             duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
             noLimit: acquireExpansionNoLimit || false,
@@ -3953,6 +3971,46 @@ export class GovernanceService {
    * Returns LP pool information and validation status
    */
   /** What an EVM vault could pay out at termination: free ETH and the ERC-20s with a free balance. */
+  /**
+   * V13: one expansion may mint at most `maxExpansionBps` of the supply (VT minted + still owed).
+   * Refuse an acquire expansion whose maximum ETH at its fixed price would mint more, so it cannot
+   * pass the vote and then stop short of its maximum. The contract also subtracts roots still in
+   * their cancel window, which is not readable here; contribution signatures check the exact cap.
+   */
+  private async assertAcquireExpansionFitsVtCap(
+    vaultAddress: `0x${string}`,
+    vtDecimals: number,
+    maxEthMicro: number,
+    vtPerEth: number
+  ): Promise<void> {
+    const client = this.evmContractReader.publicClient;
+    const read = (functionName: string) =>
+      client.readContract({ address: vaultAddress, abi: VAULT_V13_ABI, functionName, args: [] });
+    const [economics, vaultToken, outstanding] = await Promise.all([
+      read('economics') as Promise<{ maxExpansionBps: number }>,
+      read('vaultToken') as Promise<`0x${string}`>,
+      read('totalOutstandingClaimVt') as Promise<bigint>,
+    ]);
+    const supply = (await client.readContract({
+      address: vaultToken,
+      abi: parseAbi(['function totalSupply() view returns (uint256)']),
+      functionName: 'totalSupply',
+    })) as bigint;
+    const capVt = ((supply + outstanding) * BigInt(economics.maxExpansionBps)) / 10_000n;
+    // The form stores the ETH maximum × 1e6, so × 1e12 gives wei.
+    const maxWei = BigInt(Math.round(maxEthMicro)) * 10n ** 12n;
+    const wantVt = acquireExpansionVtForWei(maxWei, vtPerEth, vtDecimals);
+    if (wantVt > capVt) {
+      const scale = 10n ** BigInt(vtDecimals);
+      const maxFittingEth = Number(capVt / scale) / vtPerEth;
+      throw new BadRequestException(
+        `This expansion would mint ${(wantVt / scale).toLocaleString()} VT, but one expansion can mint at most ` +
+          `${(capVt / scale).toLocaleString()} VT (${economics.maxExpansionBps / 100}% of the supply). ` +
+          `Lower the maximum to about ${maxFittingEth.toPrecision(4)} ETH or raise the price.`
+      );
+    }
+  }
+
   private async evmFreeTerminationAssets(vaultAddress: string): Promise<{ native: bigint; erc20Count: number }> {
     const client = this.evmContractReader.publicClient;
     const address = vaultAddress as `0x${string}`;
