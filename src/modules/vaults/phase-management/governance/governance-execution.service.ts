@@ -9,9 +9,10 @@ import { Between, DataSource, In, Not, Repository } from 'typeorm';
 import { DistributionService, UNFINISHED_BATCH_STATUSES } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { DistributionBatch } from './dto/distribution.dto';
-import { EvmGovernanceExecutionService } from './evm-governance-execution.service';
+import { EvmGovernanceExecutionService, PROPOSAL_WAIT_CODE } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
+import { ProposalConditionsChangedError } from './proposal-errors';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
@@ -372,12 +373,39 @@ export class GovernanceExecutionService {
       }
     }
 
+    // A passed proposal waiting for the vault (an expansion running, VT still to be claimed, …)
+    // re-checks every tick without spending its retry budget (see EvmGovernanceExecutionService).
+    if (proposal.metadata?.executionError?.errorCode === PROPOSAL_WAIT_CODE) {
+      await this.alertIfWaitingTooLong(proposal);
+      await this.executePassedProposalLocked(proposal.id);
+      return;
+    }
+
     const retryInfo = proposal.metadata?._executionRetry;
     const retryCount = retryInfo?.count || 0;
     const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
 
-    // Check if max retries exceeded
+    // Check if max retries exceeded. Tell someone once: the proposal stays PASSED and nothing
+    // retries it again on its own.
     if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+      if (!retryInfo?.alertedAt) {
+        await this.proposalRepository.update(
+          { id: proposal.id },
+          { metadata: { ...proposal.metadata, _executionRetry: { ...retryInfo, alertedAt: new Date().toISOString() } } }
+        );
+        this.logger.error(
+          `Proposal ${proposal.id} (${proposal.proposalType}) gave up after ${retryCount} attempts: ` +
+            (proposal.metadata?.executionError?.message ?? 'no error recorded')
+        );
+        void this.alertsService.sendAlert('proposal_execution_gave_up', {
+          proposalId: proposal.id,
+          vaultId: proposal.vaultId,
+          type: proposal.proposalType,
+          title: proposal.title,
+          attempts: retryCount,
+          error: proposal.metadata?.executionError?.message ?? null,
+        });
+      }
       return;
     }
 
@@ -408,6 +436,39 @@ export class GovernanceExecutionService {
 
     // Already holding the lock: call the locked body directly.
     await this.executePassedProposalLocked(proposal.id);
+  }
+
+  /** A passed proposal waiting for the vault longer than this gets one Slack alert. */
+  private readonly WAITING_ALERT_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Waiting has no time limit, so a condition that never clears (e.g. VT nobody claims) would
+   * hold a proposal forever. Tell someone once when it has waited too long.
+   */
+  private async alertIfWaitingTooLong(proposal: Proposal): Promise<void> {
+    const wait = proposal.metadata?.executionError;
+    if (!wait?.waitingSince || wait.waitingAlertedAt) return;
+    if (Date.now() - new Date(wait.waitingSince).getTime() < this.WAITING_ALERT_AFTER_MS) return;
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          executionError: { ...wait, waitingAlertedAt: new Date().toISOString() },
+        },
+      }
+    );
+    this.logger.warn(
+      `Proposal ${proposal.id} (${proposal.proposalType}) has waited since ${wait.waitingSince}: ${wait.reason}`
+    );
+    void this.alertsService.sendAlert('proposal_waiting_too_long', {
+      proposalId: proposal.id,
+      vaultId: proposal.vaultId,
+      type: proposal.proposalType,
+      title: proposal.title,
+      waitingSince: wait.waitingSince,
+      reason: wait.reason ?? wait.message,
+    });
   }
 
   async activateProposal(proposalId: string): Promise<void> {
@@ -797,6 +858,11 @@ export class GovernanceExecutionService {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for automatic retry`);
       }
     } catch (error) {
+      if (error.message === 'PROPOSAL_REJECTED_CONDITIONS_CHANGED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - the vault changed since the vote; it cannot run as voted`);
+        return;
+      }
+
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
       if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
         this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
@@ -877,7 +943,16 @@ export class GovernanceExecutionService {
 
     // EVM vaults: delegate entirely to the EVM execution service.
     if (vault.chain_type === ChainType.robinhood) {
-      return this.evmGovernanceExecutionService.executeProposal(proposal, vault);
+      try {
+        return await this.evmGovernanceExecutionService.executeProposal(proposal, vault);
+      } catch (err) {
+        // The vault changed since the vote so the proposal cannot run as voted: reject it (and
+        // refund its creation fee) instead of retrying something that cannot succeed.
+        if (err instanceof ProposalConditionsChangedError) {
+          await this.rejectMarketplaceProposal(proposal, err.message, 'PROPOSAL_REJECTED_CONDITIONS_CHANGED');
+        }
+        throw err;
+      }
     }
 
     // Proposals that require vault to be LOCKED can only execute in that status

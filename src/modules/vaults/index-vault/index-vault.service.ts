@@ -835,6 +835,34 @@ export class IndexVaultService implements OnApplicationBootstrap {
    * locked and has not been invested yet. Also covers acquire-expansion cycles,
    * since the idempotency key is per cycle.
    */
+  /**
+   * What still has to run after a cycle locked before the vault may open its next cycle: the LP
+   * seed for that cycle and, for an index vault, its basket buy. Both only run while the vault is
+   * locked, so a queued expansion opened earlier would skip them. Returns why to wait, or null.
+   * A basket buy that failed for good does not block (it would block forever).
+   */
+  async postLockWorkPending(
+    vault: Pick<Vault, 'id' | 'evm_current_cycle_id' | 'vault_archetype'>
+  ): Promise<string | null> {
+    const cycleId = vault.evm_current_cycle_id;
+    if (!cycleId) return null;
+    if (await this.liquidityService.isLpPending(vault.id, cycleId))
+      return 'the liquidity pool for the last cycle is being seeded';
+    if (vault.vault_archetype !== VaultArchetype.index_weighted) return null;
+    const run = await this.rebalanceRepository.findOne({
+      where: { vault_id: vault.id, idempotency_key: `initial:cycle:${cycleId}` },
+      select: ['id', 'status', 'attempts'],
+    });
+    if (!run) return 'the basket for the last cycle has not been bought yet';
+    if (run.status === IndexRebalanceStatus.pending || run.status === IndexRebalanceStatus.executing) {
+      return 'the basket for the last cycle is being bought';
+    }
+    if (run.status === IndexRebalanceStatus.failed && run.attempts < MAX_AUTO_ATTEMPTS) {
+      return 'the basket buy for the last cycle is being retried';
+    }
+    return null;
+  }
+
   async runPendingInitialBuys(): Promise<void> {
     const vaults = await this.vaultRepository.find({
       where: {
