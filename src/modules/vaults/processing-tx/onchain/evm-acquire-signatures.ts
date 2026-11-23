@@ -1,7 +1,7 @@
-import type { Repository } from "typeorm";
+import type { Repository } from 'typeorm';
 
-import { Transaction } from "@/database/transaction.entity";
-import { TransactionStatus, TransactionType } from "@/types/transaction.types";
+import { Transaction } from '@/database/transaction.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 /**
  * Acquire-expansion contribution signatures that can still be used on-chain: issued (the
@@ -9,26 +9,18 @@ import { TransactionStatus, TransactionType } from "@/types/transaction.types";
  * confirmed / failed / refunded) and not expired. Until one expires its ETH may still arrive,
  * so it counts against the expansion maximum and the window must not close before it.
  */
-function outstandingQuery(
-  repo: Repository<Transaction>,
-  vaultId: string,
-  excludeTxId?: string,
-) {
+function outstandingQuery(repo: Repository<Transaction>, vaultId: string, excludeTxId?: string) {
   const qb = repo
-    .createQueryBuilder("tx")
-    .where("tx.vault_id = :vaultId", { vaultId })
-    .andWhere("tx.type = :type", { type: TransactionType.acquire })
-    .andWhere("tx.status IN (:...statuses)", {
-      statuses: [
-        TransactionStatus.created,
-        TransactionStatus.pending,
-        TransactionStatus.submitted,
-      ],
+    .createQueryBuilder('tx')
+    .where('tx.vault_id = :vaultId', { vaultId })
+    .andWhere('tx.type = :type', { type: TransactionType.acquire })
+    .andWhere('tx.status IN (:...statuses)', {
+      statuses: [TransactionStatus.created, TransactionStatus.pending, TransactionStatus.submitted],
     })
     .andWhere("(tx.metadata->>'evmAuthDeadline')::bigint > :now", {
       now: Math.floor(Date.now() / 1000),
     });
-  if (excludeTxId) qb.andWhere("tx.id != :excludeTxId", { excludeTxId });
+  if (excludeTxId) qb.andWhere('tx.id != :excludeTxId', { excludeTxId });
   return qb;
 }
 
@@ -36,24 +28,21 @@ function outstandingQuery(
 export async function sumOutstandingAcquireSignatures(
   repo: Repository<Transaction>,
   vaultId: string,
-  excludeTxId?: string,
+  excludeTxId?: string
 ): Promise<bigint> {
   const rows = await outstandingQuery(repo, vaultId, excludeTxId)
-    .select("tx.metadata->>'evmAuthWei'", "wei")
+    .select("tx.metadata->>'evmAuthWei'", 'wei')
     .getRawMany<{ wei: string | null }>();
-  return rows.reduce(
-    (sum, r) => sum + (r.wei && /^\d+$/.test(r.wei) ? BigInt(r.wei) : 0n),
-    0n,
-  );
+  return rows.reduce((sum, r) => sum + (r.wei && /^\d+$/.test(r.wei) ? BigInt(r.wei) : 0n), 0n);
 }
 
 /** Latest deadline (unix seconds) among still-valid acquire-expansion signatures, or null. */
 export async function latestOutstandingAcquireDeadline(
   repo: Repository<Transaction>,
-  vaultId: string,
+  vaultId: string
 ): Promise<number | null> {
   const row = await outstandingQuery(repo, vaultId)
-    .select("MAX((tx.metadata->>'evmAuthDeadline')::bigint)", "deadline")
+    .select("MAX((tx.metadata->>'evmAuthDeadline')::bigint)", 'deadline')
     .getRawOne<{ deadline: string | null }>();
   return row?.deadline ? Number(row.deadline) : null;
 }
@@ -69,10 +58,7 @@ export function evmMinAcquireWei(): bigint {
  * below the minimum acquire. Waiting for the exact maximum would keep a window open that nobody
  * can contribute to (e.g. a raise 0.0000004 ETH short of it after a USD→ETH rounding).
  */
-export function acquireExpansionIsFull(
-  collectedWei: bigint,
-  maxWei: bigint,
-): boolean {
+export function acquireExpansionIsFull(collectedWei: bigint, maxWei: bigint): boolean {
   if (maxWei <= 0n) return false;
   return maxWei - collectedWei < evmMinAcquireWei();
 }

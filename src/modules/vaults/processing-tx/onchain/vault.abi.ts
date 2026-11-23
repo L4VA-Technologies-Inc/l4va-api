@@ -1,3 +1,5 @@
+import { VAULT_ERRORS_ABI } from './vault-errors.abi';
+
 /**
  * Minimal viem ABI slice for the V4 L4VA Vault (see `vault-contract-solidity/src/Vault.sol`).
  * Only entries the backend actually needs:
@@ -1384,6 +1386,9 @@ export const VAULT_ABI = [
       { name: 'sourceId', type: 'bytes32', indexed: false },
     ],
   },
+
+  // --- Custom errors (decoding only) ----------------------------------------
+  ...VAULT_ERRORS_ABI,
 ] as const;
 export enum EvmCycleStatus {
   Active = 0,

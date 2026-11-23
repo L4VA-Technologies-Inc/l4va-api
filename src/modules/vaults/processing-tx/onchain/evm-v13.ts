@@ -31,6 +31,21 @@ export const isV13Version = (version: number | null | undefined): boolean =>
 export const vaultIsV13 = (vault: { evm_protocol_version?: number | null }): boolean =>
   isV13Version(vault.evm_protocol_version);
 
+/** Mirrors `Vault.MIN_EXPANSION_WINDOW`: a V13 expansion that mints VT stays open this long. */
+export const V13_MIN_EXPANSION_WINDOW_SEC = 24n * 60n * 60n;
+
+/**
+ * Earliest unix time (s) a V13 expansion cycle can be closed: `closeCycle` reverts with
+ * `ExpansionWindowTooShort` before `openedAt + 24h` unless the on-chain VT cap is full (not
+ * tracked here, so callers wait the full 24 h). Null when the rule does not apply.
+ */
+export const v13ExpansionEarliestClose = (
+  vault: { evm_protocol_version?: number | null },
+  isExpansionCycle: boolean,
+  openedAt: bigint
+): bigint | null =>
+  vaultIsV13(vault) && isExpansionCycle && openedAt > 0n ? openedAt + V13_MIN_EXPANSION_WINDOW_SEC : null;
+
 /** Whether vaults created through `factory` are V13 (the factory must be registered). */
 export const factoryIsV13 = (chainId: number, factory: string | null | undefined): boolean =>
   isV13Version(findEvmProtocolVersionByFactory(chainId, factory)?.version);
@@ -373,6 +388,17 @@ export const v13FromSaleRate = (lpSaleVt: bigint, proceeds: bigint): bigint =>
 
 /** The slice of `held` that FromSale must sell for the pool: lp%/2 (floor, as the contract). */
 export const v13LpSlice = (held: bigint, lpBps: number): bigint => mulDiv(held, BigInt(lpBps), 2n * BigInt(V13_BPS));
+
+/**
+ * VT an acquire expansion at a fixed price mints for `wei`: `limitPrice` is VT per 1 ETH (the
+ * proposal form stores it as a float, scaled by 1e6 here). Same formula as the lifecycle's
+ * limit-price override, so the cap check and the root agree.
+ */
+export const acquireExpansionVtForWei = (wei: bigint, limitPrice: number, vtDecimals: number): bigint => {
+  const SCALE = 1_000_000n;
+  const limitPriceScaled = BigInt(Math.round(limitPrice * 1_000_000));
+  return (wei * limitPriceScaled * 10n ** BigInt(vtDecimals)) / (10n ** 18n * SCALE);
+};
 
 /** Whether a V13 root may be claimed now (`cycleV13` read). */
 export const v13RootOpen = (c: { rootActivatesAt: bigint | number; rootCancelled: boolean; rootApproved: boolean }) =>

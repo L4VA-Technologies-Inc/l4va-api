@@ -24,6 +24,7 @@ import { HandleWebhookRes } from './dto/handle-webhook.res';
 import { SubmitStandaloneTokenMetadataDto } from './dto/submit-standalone-token-metadata.dto';
 import { BuildTransactionDto, SubmitTransactionDto, TransactionSubmitResponseDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { EvmCycleCloseService } from './evm-cycle-close.service';
 import { EvmContributionPrepareResponse, EvmVaultContributionService } from './evm-vault-contribution.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
@@ -44,6 +45,7 @@ export class BlockchainController {
     private readonly evmVaultContributionService: EvmVaultContributionService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly transactionHealthService: TransactionHealthService,
+    private readonly evmCycleCloseService: EvmCycleCloseService,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
   ) {}
@@ -256,6 +258,29 @@ export class BlockchainController {
       message: result.message,
       prUrl: (result.data as { prUrl?: string })?.prUrl,
     };
+  }
+
+  @Post('evm/vault/:vaultId/approve-root')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary: 'Testing: approve a locked cycle root as the factory verifier',
+    description:
+      "Opens the cycle's allocation claims now instead of after the factory allocation delay. Disabled unless " +
+      'EVM_MANUAL_VERIFIER_ENABLED=true and the backend admin key is the factory verifier. Defaults to the current cycle.',
+  })
+  @ApiParam({ name: 'vaultId', description: 'Vault id' })
+  @ApiBody({ schema: { type: 'object', properties: { cycleId: { type: 'string', example: '2' } } }, required: false })
+  async approveRoot(
+    @Param('vaultId') vaultId: string,
+    @Body() body?: { cycleId?: string }
+  ): Promise<{ txHash: string; cycleId: string }> {
+    if (body?.cycleId !== undefined && !/^\d+$/.test(String(body.cycleId))) {
+      throw new BadRequestException('cycleId must be a whole number');
+    }
+    return this.evmCycleCloseService.approveAllocationRootAsVerifier(
+      vaultId,
+      body?.cycleId !== undefined ? BigInt(body.cycleId) : undefined
+    );
   }
 
   @Post('health-check')

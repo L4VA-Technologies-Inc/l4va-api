@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
-import { type Address, type Hex } from 'viem';
+import { parseAbi, type Address, type Hex } from 'viem';
 
 import { EvmAdminSigner, TxRevertedError, VaultFrozenError } from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
@@ -45,6 +45,13 @@ import { ChainType, VaultStatus } from '@/types/vault.types';
  * LifecycleService is a soft optimization; the DB gate is the correctness
  * bound across replicas.
  */
+const VERIFIER_ABI = parseAbi([
+  'function factory() view returns (address)',
+  'function verifier() view returns (address)',
+  'function approveAllocationRoot(uint256 cycleId)',
+  'event AllocationRootApproved(uint256 indexed cycleId, address indexed by)',
+]);
+
 @Injectable()
 export class EvmCycleCloseService {
   private readonly logger = new Logger(EvmCycleCloseService.name);
@@ -435,6 +442,53 @@ export class EvmCycleCloseService {
       });
       return false;
     }
+  }
+
+  /**
+   * Testing aid: approve a locked cycle's allocation root as the factory's verifier, so its claims
+   * open now instead of after `factory.allocationDelay()`. Off unless EVM_MANUAL_VERIFIER_ENABLED is
+   * "true", and it only works where the guardian has made the backend's admin key the verifier
+   * (`factory.setVerifier`). Production keeps an independent verifier, so leave it off there.
+   */
+  async approveAllocationRootAsVerifier(vaultId: string, cycleId?: bigint): Promise<{ txHash: Hex; cycleId: string }> {
+    if (process.env.EVM_MANUAL_VERIFIER_ENABLED !== 'true') {
+      throw new BadRequestException('Manual root approval is disabled (EVM_MANUAL_VERIFIER_ENABLED is not "true")');
+    }
+    const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
+    if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
+    if (vault.chain_type !== ChainType.robinhood || !vault.contract_address) {
+      throw new BadRequestException(`Vault ${vaultId} is not a deployed EVM vault`);
+    }
+    const vaultAddress = vault.contract_address as Address;
+    const client = this.contractReader.publicClient;
+
+    const factory = (await client.readContract({
+      address: vaultAddress,
+      abi: VERIFIER_ABI,
+      functionName: 'factory',
+    })) as Address;
+    const verifier = (await client.readContract({
+      address: factory,
+      abi: VERIFIER_ABI,
+      functionName: 'verifier',
+    })) as Address;
+    if (verifier.toLowerCase() !== this.adminSigner.address.toLowerCase()) {
+      throw new BadRequestException(
+        `The backend key ${this.adminSigner.address} is not the verifier of factory ${factory} (verifier: ${verifier}). ` +
+          'The guardian must call setVerifier first.'
+      );
+    }
+
+    const id = cycleId ?? (vault.evm_current_cycle_id ? BigInt(vault.evm_current_cycle_id) : 0n);
+    if (id === 0n) throw new BadRequestException(`Vault ${vaultId} has no cycle to approve`);
+
+    const result = await this.adminSigner.sendAndConfirm(
+      { address: vaultAddress, abi: VERIFIER_ABI, functionName: 'approveAllocationRoot', args: [id] },
+      ['AllocationRootApproved'],
+      async () => {}
+    );
+    this.logger.log(`approveAllocationRoot confirmed for vault ${vaultId} cycle=${id} tx=${result.hash}`);
+    return { txHash: result.hash, cycleId: id.toString() };
   }
 
   async cancelCurrentCycle(vaultId: string, reason: string, message?: string): Promise<{ txHash: Hex }> {
