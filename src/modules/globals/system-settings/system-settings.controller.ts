@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { NftFlagsResponseDto } from './dto/nft-flags-response.dto';
@@ -10,6 +10,7 @@ import { SystemSettingsService } from './system-settings.service';
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
+import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
 import { basketAssetCapFor, currentEvmVersionRef } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import { ChainType } from '@/types/vault.types';
 
@@ -17,6 +18,22 @@ import { ChainType } from '@/types/vault.types';
 @Controller('system-settings')
 export class SystemSettingsController {
   constructor(private readonly systemSettingsService: SystemSettingsService) {}
+
+  @Get('site-access')
+  @UseGuards(OptionalAuthGuard)
+  @ApiDoc({
+    summary: 'Whether the caller may use the site',
+    description:
+      'Closed-launch gate: `maintenance` is the site-wide flag, `allowed` is true when maintenance is off or the signed-in wallet is allowlisted.',
+    status: 200,
+  })
+  getSiteAccess(@Req() req: { user?: { address?: string } }): { maintenance: boolean; allowed: boolean } {
+    const maintenance = this.systemSettingsService.maintenanceMode;
+    return {
+      maintenance,
+      allowed: !maintenance || this.systemSettingsService.isAllowedDuringMaintenance(req.user?.address),
+    };
+  }
 
   @Get('vlrm-fee')
   @UseGuards(AuthGuard)
