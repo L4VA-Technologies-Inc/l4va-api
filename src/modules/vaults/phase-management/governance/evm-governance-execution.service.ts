@@ -135,6 +135,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     try {
       wait = await this.waitReason(proposal, vault.id);
     } catch (err) {
+      if (err instanceof ProposalConditionsChangedError) throw err;
       // An RPC hiccup (e.g. 429 on a free endpoint) while checking is not a failed attempt: wait
       // and check again on the next tick instead of spending the retry budget.
       this.logger.warn(`Proposal ${proposal.id}: could not check the vault state — ${(err as Error).message}`);
@@ -240,6 +241,15 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       }
 
       case ProposalType.DISTRIBUTION: {
+        // Once termination has started, `openDistribution` can never run (it needs Active or Locked);
+        // the free assets go to VT holders through the termination instead.
+        const onchain = await this.terminationService.onchainStatus(v.id);
+        if (onchain !== EvmVaultOnchainStatus.Active && onchain !== EvmVaultOnchainStatus.Locked) {
+          throw new ProposalConditionsChangedError(
+            'The vault is being terminated, so this distribution can no longer be opened. ' +
+              'Its free assets are paid to VT holders through the termination.'
+          );
+        }
         // `openDistribution` reverts while allocated VT is unminted: the snapshot supply would miss it.
         const owed = await this.outstanding(v.contract_address as Address, true);
         if (owed) {
