@@ -115,6 +115,16 @@ export interface EvmDistributionMetadata {
   autoClaimCompletedAt?: string;
   /** Failed auto-claim attempts per holder; a holder that keeps failing is skipped (it can still claim itself). */
   autoClaimFailures?: Record<string, number>;
+  /** Payout transactions sent by the auto-claim cron (`claimDistributionFor`), oldest first. */
+  payouts?: EvmDistributionPayout[];
+}
+
+export interface EvmDistributionPayout {
+  holder: string;
+  /** Base units of `asset` paid. */
+  amount: string;
+  txHash: string;
+  paidAt: string;
 }
 
 /**

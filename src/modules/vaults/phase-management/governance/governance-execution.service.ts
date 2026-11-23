@@ -764,8 +764,11 @@ export class GovernanceExecutionService {
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
-        // Clear executionError from metadata on successful execution
-        const updatedMetadata = { ...proposal.metadata };
+        // Clear executionError from metadata on successful execution. Re-read the row first:
+        // execution writes its own results into metadata (e.g. `evmDistribution` with the
+        // openDistribution tx hash), and the in-memory copy predates them.
+        const fresh = await this.proposalRepository.findOne({ where: { id: proposalId } });
+        const updatedMetadata = { ...(fresh?.metadata ?? proposal.metadata) };
         delete updatedMetadata.executionError;
 
         await this.proposalRepository.update(
