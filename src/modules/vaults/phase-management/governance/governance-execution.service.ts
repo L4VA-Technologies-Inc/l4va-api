@@ -636,7 +636,9 @@ export class GovernanceExecutionService {
         where: {
           vaultId,
           id: Not(terminationProposalId),
-          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE]),
+          // PASSED too: a passed-but-unexecuted proposal (e.g. a distribution waiting for a retry)
+          // would otherwise still run, and could reserve the funds termination needs.
+          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.PASSED]),
         },
         select: ['id', 'metadata'],
       });
@@ -660,7 +662,7 @@ export class GovernanceExecutionService {
           })
           .where('id = :id AND status IN (:...statuses)', {
             id: other.id,
-            statuses: [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE],
+            statuses: [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.PASSED],
           })
           .execute();
         if (!result.affected) continue;
