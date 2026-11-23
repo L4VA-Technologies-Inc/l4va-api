@@ -525,6 +525,21 @@ export class GetProposalDetailRes {
   };
 
   @Expose()
+  @ApiPropertyOptional({
+    description:
+      'EVM distributions: asset (zero address = native ETH), requested and net pot in base units, ' +
+      'the openDistribution tx and the payouts sent to holders so far',
+  })
+  evmDistribution?: {
+    asset: string;
+    requestedAmount: string | null;
+    netPot: string | null;
+    openTxHash: string | null;
+    payouts: { holder: string; amount: string; txHash: string; paidAt: string }[];
+    paidOutAt: string | null;
+  };
+
+  @Expose()
   @ApiPropertyOptional({ description: 'Fungible tokens for staking', type: [StakingTokenDto] })
   @Type(() => StakingTokenDto)
   fungibleTokens?: StakingTokenDto[];

@@ -3002,9 +3002,24 @@ export class GovernanceService {
       });
     }
 
+    const evmMeta = proposal.metadata?.evmDistribution;
+    const evmDistribution =
+      proposal.proposalType === ProposalType.DISTRIBUTION && proposal.vault?.chain_type === ChainType.robinhood
+        ? {
+            asset: evmMeta?.asset ?? proposal.metadata?.distributionAsset ?? ZERO_ADDRESS,
+            // Requested pot before the fee; `netPot` is what holders share once opened.
+            requestedAmount: proposal.metadata?.distributionAmount ?? null,
+            netPot: evmMeta?.netPot ?? null,
+            openTxHash: evmMeta?.txHash ?? null,
+            payouts: evmMeta?.payouts ?? [],
+            paidOutAt: evmMeta?.autoClaimCompletedAt ?? null,
+          }
+        : undefined;
+
     const response = {
       proposal: proposalDto,
       evmDistributionTiming,
+      evmDistribution,
       votes,
       totals,
       canVote,

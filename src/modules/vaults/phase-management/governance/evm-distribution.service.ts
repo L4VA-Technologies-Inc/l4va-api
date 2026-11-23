@@ -11,6 +11,7 @@ import { getEvmProtocolVersion } from '../../processing-tx/onchain/evm-protocol-
 import { vaultIsV13, VAULT_V13_ABI } from '../../processing-tx/onchain/evm-v13';
 import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
+import type { EvmDistributionPayout } from './dto/distribution.dto';
 import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
 import { EvmSnapshotService } from './evm-snapshot.service';
 import { countSnapshotRecipients } from './snapshot-recipients.util';
@@ -446,6 +447,7 @@ export class EvmDistributionService {
     let pending = false;
     const failures: Record<string, number> = { ...(dist.autoClaimFailures ?? {}) };
     let failuresChanged = false;
+    const payouts: EvmDistributionPayout[] = [];
     // LP providers are paid through the vault's lpShareSource (`distributionClaimable` includes
     // their pool VT); the contract returns 0 for anyone with nothing to claim.
     const holders = tree
@@ -495,6 +497,7 @@ export class EvmDistributionService {
           ['DistributionClaimed']
         );
         sent++;
+        payouts.push({ holder, amount: String(claimable), txHash: result.hash, paidAt: new Date().toISOString() });
         this.logger.log(
           `Distribution ${dist.distributionId} on ${vaultAddress}: paid ${claimable} to ${holder} tx=${result.hash}`
         );
@@ -510,20 +513,29 @@ export class EvmDistributionService {
       }
     }
 
-    if (failuresChanged) await this.saveAutoClaimFailures(proposal, failures);
+    if (failuresChanged || payouts.length) await this.saveAutoClaimProgress(proposal, failures, payouts);
     if (!pending) await this.markAutoClaimDone(proposal, `paid ${sent} holder(s) this pass`);
     return sent;
   }
 
-  private async saveAutoClaimFailures(proposal: Proposal, failures: Record<string, number>): Promise<void> {
+  private async saveAutoClaimProgress(
+    proposal: Proposal,
+    failures: Record<string, number>,
+    payouts: EvmDistributionPayout[]
+  ): Promise<void> {
     const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id } });
-    if (!fresh?.metadata?.evmDistribution) return;
+    const current = fresh?.metadata?.evmDistribution;
+    if (!current) return;
     await this.proposalRepository.update(
       { id: proposal.id },
       {
         metadata: {
           ...fresh.metadata,
-          evmDistribution: { ...fresh.metadata.evmDistribution, autoClaimFailures: failures },
+          evmDistribution: {
+            ...current,
+            autoClaimFailures: failures,
+            payouts: [...(current.payouts ?? []), ...payouts],
+          },
         },
       }
     );

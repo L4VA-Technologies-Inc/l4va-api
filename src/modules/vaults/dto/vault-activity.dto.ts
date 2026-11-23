@@ -44,6 +44,13 @@ export interface ProposalActivityEvent {
   creatorId: string;
   created_at: Date;
   executionError?: string;
+  /** EVM distribution proposals: the tx that opened the pot and the payouts sent to holders. */
+  distribution?: {
+    asset: string;
+    netPot: string;
+    openTxHash: string | null;
+    payouts: { holder: string; amount: string; txHash: string; paidAt: string }[];
+  };
 }
 
 export interface TransactionActivityEvent extends Transaction {
