@@ -18,7 +18,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmKmsSigners } from './evm-kms-signers.service';
-import { getEvmProtocolVersion } from './evm-protocol-versions';
+import { findEvmProtocolVersionByFactory, getEvmProtocolVersion } from './evm-protocol-versions';
 import {
   buildV13Economics,
   CYCLE_CONFIG_V13_COMPONENTS,
@@ -529,7 +529,10 @@ export class EvmVaultSignerService {
     return {
       vaultId: evmVaultId,
       archetype: '0xaf85f1959fc2aa8b532f1218046c19fa780e1da2664cec6949ee750524d8ccfd' as Hex, // BatchVaultDeployer.BATCH = keccak256("L4VA.Vault.Batch")
-      vaultDeployer: this.configService.get<string>('EVM_BATCH_DEPLOYER_ADDRESS') as Address,
+      // Must equal factory.vaultDeployers(BATCH) or createVault reverts DeployerChanged (0xb425bf30).
+      // The factory's version entry is authoritative; the env var only covers unknown factories.
+      vaultDeployer: (findEvmProtocolVersionByFactory(this.chainId, this.factoryAddress)?.batchDeployer ??
+        this.configService.get<string>('EVM_BATCH_DEPLOYER_ADDRESS')) as Address,
       creator: creatorAddress,
       creationApprover: this.adminAddress,
       authority: this.adminAddress,
