@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleIni
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { parseAbi, type Address } from 'viem';
+import { parseAbi, zeroAddress, type Address } from 'viem';
 
 import { EvmAdapterRegistryService } from '../../processing-tx/onchain/evm-adapter-registry.service';
 import { EvmContractReader } from '../../processing-tx/onchain/evm-contract-reader.service';
@@ -17,9 +17,10 @@ import {
 } from '../../processing-tx/onchain/evm-position.service';
 import { EvmSwapService } from '../../processing-tx/onchain/evm-swap.service';
 import { EvmTerminationService } from '../../processing-tx/onchain/evm-termination.service';
-import { EvmVaultOnchainStatus } from '../../processing-tx/onchain/vault.abi';
+import { EvmVaultOnchainStatus, VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 
 import { EvmDistributionService } from './evm-distribution.service';
+import { ProposalConditionsChangedError } from './proposal-errors';
 
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -537,6 +538,52 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
    * action index), so a retry after a lost receipt reverts instead of trading
    * twice.
    */
+  /**
+   * Before the first swap, the vault's free balance must still cover every swap the proposal has
+   * not run yet, per input asset. If it does not (other proposals or distributions spent it since
+   * the vote), the proposal cannot run as voted: it is rejected, and no swap of it runs, so it is
+   * never left half done.
+   */
+  private async assertSwapsStillCovered(
+    proposal: Proposal,
+    vaultId: string,
+    vaultAddress: Address,
+    actions: any[]
+  ): Promise<void> {
+    const needed = new Map<string, bigint>();
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      if (action.exec === 'CLOSE_POSITION') continue;
+      const assetIn = String(action.inputAsset ?? action.policyId ?? zeroAddress).toLowerCase();
+      const assetOut = String(action.expectedOutputAsset ?? action.outputAsset ?? zeroAddress).toLowerCase();
+      const amountIn = BigInt(action.amount ?? action.quantity ?? 0);
+      if (amountIn === 0n || assetIn === assetOut) continue;
+      // A swap that already ran (an earlier attempt) is not counted again.
+      if (await this.swapService.isOperationIdUsed(vaultAddress, buildOperationId(vaultId, proposal.id, i))) continue;
+      needed.set(assetIn, (needed.get(assetIn) ?? 0n) + amountIn);
+    }
+
+    for (const [asset, amount] of needed) {
+      const native = asset === zeroAddress;
+      const available = (await this.contractReader.publicClient.readContract(
+        native
+          ? { address: vaultAddress, abi: VAULT_ABI, functionName: 'availableNativeForOperations' }
+          : {
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'availableErc20ForOperations',
+              args: [asset as Address],
+            }
+      )) as bigint;
+      if (amount > available) {
+        throw new ProposalConditionsChangedError(
+          `The vault no longer has enough ${native ? 'ETH' : `of ${asset}`} free for this proposal's trades ` +
+            `(needs ${amount}, ${available} available in base units).`
+        );
+      }
+    }
+  }
+
   private async executeMarketActionSwap(
     proposal: Proposal,
     vault: EvmGovernanceVaultRef,
@@ -567,6 +614,8 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       this.logger.error(`Proposal ${proposal.id}: failed to read trade fee — ${(err as Error).message}`);
       return false;
     }
+
+    await this.assertSwapsStillCovered(proposal, vault.id, vaultAddress, actions);
 
     for (let i = 0; i < actions.length; i++) {
       const action = actions[i];
@@ -802,6 +851,8 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       );
       return true;
     } catch (err) {
+      // Cannot run as voted (not enough funds left): the caller rejects it instead of retrying.
+      if (err instanceof ProposalConditionsChangedError) throw err;
       const message = (err as Error).message;
       this.logger.error(`Proposal ${proposal.id}: openDistribution failed — ${message}`);
 

@@ -14,6 +14,7 @@ import { VAULT_ABI } from '../../processing-tx/onchain/vault.abi';
 import type { EvmDistributionPayout } from './dto/distribution.dto';
 import { buildDistributionTree, type DistributionTree } from './evm-distribution-merkle';
 import { EvmSnapshotService } from './evm-snapshot.service';
+import { ProposalConditionsChangedError } from './proposal-errors';
 import { countSnapshotRecipients } from './snapshot-recipients.util';
 import { votingBalances } from './voting-power.util';
 
@@ -254,17 +255,25 @@ export class EvmDistributionService {
       };
     }
 
-    const timepoint = await this.resolveTimepoint(proposal);
-
-    // Re-check availability at execution time: the vote may have passed days
-    // ago and the vault has been operating since.
-    const available = await this.availableForDistribution(vaultAddress, asset);
-    if (BigInt(amount) > available) {
-      throw new BadRequestException(
-        `Vault ${vaultAddress} has ${available} available for ${asset}, proposal requires ${amount}. ` +
-          `The vault's balance moved after the vote passed.`
+    // Not opened yet: the vault must still hold the amount voted for. If it no longer does (other
+    // proposals spent it), the proposal cannot run as voted and is rejected rather than retried.
+    let requested: bigint;
+    try {
+      requested = BigInt(amount);
+    } catch {
+      throw new ProposalConditionsChangedError(
+        `The distribution amount '${amount}' is not a whole number of base units.`
       );
     }
+    const available = await this.availableForDistribution(vaultAddress, asset);
+    if (requested > available) {
+      throw new ProposalConditionsChangedError(
+        `The vault no longer has enough ${asset === zeroAddress ? 'ETH' : 'tokens'} free for this distribution ` +
+          `(needs ${requested}, ${available} available in base units).`
+      );
+    }
+
+    const timepoint = await this.resolveTimepoint(proposal);
 
     // Vaults that support it pay by snapshot voting weight (held VT + VT in
     // liquidity positions), like Cardano; older vaults pay pro-rata on-chain.

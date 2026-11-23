@@ -12,6 +12,7 @@ import { DistributionBatch } from './dto/distribution.dto';
 import { EvmGovernanceExecutionService, PROPOSAL_WAIT_CODE } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
+import { ProposalConditionsChangedError } from './proposal-errors';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
@@ -857,6 +858,11 @@ export class GovernanceExecutionService {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for automatic retry`);
       }
     } catch (error) {
+      if (error.message === 'PROPOSAL_REJECTED_CONDITIONS_CHANGED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - the vault changed since the vote; it cannot run as voted`);
+        return;
+      }
+
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
       if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
         this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
@@ -937,7 +943,16 @@ export class GovernanceExecutionService {
 
     // EVM vaults: delegate entirely to the EVM execution service.
     if (vault.chain_type === ChainType.robinhood) {
-      return this.evmGovernanceExecutionService.executeProposal(proposal, vault);
+      try {
+        return await this.evmGovernanceExecutionService.executeProposal(proposal, vault);
+      } catch (err) {
+        // The vault changed since the vote so the proposal cannot run as voted: reject it (and
+        // refund its creation fee) instead of retrying something that cannot succeed.
+        if (err instanceof ProposalConditionsChangedError) {
+          await this.rejectMarketplaceProposal(proposal, err.message, 'PROPOSAL_REJECTED_CONDITIONS_CHANGED');
+        }
+        throw err;
+      }
     }
 
     // Proposals that require vault to be LOCKED can only execute in that status
