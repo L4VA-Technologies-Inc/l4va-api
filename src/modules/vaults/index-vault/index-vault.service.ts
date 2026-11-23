@@ -454,6 +454,8 @@ export class IndexVaultService implements OnApplicationBootstrap {
     config: IndexConfig | null;
     portfolio: IndexPortfolio | null;
     rebalances: ReturnType<IndexVaultService['serializeRebalance']>[];
+    /** Smallest trade the rebalancer makes, in wei; legs below it are skipped. */
+    minTradeNative: string;
   }> {
     const vault = await this.requireIndexVault(vaultId);
     const hasHoldings = !!vault.contract_address && HOLDING_STATUSES.includes(vault.vault_status);
@@ -472,6 +474,7 @@ export class IndexVaultService implements OnApplicationBootstrap {
       config: vault.index_config ?? null,
       portfolio,
       rebalances: rebalances.map(r => this.serializeRebalance(r)),
+      minTradeNative: MIN_TRADE_NATIVE.toString(),
     };
   }
 

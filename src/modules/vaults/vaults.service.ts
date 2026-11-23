@@ -3231,8 +3231,13 @@ export class VaultsService {
       decimals: 18,
     };
 
+    // A run that traded nothing is still shown when something blocked it (e.g. the vault is too
+    // small for the minimum trade), so holders can see why the basket was not bought.
+    const blockedSkips = (run: EvmIndexRebalance) =>
+      (run.skipped_legs ?? []).filter(item => item.reason !== 'within_tolerance');
+
     return runs
-      .filter(run => run.legs?.length > 0)
+      .filter(run => run.legs?.length > 0 || blockedSkips(run).length > 0)
       .map(run => {
         // Assets sold during a re-weight may have left the current basket; the
         // run's own frozen targets plus native cover every leg it planned.
@@ -3267,6 +3272,7 @@ export class VaultsService {
             txHash: leg.txHash ?? null,
             error: leg.error ?? null,
           })),
+          skipped: blockedSkips(run),
           lastError: run.last_error ?? null,
           completedAt: run.completed_at ?? null,
           created_at: run.completed_at ?? run.created_at,

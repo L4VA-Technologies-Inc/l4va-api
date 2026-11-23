@@ -236,6 +236,30 @@ export const EVM_PROTOCOL_VERSIONS: Record<number, EvmProtocolVersion[]> = {
       lpShareRegistry: '0x06e09da01712BDbf73490691E72462fE693EA05E',
       maxTerminationAssets: 56,
     },
+    {
+      // PRODUCTION, V13 code with MAX_TERMINATION_ASSETS = 56 (vault-contract-solidity
+      // script/deploy-mainnet-v16.sh, 2026-11-23): own stack, KMS mainnet-authority 0x3daC… as
+      // backend key, every admin role on the L4VA Safe. Guarded swap (prod-rwa pools only) / LP V2 /
+      // exit V2. Safe batch deployments/safe-batch-mainnet-v16.json: pools, creditor, FeeConverter
+      // caller, delays 24 h / 1 h, trade fee 0.25 %, lpShareSource.
+      version: 16,
+      stack: 'production',
+      codeVersion: 13,
+      factory: '0xCe075A2b8830aDCD1789cd8c0918547BA25E9A91',
+      deployBlock: 121511832n,
+      adapterRegistry: '0xB43Bb24fb011E7eB1C5122279D356f8DF877d6dC',
+      protocolFeeConfig: '0xe032Eb50719b372225adE5A6Bbb00F5EF5B1A5ad',
+      batchDeployer: '0x3F9A78e01000f5f6DF684EeCB829dc3589b8467a',
+      swapAdapter: '0xc5fb359993f4B73015394eC4dc4C7ab45b3BaE9e',
+      swapAdapterMultiPath: true,
+      lpAdapter: '0x789e7Abda747aE2beb6E56Db421e42B82f7E9E6A',
+      lpExitAdapter: '0x93208AD93c556f06458A1FD759d080c7e77E739F',
+      feeConverter: '0xE75d0ca34FB8251F1368744dc3f4c1B56e006258',
+      feeController: '0x0E466eA5D83a00F2fFD156922Dfb3c9E9A2e6210',
+      guardian: '0x4733002467440E5881b84D19aC31e5c546Be9945',
+      lpShareRegistry: '0xc28498F9F0e4E5C27B5DF7FC0Fb7A7f987382391',
+      maxTerminationAssets: 56,
+    },
   ],
   46630: [
     {
