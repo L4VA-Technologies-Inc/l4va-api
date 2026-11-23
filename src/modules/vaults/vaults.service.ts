@@ -50,6 +50,7 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { BoundaryTx, ExpansionWindow, getExpansionWindows } from './expansion-activity';
 import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
+import { countSnapshotRecipients } from './phase-management/governance/snapshot-recipients.util';
 import { TerminationStatus } from './phase-management/governance/termination.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainWebhookService } from './processing-tx/onchain/blockchain-webhook.service';
@@ -1506,19 +1507,10 @@ export class VaultsService {
     const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
-      select: ['addressBalances'],
+      select: ['addressBalances', 'lpBalances'],
     });
 
-    const tokenHolders = latestSnapshot?.addressBalances
-      ? Object.keys(latestSnapshot.addressBalances).filter(addr => {
-          const balance = latestSnapshot.addressBalances[addr];
-          try {
-            return BigInt(balance) > 0n;
-          } catch {
-            return parseFloat(balance) > 0;
-          }
-        }).length
-      : 0;
+    const tokenHolders = countSnapshotRecipients(latestSnapshot);
 
     const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
     const totalAcquiredAda = Number(vault.total_acquired_value_ada ?? 0);

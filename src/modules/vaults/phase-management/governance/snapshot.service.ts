@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { snapshotRecipients } from './snapshot-recipients.util';
+
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 
@@ -29,10 +31,7 @@ export class SnapshotService {
     snapshot?: Pick<Snapshot, 'addressBalances' | 'lpBalances'> | null
   ): Promise<string[]> {
     if (!snapshot) return [];
-    const holders = [...Object.keys(snapshot.addressBalances ?? {}), ...Object.keys(snapshot.lpBalances ?? {})];
-    const addresses = [...new Set(holders.map(address => address?.trim().toLowerCase()))].filter(
-      (address): address is string => !!address
-    );
+    const addresses = [...snapshotRecipients(snapshot)];
     if (addresses.length === 0) return [];
 
     const users = await this.userRepository
