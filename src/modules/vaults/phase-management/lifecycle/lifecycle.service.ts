@@ -24,7 +24,10 @@ import { SystemSettingsService } from '@/modules/globals/system-settings/system-
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { EvmV13LpSaleService } from '@/modules/vaults/index-vault/evm-v13-lp-sale.service';
 import { IndexVaultService } from '@/modules/vaults/index-vault/index-vault.service';
-import { latestOutstandingAcquireDeadline } from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
+import {
+  acquireExpansionIsFull,
+  latestOutstandingAcquireDeadline,
+} from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import {
   EmptyAllocationError,
@@ -2153,7 +2156,7 @@ export class LifecycleService {
    */
   /**
    * Robinhood: once an acquire expansion's on-chain `nativeCollected` reaches the proposal's
-   * "Maximum ETH", move its end to when the last still-usable contribution signature expires
+   * "Maximum ETH" (or is less than one minimum acquire short of it), move its end to when the last still-usable contribution signature expires
    * (now, if none), plus a small margin — if that is earlier than the current end. Idempotent.
    */
   private async shortenAcquireExpansionAtMax(
@@ -2174,7 +2177,7 @@ export class LifecycleService {
 
     // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
     const maxWei = BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n;
-    if (maxWei <= 0n || nativeCollected < maxWei) return;
+    if (!acquireExpansionIsFull(nativeCollected, maxWei)) return;
 
     // Ending early is only safe where the on-chain acquire window can be closed before the
     // snapshot (see handleEvmContributionToSnapshotReady). Vaults without `closeAcquireWindow`
