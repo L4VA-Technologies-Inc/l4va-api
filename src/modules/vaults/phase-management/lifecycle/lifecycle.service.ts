@@ -45,6 +45,7 @@ import {
 import { EvmLpExitService } from '@/modules/vaults/processing-tx/onchain/evm-lp-exit.service';
 import { EvmRefundOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-refund-orchestrator.service';
 import { EvmTerminationService } from '@/modules/vaults/processing-tx/onchain/evm-termination.service';
+import { v13ExpansionEarliestClose } from '@/modules/vaults/processing-tx/onchain/evm-v13';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { EvmCycleStatus, VAULT_ABI } from '@/modules/vaults/processing-tx/onchain/vault.abi';
@@ -2165,8 +2166,10 @@ export class LifecycleService {
       contract_address?: string | null;
       expansion_phase_start?: Date | null;
       expansion_duration?: number | string | null;
+      evm_protocol_version?: number | null;
     },
-    nativeCollected: bigint
+    nativeCollected: bigint,
+    openedAt: bigint
   ): Promise<void> {
     const proposal = await this.proposalRepository.findOne({
       where: { vaultId: vault.id, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
@@ -2188,7 +2191,11 @@ export class LifecycleService {
     const start = new Date(vault.expansion_phase_start as Date).getTime();
     const currentEnd = start + Number(vault.expansion_duration ?? 0);
     const lastDeadline = await latestOutstandingAcquireDeadline(this.dataSource.getRepository(Transaction), vault.id);
-    const closeAt = Math.max(Date.now(), (lastDeadline ?? 0) * 1000) + EVM_EARLY_CLOSE_MARGIN_MS;
+    // V13 refuses to close an expansion before 24 h after it opened (ExpansionWindowTooShort).
+    const earliestClose = v13ExpansionEarliestClose(vault, true, openedAt);
+    const closeAt =
+      Math.max(Date.now(), (lastDeadline ?? 0) * 1000, earliestClose !== null ? Number(earliestClose) * 1000 : 0) +
+      EVM_EARLY_CLOSE_MARGIN_MS;
     if (closeAt >= currentEnd) return;
 
     await this.vaultRepository.update({ id: vault.id }, { expansion_duration: closeAt - start });
@@ -2850,6 +2857,7 @@ export class LifecycleService {
         'vault.tokens_for_acquires',
         'vault.expansion_phase_start',
         'vault.expansion_duration',
+        'vault.evm_protocol_version',
       ])
       .getMany();
 
@@ -2902,7 +2910,7 @@ export class LifecycleService {
         // at the maximum. The duration-ended path then snapshots, closes the cycle
         // (vault → locked) and mints the VT.
         if (vault.vault_status === VaultStatus.acquire_expansion && !expansionEnded && vault.expansion_phase_start) {
-          await this.shortenAcquireExpansionAtMax(vault, cycleView.nativeCollected);
+          await this.shortenAcquireExpansionAtMax(vault, cycleView.nativeCollected, cycleView.openedAt);
         }
         if (!assetEnded) continue;
 
@@ -3175,7 +3183,15 @@ export class LifecycleService {
       try {
         const vault = await this.vaultRepository.findOne({
           where: { id: snap.vault_id },
-          select: ['id', 'contract_address', 'chain_id', 'vault_status', 'expansion_phase_start', 'expansion_duration'],
+          select: [
+            'id',
+            'contract_address',
+            'chain_id',
+            'vault_status',
+            'expansion_phase_start',
+            'expansion_duration',
+            'evm_protocol_version',
+          ],
         });
         if (!vault?.contract_address) continue;
         const cycleView = await this.evmContractReader.getCycle(
@@ -3184,6 +3200,20 @@ export class LifecycleService {
         );
         // Cycle must still be Active on-chain.
         if (cycleView.status !== 0 /* EvmCycleStatus.Active */) continue;
+        // V13: an expansion cannot be closed before 24 h after it opened, even if it reached its
+        // ETH maximum early; closeCycle would revert (ExpansionWindowTooShort). Wait instead.
+        const earliestClose = v13ExpansionEarliestClose(
+          vault,
+          vault.vault_status === VaultStatus.acquire_expansion || vault.vault_status === VaultStatus.expansion,
+          cycleView.openedAt
+        );
+        if (earliestClose !== null && nowSec < earliestClose) {
+          this.logger.debug(
+            `EVM closeCycle waiting: vault=${snap.vault_id} cycle=${snap.cycle_id} — V13 expansion closes no ` +
+              `earlier than ${new Date(Number(earliestClose) * 1000).toISOString()}`
+          );
+          continue;
+        }
         // Both windows must have ended ON-CHAIN. Zero-length windows (start==end==0)
         // are treated as already closed. There is deliberately no DB-duration bypass:
         // while the acquire window is open on-chain a contributor can cancel after the

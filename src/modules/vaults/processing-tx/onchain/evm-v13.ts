@@ -31,6 +31,21 @@ export const isV13Version = (version: number | null | undefined): boolean =>
 export const vaultIsV13 = (vault: { evm_protocol_version?: number | null }): boolean =>
   isV13Version(vault.evm_protocol_version);
 
+/** Mirrors `Vault.MIN_EXPANSION_WINDOW`: a V13 expansion that mints VT stays open this long. */
+export const V13_MIN_EXPANSION_WINDOW_SEC = 24n * 60n * 60n;
+
+/**
+ * Earliest unix time (s) a V13 expansion cycle can be closed: `closeCycle` reverts with
+ * `ExpansionWindowTooShort` before `openedAt + 24h` unless the on-chain VT cap is full (not
+ * tracked here, so callers wait the full 24 h). Null when the rule does not apply.
+ */
+export const v13ExpansionEarliestClose = (
+  vault: { evm_protocol_version?: number | null },
+  isExpansionCycle: boolean,
+  openedAt: bigint
+): bigint | null =>
+  vaultIsV13(vault) && isExpansionCycle && openedAt > 0n ? openedAt + V13_MIN_EXPANSION_WINDOW_SEC : null;
+
 /** Whether vaults created through `factory` are V13 (the factory must be registered). */
 export const factoryIsV13 = (chainId: number, factory: string | null | undefined): boolean =>
   isV13Version(findEvmProtocolVersionByFactory(chainId, factory)?.version);
