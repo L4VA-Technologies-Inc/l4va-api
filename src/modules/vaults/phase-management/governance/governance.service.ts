@@ -1115,6 +1115,7 @@ export class GovernanceService {
 
         // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
         if (vault.chain_type === ChainType.robinhood) {
+          this.indexVaultService.assertMarketSwapOutputsAllowed(actions as Array<Record<string, any>>);
           // Mainnet token trades run through the Uniswap swap adapter; refuse
           // any that cannot be routed now rather than after the vote.
           if (Number(vault.chain_id) === 4663) {
