@@ -2886,7 +2886,7 @@ export class TaptoolsService {
   }
 
   /** Blockscout ERC-1155 holdings per wallet (all contracts), cached briefly: one call serves every contract. */
-  private readonly erc1155HoldingsCache = new Map<string, { at: number; byContract: Map<string, bigint[]> }>();
+  private readonly erc1155HoldingsCache = new NodeCache({ stdTTL: 60, checkperiod: 60, useClones: false });
 
   /**
    * Token ids of `contract` that `wallet` holds, from Blockscout's `/addresses/{wallet}/nft`.
@@ -2894,8 +2894,8 @@ export class TaptoolsService {
    */
   private async blockscoutErc1155Ids(contract: string, wallet: string): Promise<bigint[] | null> {
     const key = wallet.toLowerCase();
-    const cached = this.erc1155HoldingsCache.get(key);
-    if (cached && Date.now() - cached.at < 60_000) return cached.byContract.get(contract.toLowerCase()) ?? [];
+    const cached = this.erc1155HoldingsCache.get<Map<string, bigint[]>>(key);
+    if (cached) return cached.get(contract.toLowerCase()) ?? [];
 
     for (const base of resolveBlockscoutBases(this.configService)) {
       if (isBaseDown(base)) continue;
@@ -2920,7 +2920,7 @@ export class TaptoolsService {
           }
           params = res.next_page_params ?? null;
         }
-        this.erc1155HoldingsCache.set(key, { at: Date.now(), byContract });
+        this.erc1155HoldingsCache.set(key, byContract);
         return byContract.get(contract.toLowerCase()) ?? [];
       } catch (err) {
         if (isBlockedHttpError(err)) markBaseDown(base);
