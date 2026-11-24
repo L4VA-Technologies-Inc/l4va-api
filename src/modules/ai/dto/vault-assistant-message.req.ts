@@ -60,6 +60,18 @@ export class VaultAssistantMessageReq {
   @ApiProperty({
     required: false,
     type: [String],
+    description: 'Fields the user set by hand. The assistant must not change them; any value it returns is dropped',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(100)
+  @Expose()
+  lockedFields?: string[];
+
+  @ApiProperty({
+    required: false,
+    type: [String],
     description: 'Validation errors from the previous draft, fed back so the assistant can correct itself',
   })
   @IsOptional()

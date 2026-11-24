@@ -36,11 +36,17 @@ export function buildVaultAssistantPrompt(params: {
   spec: ResolvedVaultCreationSpec;
   presets: PresetContext[];
   currentDraft: Record<string, unknown>;
+  /** Fields the user set by hand in the panel; the assistant must not change them. */
+  lockedFields?: string[];
   completion: VaultCompletionContext;
   validationErrors?: string[];
   basketSymbols?: string[];
 }): string {
-  const { spec, presets, currentDraft, completion, validationErrors, basketSymbols = [] } = params;
+  const { spec, presets, currentDraft, lockedFields = [], completion, validationErrors, basketSymbols = [] } = params;
+
+  const locked = lockedFields.length
+    ? `\n# Fields the user set by hand (locked)\nThe user set these values themselves: ${lockedFields.join(', ')}.\nNever change them and leave them out of vaultDraft — any value you return for them is discarded.\nWork around them: adjust other fields if needed. If the user asks you to change one, tell them to\nedit it in the vault panel themselves.\n`
+    : '';
 
   const correction = validationErrors?.length
     ? `\n# Corrections required\nThe previous draft was rejected by the live validators. Fix exactly these problems and keep everything else:\n${validationErrors
@@ -335,5 +341,5 @@ ${renderFields(spec)}
 
 # Draft so far
 ${JSON.stringify(currentDraft)}
-${correction}`;
+${locked}${correction}`;
 }

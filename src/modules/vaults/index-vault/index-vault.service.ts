@@ -482,17 +482,20 @@ export class IndexVaultService implements OnApplicationBootstrap {
     rebalances: ReturnType<IndexVaultService['serializeRebalance']>[];
     /** Smallest trade the rebalancer makes, in wei; legs below it are skipped. */
     minTradeNative: string;
+    /** Set while the basket buy after a lock is trading; proposals wait for it. */
+    setupPending: string | null;
   }> {
     const vault = await this.requireIndexVault(vaultId);
     const hasHoldings = !!vault.contract_address && HOLDING_STATUSES.includes(vault.vault_status);
 
-    const [portfolio, rebalances] = await Promise.all([
+    const [portfolio, rebalances, setupPending] = await Promise.all([
       hasHoldings ? this.getPortfolio(vault) : Promise.resolve(null),
       this.rebalanceRepository.find({
         where: { vault_id: vaultId },
         order: { created_at: 'DESC' },
         take: 10,
       }),
+      vault.vault_status === VaultStatus.locked ? this.basketBuyInProgress(vault) : Promise.resolve(null),
     ]);
 
     return {
@@ -501,6 +504,7 @@ export class IndexVaultService implements OnApplicationBootstrap {
       portfolio,
       rebalances: rebalances.map(r => this.serializeRebalance(r)),
       minTradeNative: MIN_TRADE_NATIVE.toString(),
+      setupPending,
     };
   }
 
@@ -530,6 +534,11 @@ export class IndexVaultService implements OnApplicationBootstrap {
     }[];
     minTradeNative: string;
     navNative: string;
+    /**
+     * Sells larger than the guarded swap adapter's daily cap for that asset
+     * (`capBps` of the vault's balance). A re-weight may only move within the cap.
+     */
+    overCap: { asset: string; amountIn: string; maxAmountIn: string; capBps: number; sellBps: number }[];
   }> {
     const vault = await this.requireIndexVault(vaultId);
     if (!vault.contract_address) throw new BadRequestException('Vault is not deployed yet');
@@ -602,7 +611,31 @@ export class IndexVaultService implements OnApplicationBootstrap {
     const routedSells = sells.filter((_, i) => !sellsRouted[i]);
     const buys = plannedBuys.filter((_, i) => !buysRouted[i]);
 
+    // Daily sell cap of the guarded adapter. Checked against the full cap (capBps of the
+    // balance), not what is left of today's window: the window refills over 24 h and the
+    // vote lasts longer than that, so the full cap is what execution will have.
+    const overCap: { asset: string; amountIn: string; maxAmountIn: string; capBps: number; sellBps: number }[] = [];
+    for (const s of routedSells) {
+      const cap = await this.routeService.sellCap(
+        vault as typeof vault & { contract_address: string },
+        s.asset as Address
+      );
+      if (!cap.guarded || cap.capBps === null || cap.capBps >= 10_000) continue;
+      const balance = state.holdings.find(h => h.asset === s.asset)?.balance ?? 0n;
+      const maxAmountIn = (balance * BigInt(cap.capBps)) / 10_000n;
+      if (s.amountIn > maxAmountIn) {
+        overCap.push({
+          asset: s.asset,
+          amountIn: s.amountIn.toString(),
+          maxAmountIn: maxAmountIn.toString(),
+          capBps: cap.capBps,
+          sellBps: balance > 0n ? Number((s.amountIn * 10_000n) / balance) : 10_000,
+        });
+      }
+    }
+
     return {
+      overCap,
       skipped: skipped.map(s => ({
         ...s,
         valueNative: s.valueNative.toString(),
@@ -620,6 +653,78 @@ export class IndexVaultService implements OnApplicationBootstrap {
         nativeIn: b.nativeIn.toString(),
       })),
     };
+  }
+
+  /**
+   * Trim each sell to what the guarded adapter lets the vault sell right now. Prices move between a
+   * re-weight's vote and its execution, so a sell sized within the cap at creation can need a bit
+   * more later; selling up to the cap and leaving the rest off target beats failing the whole run.
+   * The buys are planned from the vault's state after the sells, so they shrink to match, and the
+   * next rebalance closes the gap. A sell with nothing left in the window is dropped.
+   */
+  private async clipSellsToCap<T extends { assetIn: string; amountIn: bigint }>(
+    vault: Vault,
+    runId: string,
+    sells: T[]
+  ): Promise<T[]> {
+    if (!vault.contract_address) return sells;
+    const out: T[] = [];
+    for (const sell of sells) {
+      const cap = await this.routeService.sellCap(
+        vault as Vault & { contract_address: string },
+        sell.assetIn as Address
+      );
+      if (!cap.guarded || cap.remaining === null) {
+        out.push(sell);
+        continue;
+      }
+      const remaining = BigInt(cap.remaining);
+      if (sell.amountIn <= remaining) {
+        out.push(sell);
+        continue;
+      }
+      this.logger.warn(
+        `Index rebalance ${runId}: ${sell.assetIn} sell trimmed from ${sell.amountIn} to ${remaining} (daily cap ${cap.capBps} bps)`
+      );
+      if (remaining > 0n) out.push({ ...sell, amountIn: remaining });
+    }
+    return out;
+  }
+
+  /**
+   * Why a passed re-weight must wait before it trades: a sell it needs fits the adapter's daily
+   * cap but not what is left of the current 24 h window (another swap or rebalance used part of
+   * it). The window refills linearly, so the proposal waits instead of burning its retries on
+   * `DailySwapCapError`. A sell that grew past the full cap waits only for a full window and is
+   * trimmed at execution. Returns null when it can run now, or when the check itself fails.
+   */
+  async reweightCapWait(proposal: Proposal): Promise<string | null> {
+    const payload = proposal.metadata?.indexReweight;
+    if (!payload?.targets?.length || payload.scheduleOnly) return null;
+    try {
+      const vault = await this.requireIndexVault(proposal.vaultId);
+      if (!vault.contract_address) return null;
+      const preview = await this.previewReweight(vault.id, payload.targets, payload.reserveBps);
+      for (const s of preview.sells) {
+        // A sell grown past the full cap (prices moved since the vote) is trimmed to the cap at
+        // execution, so it only waits for the window to be full again.
+        const over = preview.overCap.find(c => c.asset.toLowerCase() === s.asset.toLowerCase());
+        const needed = over ? BigInt(over.maxAmountIn) : BigInt(s.amountIn);
+        const cap = await this.routeService.sellCap(
+          vault as typeof vault & { contract_address: string },
+          s.asset as Address
+        );
+        if (!cap.guarded || cap.remaining === null) continue;
+        if (needed > BigInt(cap.remaining)) {
+          const symbol = payload.targets.find(t => t.assetAddress.toLowerCase() === s.asset.toLowerCase())?.symbol;
+          return `daily sell cap for ${symbol || s.asset} is partly used; it refills within 24 h`;
+        }
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(`Re-weight cap check for proposal ${proposal.id} failed: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   /**
@@ -650,6 +755,20 @@ export class IndexVaultService implements OnApplicationBootstrap {
         .join('; ');
       throw new BadRequestException(
         `This re-weight needs trades Uniswap cannot route right now: ${list}. Adjust the basket and try again.`
+      );
+    }
+
+    // A re-weight may only move each asset within the adapter's daily sell cap, so the
+    // whole change executes in one run right after the vote (no multi-day tranches).
+    if (preview.overCap.length) {
+      const symbolOf = (a: string): string =>
+        items.find(t => t.assetAddress?.toLowerCase() === a.toLowerCase())?.symbol || `${a.slice(0, 8)}…`;
+      const list = preview.overCap
+        .map(c => `${symbolOf(c.asset)} (sells ~${(c.sellBps / 100).toFixed(1)}% of holdings, max ${c.capBps / 100}%)`)
+        .join('; ');
+      throw new BadRequestException(
+        `This re-weight moves too much at once: ${list}. A re-weight may sell at most the daily cap of each asset; ` +
+          'make a smaller change now and the rest in a later proposal.'
       );
     }
 
@@ -915,6 +1034,26 @@ export class IndexVaultService implements OnApplicationBootstrap {
    * locked, so a queued expansion opened earlier would skip them. Returns why to wait, or null.
    * A basket buy that failed for good does not block (it would block forever).
    */
+  /**
+   * Set while the last cycle's basket buy is trading right now. Proposals wait only for this: until
+   * it ends the raised ETH shows as free while it is being spent. A buy that has not started, or
+   * failed and waits for a retry, does not block governance.
+   */
+  async basketBuyInProgress(
+    vault: Pick<Vault, 'id' | 'evm_current_cycle_id' | 'vault_archetype'>
+  ): Promise<string | null> {
+    const cycleId = vault.evm_current_cycle_id;
+    if (!cycleId || vault.vault_archetype !== VaultArchetype.index_weighted) return null;
+    const executing = await this.rebalanceRepository.exist({
+      where: {
+        vault_id: vault.id,
+        idempotency_key: `initial:cycle:${cycleId}`,
+        status: IndexRebalanceStatus.executing,
+      },
+    });
+    return executing ? 'the basket for the last cycle is being bought' : null;
+  }
+
   async postLockWorkPending(
     vault: Pick<Vault, 'id' | 'evm_current_cycle_id' | 'vault_archetype'>
   ): Promise<string | null> {
@@ -1197,11 +1336,15 @@ export class IndexVaultService implements OnApplicationBootstrap {
           const skipped: SkippedLeg[] = [];
           const planned =
             side === IndexLegSide.sell
-              ? planSells(state, targets, opts, skipped).map(s => ({
-                  assetIn: s.asset,
-                  assetOut: NATIVE as string,
-                  amountIn: s.amountIn,
-                }))
+              ? await this.clipSellsToCap(
+                  vault,
+                  run.id,
+                  planSells(state, targets, opts, skipped).map(s => ({
+                    assetIn: s.asset,
+                    assetOut: NATIVE as string,
+                    amountIn: s.amountIn,
+                  }))
+                )
               : planBuys(state, targets, opts, skipped).map(b => ({
                   assetIn: NATIVE as string,
                   assetOut: b.asset,

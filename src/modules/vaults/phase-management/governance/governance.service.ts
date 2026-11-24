@@ -625,6 +625,8 @@ export class GovernanceService {
       | 'chain_id'
       | 'evm_protocol_version'
       | 'contract_address'
+      | 'vault_archetype'
+      | 'evm_current_cycle_id'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -639,6 +641,8 @@ export class GovernanceService {
         'chain_id',
         'evm_protocol_version',
         'contract_address',
+        'vault_archetype',
+        'evm_current_cycle_id',
       ],
       relations: ['assets_whitelist'],
     });
@@ -661,6 +665,19 @@ export class GovernanceService {
       vault.vault_status !== VaultStatus.acquire_expansion
     ) {
       throw new BadRequestException('Governance is only available for locked, expansion, or acquire expansion vaults');
+    }
+
+    // While an index vault's basket buy is trading, the raised ETH shows as free but is being spent:
+    // a proposal created now could plan around (or reserve) it. Only the running buy blocks.
+    if (
+      vault.chain_type === ChainType.robinhood &&
+      vault.vault_archetype === VaultArchetype.index_weighted &&
+      vault.vault_status === VaultStatus.locked
+    ) {
+      const buying = await this.indexVaultService.basketBuyInProgress(vault);
+      if (buying) {
+        throw new BadRequestException(`Proposals open once ${buying} finishes. Please try again in a few minutes.`);
+      }
     }
 
     // A passed termination is a one-way door: the vault's DB status only becomes `terminating`
@@ -1203,6 +1220,17 @@ export class GovernanceService {
 
         // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
         if (vault.chain_type === ChainType.robinhood) {
+          // Index vaults trade only through re-weights: a one-off swap moves the basket off its
+          // weights, the next rebalance trades it back, and it bypasses the re-weight cap checks.
+          // Closing an LP position is not a trade and stays allowed.
+          if (
+            vault.vault_archetype === VaultArchetype.index_weighted &&
+            actions.some(a => (a as Record<string, any>)?.exec !== 'CLOSE_POSITION')
+          ) {
+            throw new BadRequestException(
+              'Index vaults cannot create swap proposals. Change the basket with a re-weight proposal instead.'
+            );
+          }
           this.indexVaultService.assertMarketSwapOutputsAllowed(actions as Array<Record<string, any>>);
           // Mainnet token trades run through the Uniswap swap adapter; refuse
           // any that cannot be routed now rather than after the vote.
