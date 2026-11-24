@@ -141,8 +141,8 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   evm_acquire_fee_bps: null,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
-  evm_min_acquire_threshold_eth: 0.01,
-  evm_max_acquire_threshold_eth: 100000,
+  evm_min_acquire_threshold_eth: 0.1,
+  evm_max_acquire_threshold_eth: 1000,
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
   auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
   // Kill switches for sensitive flows
@@ -511,12 +511,12 @@ export class SystemSettingsService implements OnModuleInit {
   /** Robinhood minAcquireThreshold range, in ETH. */
   get minAcquireThresholdEth(): number {
     const v = Number(this.settings.evm_min_acquire_threshold_eth);
-    return Number.isFinite(v) && v > 0 ? v : 0.01;
+    return Number.isFinite(v) && v > 0 ? v : 0.1;
   }
 
   get maxAcquireThresholdEth(): number {
     const v = Number(this.settings.evm_max_acquire_threshold_eth);
-    return Number.isFinite(v) && v >= this.minAcquireThresholdEth ? v : 100000;
+    return Number.isFinite(v) && v >= this.minAcquireThresholdEth ? v : 1000;
   }
 
   get minContributionDuration(): number {
