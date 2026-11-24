@@ -39,6 +39,13 @@ export const GUARDED_SWAP_ADAPTER_ABI = [
   },
   {
     type: 'function',
+    name: 'capBpsFor',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ type: 'uint16' }],
+  },
+  {
+    type: 'function',
     name: 'remainingCap',
     stateMutability: 'view',
     inputs: [
