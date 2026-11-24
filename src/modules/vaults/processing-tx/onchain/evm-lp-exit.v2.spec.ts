@@ -89,7 +89,7 @@ function setup(opts: { code: Hex; nativeOwed?: bigint; vtOwed?: bigint; configur
   const service = new EvmLpExitService(
     { publicClient: { readContract, getCode: jest.fn(async () => opts.code) } } as any,
     { sendAndConfirm } as any,
-    { swap } as any,
+    { swap, tradeFeeBps: async () => 25 } as any,
     { get: (k: string) => (k === 'EVM_LP_EXIT_ADAPTER_ADDRESS' ? opts.configuredExit : undefined) } as any,
     {} as any
   );
@@ -105,7 +105,7 @@ describe('EvmLpExitService with UniswapV4LiquidityAdapterV2', () => {
 
     expect(t.sent.map(s => s.fn)).toEqual(['withdrawToExit', 'vault.swap', 'releaseToken', 'burnHeldVaultToken']);
     expect(t.sent[0]).toEqual({ to: LP_V2, fn: 'withdrawToExit', args: [7n] });
-    expect(t.sent[1].args).toEqual([EXIT_V2, DUST, t.proceeds.native]);
+    expect(t.sent[1].args).toEqual([EXIT_V2, DUST, t.proceeds.native - (t.proceeds.native * 25n) / 10_000n]);
     expect(t.sent[2]).toEqual({ to: EXIT_V2, fn: 'releaseToken', args: [VAULT, VT] });
     expect(t.sent.some(s => s.fn === 'assign' || s.fn === 'withdrawLiquidity')).toBe(false);
     expect(r.withdrawnTokenIds).toEqual([7n]);
