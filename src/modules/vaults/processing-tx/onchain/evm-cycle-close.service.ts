@@ -3,7 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { parseAbi, type Address, type Hex } from 'viem';
 
-import { EvmAdminSigner, TxRevertedError, VaultFrozenError } from './evm-admin-signer.service';
+import {
+  EvmAdminSigner,
+  ExpansionWindowTooShortError,
+  TxRevertedError,
+  VaultFrozenError,
+} from './evm-admin-signer.service';
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmCycleStatus, EvmVaultOnchainStatus, VAULT_ABI } from './vault.abi';
 
@@ -203,7 +208,13 @@ export class EvmCycleCloseService {
       // Guardian freeze: simulation refused, nothing was broadcast. Hand the
       // snapshot back to `ready` so the close runs again once the vault is
       // unfrozen, instead of failing it and forcing a new snapshot by hand.
-      if (err instanceof VaultFrozenError) {
+      // V13 expansion closed before its 24 h minimum: same as a freeze — simulation refused,
+      // nothing broadcast, and the close succeeds later. Keep the snapshot `ready`.
+      if (err instanceof VaultFrozenError || err instanceof ExpansionWindowTooShortError) {
+        const notSent =
+          err instanceof VaultFrozenError
+            ? 'vault frozen by the protocol guardian; not sent'
+            : `expansion window too short (V13 24 h minimum); not sent: ${err.message.slice(0, 300)}`;
         await this.dataSource.transaction(async manager => {
           await manager.update(
             EvmValuationSnapshot,
@@ -216,7 +227,7 @@ export class EvmCycleCloseService {
             {
               status: TransactionStatus.failed,
               reconciliation_status: EvmReconciliationStatus.failed,
-              reconciliation_last_error: 'vault frozen by the protocol guardian; not sent',
+              reconciliation_last_error: notSent,
             }
           );
         });

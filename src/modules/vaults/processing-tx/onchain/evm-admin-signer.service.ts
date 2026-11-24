@@ -101,6 +101,49 @@ export function isVaultFrozenRevert(err: unknown): boolean {
   return reverted.data?.errorName === 'VaultFrozen' || reverted.signature === VAULT_FROZEN_SELECTOR;
 }
 
+/**
+ * A V13 expansion cycle cannot be closed yet: `closeCycle` reverted in simulation with
+ * `ExpansionWindowTooShort(earliestClose)`. Nothing was broadcast. Not a failure: the same
+ * close succeeds once `earliestClose` (unix seconds) has passed, so callers keep it retryable.
+ */
+export class ExpansionWindowTooShortError extends Error {
+  constructor(
+    public readonly address: Address,
+    public readonly functionName: string,
+    public readonly earliestClose: bigint | null
+  ) {
+    super(
+      `Vault ${address} expansion cannot close before ` +
+        `${earliestClose !== null ? new Date(Number(earliestClose) * 1000).toISOString() : 'its 24 h minimum'}; ` +
+        `${functionName} was not sent`
+    );
+    this.name = 'ExpansionWindowTooShortError';
+  }
+}
+
+const EXPANSION_WINDOW_TOO_SHORT_SELECTOR = toFunctionSelector('ExpansionWindowTooShort(uint256)');
+
+/**
+ * `earliestClose` (unix seconds) when a viem error is the vault's `ExpansionWindowTooShort`
+ * revert, decoded by name or by selector; `undefined` for any other error. `null` when the
+ * revert was recognised by selector only and its argument could not be decoded.
+ */
+export function expansionWindowTooShortRevert(err: unknown): bigint | null | undefined {
+  if (!(err instanceof BaseError)) return undefined;
+  const reverted = err.walk(e => e instanceof ContractFunctionRevertedError);
+  if (!(reverted instanceof ContractFunctionRevertedError)) return undefined;
+  if (reverted.data?.errorName === 'ExpansionWindowTooShort') {
+    const arg = reverted.data.args?.[0];
+    return typeof arg === 'bigint' ? arg : null;
+  }
+  if (reverted.signature === EXPANSION_WINDOW_TOO_SHORT_SELECTOR) return null;
+  return undefined;
+}
+
+/** Matches a snapshot `failure_reason` written when closeCycle hit `ExpansionWindowTooShort`. */
+export const isExpansionWindowTooShortReason = (reason: string | null | undefined): boolean =>
+  !!reason && (reason.includes('ExpansionWindowTooShort') || reason.includes(EXPANSION_WINDOW_TOO_SHORT_SELECTOR));
+
 export interface AdminTxResult {
   hash: Hex;
   receipt: TransactionReceipt;
@@ -211,6 +254,11 @@ export class EvmAdminSigner {
       if (isVaultFrozenRevert(err)) {
         this.logger.warn(`simulateContract(${functionName}) skipped: vault ${address} is frozen by the guardian`);
         throw new VaultFrozenError(address, functionName);
+      }
+      const earliestClose = expansionWindowTooShortRevert(err);
+      if (earliestClose !== undefined) {
+        this.logger.warn(`simulateContract(${functionName}) skipped: vault ${address} expansion window too short`);
+        throw new ExpansionWindowTooShortError(address, functionName, earliestClose);
       }
       const message = (err as Error).message || String(err);
       this.logger.error(`simulateContract(${functionName}) reverted: ${message}`);

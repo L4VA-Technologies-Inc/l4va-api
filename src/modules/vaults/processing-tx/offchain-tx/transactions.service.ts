@@ -1111,12 +1111,15 @@ export class TransactionsService {
   private async updateAcquireExpansionAdaRaised(vaultId: string): Promise<void> {
     try {
       // Check if vault is in acquire_expansion status
-      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'expansion_phase_start'],
-      });
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'chain_type'> =
+        await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'vault_status', 'expansion_phase_start', 'chain_type'],
+        });
 
-      if (!vault || vault.vault_status !== VaultStatus.acquire_expansion) {
+      // Cardano only: the sum below treats `amount` as ADA. Robinhood amounts are wei, and the EVM
+      // flow reads the raise from the contract (`nativeCollected`), so nothing is written for it.
+      if (!vault || vault.vault_status !== VaultStatus.acquire_expansion || vault.chain_type === ChainType.robinhood) {
         // Not in acquire expansion mode, nothing to update
         return;
       }
