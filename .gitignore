@@ -62,5 +62,9 @@ l4va-protocol-mainnet.json
 gcp-service-account.json
 gcp-bucket.json
 
-# Presale reminder list, written by the prod deploy from a secret
-presale-reminder-recipients.txt
+# Local Robinhood-mainnet test stack (contains test keys)
+.env.mainnet
+test/testnet-v13/.state.json
+
+# swap-pool-sync.ts output
+pool-sync-*/

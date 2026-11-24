@@ -4,16 +4,20 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Between, DataSource, In, Not, Repository } from 'typeorm';
 
-import { DistributionService } from './distribution.service';
+import { DistributionService, UNFINISHED_BATCH_STATUSES } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
+import { DistributionBatch } from './dto/distribution.dto';
+import { EvmGovernanceExecutionService, PROPOSAL_WAIT_CODE } from './evm-governance-execution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
+import { ProposalConditionsChangedError } from './proposal-errors';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
+import { totalVotingPower as snapshotVotingPower } from './voting-power.util';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -32,7 +36,7 @@ import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -47,6 +51,7 @@ export class GovernanceExecutionService {
   // Retry configuration constants
   private readonly MAX_EXECUTION_RETRIES = 5;
   private readonly RETRY_BACKOFF_MINUTES = 5; // Base backoff time in minutes
+  private readonly VOTE_REMINDER_WINDOW_MS: number;
 
   constructor(
     @InjectRepository(Proposal)
@@ -74,9 +79,12 @@ export class GovernanceExecutionService {
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly snapshotService: SnapshotService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly evmGovernanceExecutionService: EvmGovernanceExecutionService,
+    private readonly dataSource: DataSource
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.VOTE_REMINDER_WINDOW_MS = this.isMainnet ? 6 * 60 * 60 * 1000 : 2 * 60 * 1000;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -95,9 +103,20 @@ export class GovernanceExecutionService {
       async (proposalId, endDate) => {
         await this.activateProposal(proposalId);
         this.schedulerService.scheduleExecution(proposalId, endDate, () => this.processProposal(proposalId));
+        this.scheduleVoteReminderJob(proposalId, endDate);
       },
       proposalId => this.processProposal(proposalId)
     );
+
+    const activeProposals = await this.proposalRepository.find({
+      where: { status: ProposalStatus.ACTIVE },
+      select: ['id', 'endDate', 'metadata'],
+    });
+    for (const proposal of activeProposals) {
+      if (!proposal.metadata?.voteReminderSentAt && proposal.endDate) {
+        this.scheduleVoteReminderJob(proposal.id, proposal.endDate);
+      }
+    }
   }
 
   @OnEvent('proposal.created')
@@ -122,6 +141,19 @@ export class GovernanceExecutionService {
       this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
         this.processProposal(payload.proposalId)
       );
+      this.scheduleVoteReminderJob(payload.proposalId, payload.endDate);
+
+      const activeProposal = await this.proposalRepository.findOne({
+        where: { id: payload.proposalId },
+        relations: ['vault', 'creator', 'snapshot'],
+      });
+
+      if (!activeProposal) {
+        this.logger.warn(`Active proposal ${payload.proposalId} not found for start notification`);
+        return;
+      }
+
+      await this.notifyProposalStarted(activeProposal);
     }
   }
 
@@ -130,6 +162,7 @@ export class GovernanceExecutionService {
     this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
       this.processProposal(payload.proposalId)
     );
+    this.scheduleVoteReminderJob(payload.proposalId, payload.endDate);
   }
 
   /**
@@ -175,6 +208,97 @@ export class GovernanceExecutionService {
   }
 
   /**
+   * Remind snapshot holders who have not voted yet, shortly before voting ends.
+   * Mainnet: last 6 hours. Testnet: last 2 minutes (votes can be as short as 5 minutes).
+   * Cron is a fallback; the primary trigger is a one-shot job at window start.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async notifyVoteTimeRunningOut(): Promise<void> {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + this.VOTE_REMINDER_WINDOW_MS);
+
+    const proposals = await this.proposalRepository.find({
+      where: {
+        status: ProposalStatus.ACTIVE,
+        endDate: Between(now, windowEnd),
+      },
+      relations: ['vault', 'snapshot', 'votes'],
+    });
+
+    for (const proposal of proposals) {
+      if (proposal.metadata?.voteReminderSentAt) {
+        continue;
+      }
+
+      try {
+        await this.emitVoteTimeRunningOut(proposal);
+      } catch (error) {
+        this.logger.error(
+          `Failed to send vote-running-out notifications for proposal ${proposal.id}: ${error.message}`,
+          error.stack
+        );
+      }
+    }
+  }
+
+  private async emitVoteTimeRunningOut(proposal: Proposal): Promise<void> {
+    const holderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
+    const votedIds = new Set((proposal.votes || []).map(vote => vote.voterId));
+    const nonVoterIds = holderIds.filter(id => !votedIds.has(id));
+
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          voteReminderSentAt: new Date().toISOString(),
+        },
+      }
+    );
+
+    if (nonVoterIds.length === 0) {
+      this.logger.debug(`Proposal ${proposal.id} vote reminder skipped: all snapshot holders have voted`);
+      return;
+    }
+
+    this.eventEmitter.emit('governance.vote_time_running_out', {
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name || null,
+      proposalId: proposal.id,
+      proposalName: proposal.title,
+      nonVoterIds,
+    });
+
+    this.logger.log(
+      `Sent vote-running-out notifications for proposal ${proposal.id} to ${nonVoterIds.length} non-voter(s)`
+    );
+  }
+
+  private scheduleVoteReminderJob(proposalId: string, endDate?: Date): void {
+    if (!endDate) {
+      return;
+    }
+
+    const remindAt = new Date(endDate.getTime() - this.VOTE_REMINDER_WINDOW_MS);
+    this.schedulerService.scheduleVoteReminder(proposalId, remindAt, endDate, () =>
+      this.sendVoteReminderIfNeeded(proposalId)
+    );
+  }
+
+  private async sendVoteReminderIfNeeded(proposalId: string): Promise<void> {
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId, status: ProposalStatus.ACTIVE },
+      relations: ['vault', 'snapshot', 'votes'],
+    });
+
+    if (!proposal || proposal.metadata?.voteReminderSentAt) {
+      return;
+    }
+
+    await this.emitVoteTimeRunningOut(proposal);
+  }
+
+  /**
    * Retry execution of all PASSED proposals with exponential backoff
    * Runs periodically to retry proposals that are in PASSED status but not yet executed
    * Implements retry limits and exponential backoff to prevent indefinite retries
@@ -183,87 +307,21 @@ export class GovernanceExecutionService {
   @Cron(CronExpression.EVERY_5_MINUTES)
   async retryPassedProposals(): Promise<void> {
     try {
-      // Find all proposals in PASSED status with metadata for retry tracking
       const passedProposals = await this.proposalRepository.find({
         where: { status: ProposalStatus.PASSED },
-        select: ['id', 'title', 'vaultId', 'metadata', 'proposalType'],
+        select: ['id'],
       });
 
-      if (passedProposals.length === 0) {
-        return;
-      }
-
-      for (const proposal of passedProposals) {
+      for (const { id } of passedProposals) {
         try {
-          // Special handling for DISTRIBUTION proposals with pending batch retries
-          if (proposal.proposalType === ProposalType.DISTRIBUTION && proposal.metadata?.distribution?.batches) {
-            const hasPendingRetries = proposal.metadata.distribution.batches.some(
-              (b: any) => b.status === 'retry_pending'
-            );
-
-            if (hasPendingRetries) {
-              this.logger.log(`Retrying pending distribution batches for proposal ${proposal.id}`);
-              const result = await this.distributionService.retryFailedBatches(proposal.id);
-
-              if (result.retriedCount > 0) {
-                this.logger.log(
-                  `Retried ${result.retriedCount} batches for proposal ${proposal.id}: ` +
-                    `${result.successCount} succeeded, ${result.stillFailedCount} still failed`
-                );
-
-                // Check if all batches are now complete
-                const status = await this.distributionService.getDistributionStatus(proposal.id);
-                if (status.status === 'completed') {
-                  await this.proposalRepository.update(
-                    { id: proposal.id },
-                    { status: ProposalStatus.EXECUTED, executionDate: new Date() }
-                  );
-                  this.logger.log(`Distribution proposal ${proposal.id} fully completed, marked as EXECUTED`);
-                }
-              }
-              continue; // Skip normal retry logic for distribution proposals with pending batches
-            }
+          // A proposal that is executing right now (first run after the vote, a
+          // manual retry, or another replica's cron) is skipped, not run twice.
+          const lock = await this.withExecutionLock(id, () => this.retryPassedProposalLocked(id));
+          if (!lock.acquired) {
+            this.logger.debug(`Proposal ${id} is being executed by another run, retry skipped`);
           }
-
-          const retryInfo = proposal.metadata?._executionRetry;
-          const retryCount = retryInfo?.count || 0;
-          const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
-
-          // Check if max retries exceeded
-          if (retryCount >= this.MAX_EXECUTION_RETRIES) {
-            continue;
-          }
-
-          // Calculate exponential backoff: base * 2^retryCount minutes
-          const backoffMinutes = this.RETRY_BACKOFF_MINUTES * Math.pow(2, retryCount);
-          const nextRetryTime = lastRetryAt ? new Date(lastRetryAt.getTime() + backoffMinutes * 60 * 1000) : new Date(); // First retry, execute immediately
-
-          // Check if enough time has passed since last retry
-          if (lastRetryAt && new Date() < nextRetryTime) {
-            this.logger.debug(
-              `Proposal ${proposal.id} is in backoff period. Next retry at ${nextRetryTime.toISOString()}`
-            );
-            continue;
-          }
-
-          this.logger.log(
-            `Retrying execution for PASSED proposal ${proposal.id} (${proposal.title}) - Attempt ${retryCount + 1}/${this.MAX_EXECUTION_RETRIES}`
-          );
-
-          // Update retry tracking in metadata before execution
-          const updatedMetadata = {
-            ...proposal.metadata,
-            _executionRetry: {
-              count: retryCount + 1,
-              lastAttempt: new Date().toISOString(),
-            },
-          };
-
-          await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
-
-          await this.executePassedProposal(proposal.id);
         } catch (error) {
-          this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
+          this.logger.error(`Error retrying execution for proposal ${id}: ${error.message}`, error.stack);
           // Continue with next proposal - retry count already incremented
         }
       }
@@ -272,11 +330,152 @@ export class GovernanceExecutionService {
     }
   }
 
+  /** One retry-cron pass over one proposal. Must only be called while holding its execution lock. */
+  private async retryPassedProposalLocked(proposalId: string): Promise<void> {
+    // Re-read under the lock: the run that held it may have just finished the
+    // proposal or written batch state that the cron's list query predates.
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId, status: ProposalStatus.PASSED },
+      select: ['id', 'title', 'vaultId', 'metadata', 'proposalType'],
+    });
+    if (!proposal) return;
+
+    // DISTRIBUTION proposals with unfinished batches (queued for retry, or sent
+    // with an outcome still to be confirmed on chain) are resumed batch by batch.
+    // This does not use the proposal retry budget below: in-flight batches must
+    // keep being checked until the chain settles them.
+    if (proposal.proposalType === ProposalType.DISTRIBUTION && proposal.metadata?.distribution?.batches) {
+      const hasUnfinishedBatches = proposal.metadata.distribution.batches.some((b: DistributionBatch) =>
+        UNFINISHED_BATCH_STATUSES.includes(b.status)
+      );
+
+      if (hasUnfinishedBatches) {
+        this.logger.log(`Resuming unfinished distribution batches for proposal ${proposal.id}`);
+        const result = await this.distributionService.retryFailedBatches(proposal.id);
+
+        if (result.retriedCount > 0) {
+          this.logger.log(
+            `Retried ${result.retriedCount} batches for proposal ${proposal.id}: ` +
+              `${result.successCount} succeeded, ${result.stillFailedCount} still failed`
+          );
+
+          // Check if all batches are now complete
+          const status = await this.distributionService.getDistributionStatus(proposal.id);
+          if (status.status === 'completed') {
+            await this.proposalRepository.update(
+              { id: proposal.id },
+              { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+            );
+            this.logger.log(`Distribution proposal ${proposal.id} fully completed, marked as EXECUTED`);
+          }
+        }
+        return; // Skip normal retry logic for distribution proposals with unfinished batches
+      }
+    }
+
+    // A passed proposal waiting for the vault (an expansion running, VT still to be claimed, …)
+    // re-checks every tick without spending its retry budget (see EvmGovernanceExecutionService).
+    if (proposal.metadata?.executionError?.errorCode === PROPOSAL_WAIT_CODE) {
+      await this.alertIfWaitingTooLong(proposal);
+      await this.executePassedProposalLocked(proposal.id);
+      return;
+    }
+
+    const retryInfo = proposal.metadata?._executionRetry;
+    const retryCount = retryInfo?.count || 0;
+    const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
+
+    // Check if max retries exceeded. Tell someone once: the proposal stays PASSED and nothing
+    // retries it again on its own.
+    if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+      if (!retryInfo?.alertedAt) {
+        await this.proposalRepository.update(
+          { id: proposal.id },
+          { metadata: { ...proposal.metadata, _executionRetry: { ...retryInfo, alertedAt: new Date().toISOString() } } }
+        );
+        this.logger.error(
+          `Proposal ${proposal.id} (${proposal.proposalType}) gave up after ${retryCount} attempts: ` +
+            (proposal.metadata?.executionError?.message ?? 'no error recorded')
+        );
+        void this.alertsService.sendAlert('proposal_execution_gave_up', {
+          proposalId: proposal.id,
+          vaultId: proposal.vaultId,
+          type: proposal.proposalType,
+          title: proposal.title,
+          attempts: retryCount,
+          error: proposal.metadata?.executionError?.message ?? null,
+        });
+      }
+      return;
+    }
+
+    // Calculate exponential backoff: base * 2^retryCount minutes
+    const backoffMinutes = this.RETRY_BACKOFF_MINUTES * Math.pow(2, retryCount);
+    const nextRetryTime = lastRetryAt ? new Date(lastRetryAt.getTime() + backoffMinutes * 60 * 1000) : new Date(); // First retry, execute immediately
+
+    // Check if enough time has passed since last retry
+    if (lastRetryAt && new Date() < nextRetryTime) {
+      this.logger.debug(`Proposal ${proposal.id} is in backoff period. Next retry at ${nextRetryTime.toISOString()}`);
+      return;
+    }
+
+    this.logger.log(
+      `Retrying execution for PASSED proposal ${proposal.id} (${proposal.title}) - Attempt ${retryCount + 1}/${this.MAX_EXECUTION_RETRIES}`
+    );
+
+    // Update retry tracking in metadata before execution
+    const updatedMetadata = {
+      ...proposal.metadata,
+      _executionRetry: {
+        count: retryCount + 1,
+        lastAttempt: new Date().toISOString(),
+      },
+    };
+
+    await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
+
+    // Already holding the lock: call the locked body directly.
+    await this.executePassedProposalLocked(proposal.id);
+  }
+
+  /** A passed proposal waiting for the vault longer than this gets one Slack alert. */
+  private readonly WAITING_ALERT_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Waiting has no time limit, so a condition that never clears (e.g. VT nobody claims) would
+   * hold a proposal forever. Tell someone once when it has waited too long.
+   */
+  private async alertIfWaitingTooLong(proposal: Proposal): Promise<void> {
+    const wait = proposal.metadata?.executionError;
+    if (!wait?.waitingSince || wait.waitingAlertedAt) return;
+    if (Date.now() - new Date(wait.waitingSince).getTime() < this.WAITING_ALERT_AFTER_MS) return;
+    await this.proposalRepository.update(
+      { id: proposal.id },
+      {
+        metadata: {
+          ...proposal.metadata,
+          executionError: { ...wait, waitingAlertedAt: new Date().toISOString() },
+        },
+      }
+    );
+    this.logger.warn(
+      `Proposal ${proposal.id} (${proposal.proposalType}) has waited since ${wait.waitingSince}: ${wait.reason}`
+    );
+    void this.alertsService.sendAlert('proposal_waiting_too_long', {
+      proposalId: proposal.id,
+      vaultId: proposal.vaultId,
+      type: proposal.proposalType,
+      title: proposal.title,
+      waitingSince: wait.waitingSince,
+      reason: wait.reason ?? wait.message,
+    });
+  }
+
   async activateProposal(proposalId: string): Promise<void> {
     try {
       const proposal = await this.proposalRepository.findOne({
         where: { id: proposalId, status: ProposalStatus.UPCOMING },
-        relations: ['vault', 'creator'],
+        relations: ['vault', 'creator', 'snapshot'],
       });
 
       if (!proposal) {
@@ -286,7 +485,16 @@ export class GovernanceExecutionService {
 
       // Double-check the start time
       if (new Date() >= new Date(proposal.startDate)) {
-        await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.ACTIVE });
+        // Atomic UPCOMING -> ACTIVE transition: the scheduled job and the overdue
+        // fallback can fire at the same moment; only the winner continues.
+        const transition = await this.proposalRepository.update(
+          { id: proposalId, status: ProposalStatus.UPCOMING },
+          { status: ProposalStatus.ACTIVE }
+        );
+        if (!transition.affected) {
+          this.logger.debug(`Proposal ${proposalId} already activated by a concurrent run`);
+          return;
+        }
 
         // Emit event for real-time UI updates
         this.eventEmitter.emit('proposal.status.changed', {
@@ -295,6 +503,9 @@ export class GovernanceExecutionService {
           previousStatus: ProposalStatus.UPCOMING,
           timestamp: new Date(),
         });
+
+        await this.notifyProposalStarted(proposal);
+        this.scheduleVoteReminderJob(proposal.id, proposal.endDate);
 
         // Index reward event for proposal activation
         // Only ACTIVE proposals count toward governance participation rewards
@@ -331,6 +542,24 @@ export class GovernanceExecutionService {
     }
   }
 
+  private async notifyProposalStarted(proposal: Proposal): Promise<void> {
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
+    if (tokenHolderIds.length === 0) {
+      this.logger.debug(`Proposal ${proposal.id} activated but no token holders were found to notify`);
+      return;
+    }
+
+    this.eventEmitter.emit('proposal.started', {
+      address: proposal.creator?.address,
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name,
+      proposalId: proposal.id,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds,
+    });
+  }
+
   async processProposal(proposalId: string): Promise<void> {
     try {
       const proposal = await this.proposalRepository
@@ -360,6 +589,7 @@ export class GovernanceExecutionService {
           'votes.voteWeight',
           'votes.vote',
           'snapshot.addressBalances',
+          'snapshot.lpBalances',
         ])
         .getOne();
 
@@ -372,12 +602,7 @@ export class GovernanceExecutionService {
       const participationThreshold = proposal.vault.cosigning_threshold || 0;
 
       // Calculate total voting power from snapshot
-      let totalVotingPower = BigInt(0);
-      if (proposal.snapshot?.addressBalances) {
-        for (const balance of Object.values(proposal.snapshot.addressBalances)) {
-          totalVotingPower += BigInt(balance);
-        }
-      }
+      const totalVotingPower = proposal.snapshot ? snapshotVotingPower(proposal.snapshot) : BigInt(0);
 
       // Use vote counting service to calculate results with both thresholds
       const voteResult = this.voteCountingService.calculateResult(
@@ -393,9 +618,7 @@ export class GovernanceExecutionService {
         voteResult.noVotes === BigInt(0) &&
         voteResult.abstainVotes > BigInt(0);
 
-      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-        proposal.snapshot?.addressBalances
-      );
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
 
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
@@ -436,14 +659,24 @@ export class GovernanceExecutionService {
         },
       };
 
-      await this.proposalRepository.update(
-        { id: proposalId },
+      // Conditional on ACTIVE: two schedules can fire processProposal for the same
+      // proposal, and only one of them may move it to PASSED and execute it.
+      const transition = await this.proposalRepository.update(
+        { id: proposalId, status: ProposalStatus.ACTIVE },
         { status: ProposalStatus.PASSED, metadata: updatedMetadata }
       );
+      if (!transition.affected) {
+        this.logger.warn(`Proposal ${proposal.id}: already moved out of ACTIVE by another run, not executing`);
+        return;
+      }
 
       this.logger.log(
         `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
       );
+
+      if (proposal.proposalType === ProposalType.TERMINATION) {
+        await this.closeOtherProposalsAfterTermination(proposal.vaultId, proposal.id);
+      }
 
       // Immediately trigger execution
       await this.executePassedProposal(proposalId);
@@ -454,10 +687,106 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Execute a PASSED proposal
-   * Retrieves proposals from PASSED status and executes them
+   * A passed termination ends the vault, so nothing else can still be voted on or started:
+   * every other UPCOMING / ACTIVE proposal of the vault is closed as REJECTED and its creation
+   * fee refunded, the same as a normal rejection. PASSED proposals already being executed are left alone.
+   */
+  private async closeOtherProposalsAfterTermination(vaultId: string, terminationProposalId: string): Promise<void> {
+    try {
+      const open = await this.proposalRepository.find({
+        where: {
+          vaultId,
+          id: Not(terminationProposalId),
+          // PASSED too: a passed-but-unexecuted proposal (e.g. a distribution waiting for a retry)
+          // would otherwise still run, and could reserve the funds termination needs.
+          status: In([ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.PASSED]),
+        },
+        select: ['id', 'metadata'],
+      });
+
+      for (const other of open) {
+        const result = await this.proposalRepository
+          .createQueryBuilder()
+          .update(Proposal)
+          .set({
+            status: ProposalStatus.REJECTED,
+            metadata: {
+              ...other.metadata,
+              // Shown in the proposal list, so holders see why the vote ended early.
+              executionError: {
+                message: `Closed: termination proposal ${terminationProposalId} passed.`,
+                timestamp: new Date().toISOString(),
+                errorCode: 'CLOSED_BY_TERMINATION',
+                userFriendlyMessage: 'Closed because the vault termination proposal passed.',
+              },
+            },
+          })
+          .where('id = :id AND status IN (:...statuses)', {
+            id: other.id,
+            statuses: [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.PASSED],
+          })
+          .execute();
+        if (!result.affected) continue;
+
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(other.id, { throwOnFailure: false });
+        this.logger.log(`Proposal ${other.id}: REJECTED (vault terminated by proposal ${terminationProposalId})`);
+      }
+    } catch (error) {
+      // The termination itself must still execute even if this cleanup fails.
+      this.logger.error(
+        `Failed to close other proposals after termination ${terminationProposalId}: ${error.message}`,
+        error.stack
+      );
+    }
+  }
+
+  /**
+   * Runs `fn` while holding a Postgres session advisory lock for this proposal,
+   * or returns `{ acquired: false }` at once if another run holds it.
+   *
+   * Executing a proposal moves money (treasury payouts, swaps, LP exits), and it
+   * is triggered from more than one place: right after the vote passes, from
+   * the retry cron, and from manual retry endpoints. Without this lock two of
+   * them could execute the same proposal at the same time. The lock lives in
+   * Postgres, so it holds across API replicas and is released by the server if
+   * the process dies mid-execution.
+   */
+  private async withExecutionLock<T>(
+    proposalId: string,
+    fn: () => Promise<T>
+  ): Promise<{ acquired: false } | { acquired: true; result: T }> {
+    const key = `proposal-execution:${proposalId}`;
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      const [{ locked }] = await runner.query('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [key]);
+      if (!locked) return { acquired: false };
+      try {
+        return { acquired: true, result: await fn() };
+      } finally {
+        await runner.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]).catch(error => {
+          this.logger.error(`Failed to release execution lock for proposal ${proposalId}: ${error.message}`);
+        });
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /**
+   * Execute a PASSED proposal. Skips (does nothing) if another run is already
+   * executing it; the status is re-read under the lock, so a proposal that
+   * another run has just finished is not executed again.
    */
   async executePassedProposal(proposalId: string): Promise<void> {
+    const lock = await this.withExecutionLock(proposalId, () => this.executePassedProposalLocked(proposalId));
+    if (!lock.acquired) {
+      this.logger.log(`Proposal ${proposalId} is already being executed by another run, skipping`);
+    }
+  }
+
+  /** Must only be called while holding {@link withExecutionLock} for this proposal. */
+  private async executePassedProposalLocked(proposalId: string): Promise<void> {
     let proposal: Proposal | null = null;
 
     try {
@@ -483,6 +812,7 @@ export class GovernanceExecutionService {
           'treasury_wallet.treasury_address',
           'owner.address',
           'snapshot.addressBalances',
+          'snapshot.lpBalances',
         ])
         .getOne();
 
@@ -491,16 +821,17 @@ export class GovernanceExecutionService {
         return;
       }
 
-      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-        proposal.snapshot?.addressBalances
-      );
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
 
       // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
-        // Clear executionError from metadata on successful execution
-        const updatedMetadata = { ...proposal.metadata };
+        // Clear executionError from metadata on successful execution. Re-read the row first:
+        // execution writes its own results into metadata (e.g. `evmDistribution` with the
+        // openDistribution tx hash), and the in-memory copy predates them.
+        const fresh = await this.proposalRepository.findOne({ where: { id: proposalId } });
+        const updatedMetadata = { ...(fresh?.metadata ?? proposal.metadata) };
         delete updatedMetadata.executionError;
 
         await this.proposalRepository.update(
@@ -527,6 +858,11 @@ export class GovernanceExecutionService {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for automatic retry`);
       }
     } catch (error) {
+      if (error.message === 'PROPOSAL_REJECTED_CONDITIONS_CHANGED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - the vault changed since the vote; it cannot run as voted`);
+        return;
+      }
+
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
       if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
         this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
@@ -595,14 +931,28 @@ export class GovernanceExecutionService {
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
     // Get vault to check status for extraction-based proposals
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'chain_type'> = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
-      select: ['id', 'vault_status'],
+      select: ['id', 'vault_status', 'chain_type'],
     });
 
     if (!vault) {
       this.logger.error(`Vault ${proposal.vaultId} not found`);
       return false;
+    }
+
+    // EVM vaults: delegate entirely to the EVM execution service.
+    if (vault.chain_type === ChainType.robinhood) {
+      try {
+        return await this.evmGovernanceExecutionService.executeProposal(proposal, vault);
+      } catch (err) {
+        // The vault changed since the vote so the proposal cannot run as voted: reject it (and
+        // refund its creation fee) instead of retrying something that cannot succeed.
+        if (err instanceof ProposalConditionsChangedError) {
+          await this.rejectMarketplaceProposal(proposal, err.message, 'PROPOSAL_REJECTED_CONDITIONS_CHANGED');
+        }
+        throw err;
+      }
     }
 
     // Proposals that require vault to be LOCKED can only execute in that status
@@ -688,9 +1038,7 @@ export class GovernanceExecutionService {
       }
 
       // For other errors, store them and emit failure event
-      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-        proposal.snapshot?.addressBalances
-      );
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
@@ -2117,13 +2465,16 @@ export class GovernanceExecutionService {
         // Check if there are pending retries
         const status = await this.distributionService.getDistributionStatus(proposal.id);
 
-        if (status.pendingRetry > 0) {
+        // Batches still to be sent or whose submission is not yet confirmed keep the
+        // proposal PASSED, so the retry cron resumes them (under the execution lock).
+        // Marking it EXECUTED here would strand those holders: the cron only looks
+        // at PASSED proposals.
+        if (status.unresolvedBatches > 0) {
           this.logger.warn(
-            `Distribution proposal ${proposal.id} has ${status.pendingRetry} batches pending retry. ` +
-              `Will be retried automatically.`
+            `Distribution proposal ${proposal.id} has ${status.unresolvedBatches} unfinished batch(es) ` +
+              `(${status.pendingRetry} pending retry). Will be resumed automatically.`
           );
-          // Don't fail the proposal if there are pending retries
-          return true;
+          return false;
         }
 
         if (status.failedBatches > 0 && status.completedBatches > 0) {
@@ -2203,9 +2554,7 @@ export class GovernanceExecutionService {
           throwOnFailure: false,
         });
 
-        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
-          proposal.snapshot?.addressBalances
-        );
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(proposal.snapshot);
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
@@ -2358,6 +2707,7 @@ export class GovernanceExecutionService {
             collection_name: item.collectionName ?? null,
             valuation_method: item.valuationMethod || 'market',
             custom_price_ada: item.customPriceAda ?? null,
+            custom_price_native_wei: item.customPriceNativeWei ?? null,
             lp_pool_onchain_id: item.lpPoolOnchainId ?? null,
           })
           .orIgnore()

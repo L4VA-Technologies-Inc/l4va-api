@@ -1,0 +1,1100 @@
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
+import { keccak256, parseAbiItem, toBytes, toFunctionSelector, type Address, type Hex } from 'viem';
+
+import { EvmAdminSigner } from './evm-admin-signer.service';
+import { EvmContractReader } from './evm-contract-reader.service';
+import { chunkRelease, computeVtRelease } from './evm-lp-exit.formulas';
+import { resolveVaultLpExitAdapter } from './evm-protocol-versions';
+import { EvmSwapService } from './evm-swap.service';
+import { VAULT_ABI } from './vault.abi';
+
+import {
+  fetchJsonWithRetry,
+  isBaseDown,
+  isBlockedHttpError,
+  markBaseDown,
+  resolveBlockscoutBases,
+  withBlockscoutKey,
+} from '@/common/http/http-retry';
+import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+
+const NATIVE = '0x0000000000000000000000000000000000000000' as const;
+const DEAD = '0x000000000000000000000000000000000000dead' as const;
+/** Recipients per `releaseToken` transaction. */
+const RELEASE_CHUNK = 100;
+const LOG_CHUNK_BLOCKS = 10_000n;
+const TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+const LIQUIDITY_WITHDRAWN_EVENT = parseAbiItem(
+  'event LiquidityWithdrawn(address indexed vault, uint256 indexed tokenId, address indexed recipient)'
+);
+const ASSIGNED_EVENT = parseAbiItem(
+  'event Assigned(address indexed vault, uint256 nativeAmount, address indexed token, uint256 tokenAmount)'
+);
+/** One exit at a time across every vault and instance: the exit adapter is shared. */
+const LP_EXIT_LOCK_KEY = 'l4va:evm-lp-exit';
+/** Unassigned native below this is swap-leg dust (1 wei per exit), not worth a history scan. */
+const NATIVE_DUST_WEI = 1_000_000_000n;
+/** `PUSH4 <selector>` of `Vault.burnHeldVaultToken()` as it appears in a V12+ vault's dispatcher. */
+const BURN_HELD_VT_DISPATCH = `63${toFunctionSelector('burnHeldVaultToken()').slice(2)}`;
+
+/**
+ * Whether runtime `code` dispatches `burnHeldVaultToken()` (V12+ vaults). Solidity compares the
+ * call's selector against a `PUSH4 <selector>` for every external function; the selector has no
+ * leading zero byte, so it is never shortened to `PUSH3`.
+ */
+export function vaultCodeBurnsHeldVt(code: Hex | undefined): boolean {
+  return !!code && code.toLowerCase().includes(BURN_HELD_VT_DISPATCH);
+}
+
+/** The slice of `UniswapV4LiquidityAdapter` the exit reads and calls. */
+const V4_LP_ADAPTER_ABI = [
+  {
+    type: 'function',
+    name: 'positionsOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'vault', type: 'address' }],
+    outputs: [{ type: 'uint256[]' }],
+  },
+  {
+    type: 'function',
+    name: 'liquidityOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'vault', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'positionManager',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'poolManager',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'withdrawLiquidity',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'tokenId', type: 'uint256' },
+      { name: 'recipient', type: 'address' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'event',
+    name: 'LiquidityWithdrawn',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'recipient', type: 'address', indexed: false },
+    ],
+  },
+] as const;
+
+const POSM_ABI = [
+  {
+    type: 'function',
+    name: 'getPositionLiquidity',
+    stateMutability: 'view',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
+    outputs: [{ type: 'uint128' }],
+  },
+] as const;
+
+/** `LiquidityExitAdapter` (vault-contract-solidity/src/adapters/LiquidityExitAdapter.sol). */
+export const LP_EXIT_ADAPTER_ABI = [
+  {
+    type: 'function',
+    name: 'weth',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'owner',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'unassignedNative',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'unassignedToken',
+    stateMutability: 'view',
+    inputs: [{ name: 'token', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'nativeOwed',
+    stateMutability: 'view',
+    inputs: [{ name: 'vault', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'tokenOwed',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'token', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'assign',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'nativeAmount', type: 'uint256' },
+      { name: 'token', type: 'address' },
+      { name: 'tokenAmount', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    name: 'releaseToken',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'token', type: 'address' },
+      { name: 'to', type: 'address[]' },
+      { name: 'amounts', type: 'uint256[]' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'event',
+    name: 'Assigned',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'nativeAmount', type: 'uint256', indexed: false },
+      { name: 'token', type: 'address', indexed: true },
+      { name: 'tokenAmount', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'TokenReleased',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'token', type: 'address', indexed: true },
+      { name: 'total', type: 'uint256', indexed: false },
+      { name: 'recipients', type: 'uint256', indexed: false },
+    ],
+  },
+] as const;
+
+const VT_ABI = [
+  {
+    type: 'function',
+    name: 'isExcludedHolder',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+] as const;
+
+/**
+ * `UniswapV4LiquidityAdapterV2`: exits take no recipient. `withdrawToExit` pays the position's
+ * proceeds to the adapter's own `exitAdapter` (a `LiquidityExitAdapterV2`), credited to the vault.
+ */
+const V4_LP_ADAPTER_V2_ABI = [
+  {
+    type: 'function',
+    name: 'exitAdapter',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'withdrawToExit',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
+    outputs: [
+      { name: 'nativeAmount', type: 'uint256' },
+      { name: 'vtAmount', type: 'uint256' },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'LiquidityWithdrawn',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
+    ],
+  },
+] as const;
+
+/** `LiquidityExitAdapterV2`: VT is released only to its own vault, by anyone. */
+const LP_EXIT_ADAPTER_V2_ABI = [
+  {
+    type: 'function',
+    name: 'unownedNative',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'releaseToken',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'token', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'event',
+    name: 'TokenReleased',
+    inputs: [
+      { name: 'vault', type: 'address', indexed: true },
+      { name: 'token', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+] as const;
+
+export interface LpExitResult {
+  withdrawnTokenIds: bigint[];
+  nativeReturned: bigint;
+  /** `address(0)` when returned as native, else WETH. */
+  returnedAs: Address | null;
+  vtReleased: bigint;
+  vtRecipients: number;
+  /** VT burned by the vault itself (V12+), instead of being released to holders. */
+  vtBurned: bigint;
+}
+
+/**
+ * Brings a vault's protocol-owned v4 LP back to its holders before termination.
+ *
+ * Deployed vaults cannot book ETH sent to them, so the position is withdrawn into
+ * `LiquidityExitAdapter` and pulled back through `Vault.swap`, the one path that credits
+ * `_nativeCustody`. The VT that comes out of the pool must stop diluting holders: a V12+ vault
+ * burns it, an older vault hands it to holders pro rata (same redemption shares as burning it).
+ * Then `redeem` pays holders the pool's ETH.
+ *
+ *   1. authority: lpAdapter.withdrawLiquidity(tokenId, exitAdapter)   — per live position
+ *   2. owner:     exitAdapter.assign(vault, unassignedNative, vt, unassignedVt)
+ *   3. authority: vault.swap(1 base unit of a custody ERC-20 → ETH, or 1 wei ETH → WETH)
+ *   4. V12+:      owner     exitAdapter.releaseToken(vault, vt, [vault], [owed])
+ *                 authority vault.burnHeldVaultToken()
+ *      older:     owner     exitAdapter.releaseToken(vault, vt, holders, amounts)  — chunked
+ *
+ * Every step is re-derived from chain state, so a crash at any point resumes on the next call.
+ * The vault must be Locked or Active (`Vault.swap` gate): run it before
+ * `beginTerminationPreparing`.
+ *
+ * Step 2 earmarks ALL unassigned balance for this vault. Run exits one vault at a time:
+ * proceeds of two interleaved exits would otherwise be credited to whichever assigns first.
+ */
+@Injectable()
+export class EvmLpExitService {
+  private readonly logger = new Logger(EvmLpExitService.name);
+  /** Vault code never changes, so burn support is cached per address for the process lifetime. */
+  private readonly burnSupport = new Map<string, boolean>();
+  /** LP adapter → its V2 exit adapter, or null for a V1 adapter. Adapter code never changes. */
+  private readonly exitTargets = new Map<string, Address | null>();
+  private readonly v2ExitAdapters = new Map<string, boolean>();
+
+  constructor(
+    private readonly contractReader: EvmContractReader,
+    private readonly adminSigner: EvmAdminSigner,
+    private readonly swapService: EvmSwapService,
+    private readonly configService: ConfigService,
+    private readonly dataSource: DataSource
+  ) {}
+
+  exitAdapterFor(vault: Vault): Address | null {
+    const env = this.configService.get<string>('EVM_LP_EXIT_ADAPTER_ADDRESS')?.trim();
+    return resolveVaultLpExitAdapter(vault, env ? (env as Address) : null);
+  }
+
+  /** v4 LP adapters among the vault's LP positions (non-v4 position assets are skipped). */
+  async v4LpAdapters(vaultAddress: Address): Promise<Address[]> {
+    const client = this.contractReader.publicClient;
+    const total = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'totalLiquidityPositions',
+    })) as bigint;
+    const adapters = new Set<Address>();
+    for (let i = 1n; i <= total; i++) {
+      const p = (await client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'getLiquidityPosition',
+        args: [i],
+      })) as { positionAsset: Address };
+      const asset = p.positionAsset.toLowerCase() as Address;
+      try {
+        await client.readContract({
+          address: asset,
+          abi: V4_LP_ADAPTER_ABI,
+          functionName: 'liquidityOf',
+          args: [vaultAddress],
+        });
+        adapters.add(asset);
+      } catch {
+        // not a v4 adapter
+      }
+    }
+    return [...adapters];
+  }
+
+  /**
+   * VT that can never be redeemed: what sits on the Uniswap v4 PoolManager of each of the
+   * vault's LP adapters, plus 0xdead. v4 seeding forfeits the part of a deposit that does not
+   * fit the position to the PoolManager (`clear`), so a vault that ever had LP keeps a little
+   * VT there forever, and `terminationOutstanding` never reaches 0.
+   */
+  async unredeemableVt(vaultAddress: Address, vt: Address): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    const holders = new Set<string>([DEAD.toLowerCase()]);
+    for (const adapter of await this.v4LpAdapters(vaultAddress)) {
+      const pm = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'poolManager',
+      })) as Address;
+      holders.add(pm.toLowerCase());
+    }
+    let total = 0n;
+    for (const holder of holders) {
+      total += (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [holder as Address],
+      })) as bigint;
+    }
+    return total;
+  }
+
+  /** Liquidity the vault still has in v4 pools, summed over its adapters. */
+  async liquidityInPools(vaultAddress: Address): Promise<bigint> {
+    let total = 0n;
+    for (const adapter of await this.v4LpAdapters(vaultAddress)) {
+      total += (await this.contractReader.publicClient.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'liquidityOf',
+        args: [vaultAddress],
+      })) as bigint;
+    }
+    return total;
+  }
+
+  /**
+   * Runs (or resumes) steps 1–4. A no-op for a vault with no LP and nothing earmarked.
+   *
+   * The LiquidityExitAdapter is shared by every vault and LP proceeds arrive on it untagged, so
+   * exits are serialized (cluster-wide advisory lock) and each vault is assigned only the native
+   * its own withdrawals brought in — never whatever happens to be unassigned on the adapter.
+   */
+  async exitIntoVault(vault: Vault): Promise<LpExitResult> {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [LP_EXIT_LOCK_KEY]);
+      try {
+        return await this.exitIntoVaultLocked(vault);
+      } finally {
+        await runner
+          .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [LP_EXIT_LOCK_KEY])
+          .catch(() => undefined);
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  private async exitIntoVaultLocked(vault: Vault): Promise<LpExitResult> {
+    const client = this.contractReader.publicClient;
+    const vaultAddress = vault.contract_address as Address;
+    const result: LpExitResult = {
+      withdrawnTokenIds: [],
+      nativeReturned: 0n,
+      returnedAs: null,
+      vtReleased: 0n,
+      vtRecipients: 0,
+      vtBurned: 0n,
+    };
+
+    const allLpAdapters = await this.v4LpAdapters(vaultAddress);
+
+    // V2 LP adapters carry their own exit adapter and credit proceeds to the vault themselves.
+    const v2Exits = new Map<Address, Address>();
+    const lpAdapters: Address[] = [];
+    for (const adapter of allLpAdapters) {
+      const exit = await this.v2ExitTargetOf(adapter);
+      if (exit) v2Exits.set(adapter, exit);
+      else lpAdapters.push(adapter);
+    }
+    if (v2Exits.size > 0) await this.exitThroughV2(vault, v2Exits, allLpAdapters, result);
+
+    // ---- V1 LP adapters (positions opened before the V2 adapters) ----------------
+    // Runs exactly as before, over the V1 adapters only. It also finishes a burn a previous run
+    // left half-done, so it is not skipped when there are no V1 positions.
+    const exitAdapter = this.exitAdapterFor(vault);
+    if (!exitAdapter) {
+      if ((await this.liquidityInPools(vaultAddress)) > 0n) {
+        throw new BadRequestException(
+          `Vault ${vaultAddress} has v4 LP in a pool and no LiquidityExitAdapter is configured for its protocol ` +
+            `version (or EVM_LP_EXIT_ADAPTER_ADDRESS). Refusing: the pool's ETH would not reach holders.`
+        );
+      }
+      return result;
+    }
+
+    // From V13 on, a version's `lpExitAdapter` is a LiquidityExitAdapterV2 (no `unassignedNative`,
+    // no `assign`): the V1 flow below cannot run against it. V2 positions were handled above.
+    if (await this.isV2ExitAdapter(exitAdapter)) {
+      if ((await this.liquidityInPools(vaultAddress)) > 0n) {
+        throw new BadRequestException(
+          `Vault ${vaultAddress} still has v4 LP in a pool after the V2 exit, and its configured exit adapter ` +
+            `${exitAdapter} is a LiquidityExitAdapterV2, which cannot take V1 withdrawals. Refusing.`
+        );
+      }
+      return result;
+    }
+
+    const vt = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'vaultToken',
+    })) as Address;
+
+    // Native already sitting unassigned before this run belongs to no one we can name yet.
+    const unassignedNativeBefore = (await client.readContract({
+      address: exitAdapter,
+      abi: LP_EXIT_ADAPTER_ABI,
+      functionName: 'unassignedNative',
+    })) as bigint;
+    const withdrawBlocks = new Set<bigint>();
+
+    // ---- 1. withdraw every live position into the exit adapter -------------
+    for (const adapter of lpAdapters) {
+      const tokenIds = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'positionsOf',
+        args: [vaultAddress],
+      })) as readonly bigint[];
+      if (tokenIds.length === 0) continue;
+      const posm = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'positionManager',
+      })) as Address;
+
+      for (const tokenId of tokenIds) {
+        const liq = (await client.readContract({
+          address: posm,
+          abi: POSM_ABI,
+          functionName: 'getPositionLiquidity',
+          args: [tokenId],
+        })) as bigint;
+        if (liq === 0n) continue; // already withdrawn (burned)
+
+        const tx = await this.adminSigner.sendAndConfirm(
+          {
+            address: adapter,
+            abi: V4_LP_ADAPTER_ABI,
+            functionName: 'withdrawLiquidity',
+            args: [tokenId, exitAdapter],
+          },
+          ['LiquidityWithdrawn']
+        );
+        result.withdrawnTokenIds.push(tokenId);
+        if (tx.receipt?.blockNumber != null) withdrawBlocks.add(BigInt(tx.receipt.blockNumber));
+        this.logger.log(`LP exit: vault=${vaultAddress} tokenId=${tokenId} → exitAdapter ${exitAdapter} tx=${tx.hash}`);
+      }
+    }
+
+    // ---- 2. earmark what arrived ---------------------------------------------
+    const [freeNative, freeVt] = await Promise.all([
+      client.readContract({
+        address: exitAdapter,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'unassignedNative',
+      }) as Promise<bigint>,
+      client.readContract({
+        address: exitAdapter,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'unassignedToken',
+        args: [vt],
+      }) as Promise<bigint>,
+    ]);
+    // Native: what this run's withdrawals added, plus what earlier withdrawals of THIS vault
+    // left unassigned (a crashed run) — attributed from chain history. Never the rest: it may be
+    // another vault's pool proceeds. VT needs no attribution: the token is this vault's own.
+    const thisRun = freeNative > unassignedNativeBefore ? freeNative - unassignedNativeBefore : 0n;
+    let leftover = 0n;
+    if (unassignedNativeBefore > NATIVE_DUST_WEI) {
+      try {
+        leftover = await this.unassignedNativeOf(vaultAddress, exitAdapter, lpAdapters, withdrawBlocks);
+      } catch (err) {
+        // Unknown owner → leave it on the adapter. A later run (or an operator `assign`) settles it.
+        this.logger.warn(
+          `LP exit: could not attribute ${unassignedNativeBefore} wei left unassigned on ${exitAdapter} ` +
+            `(${(err as Error).message}); not assigning it to ${vaultAddress}`
+        );
+      }
+    }
+    const leftoverAvailable = freeNative - thisRun;
+    const nativeToAssign = thisRun + (leftover < leftoverAvailable ? leftover : leftoverAvailable);
+    if (freeNative > nativeToAssign) {
+      this.logger.warn(
+        `LP exit: ${freeNative - nativeToAssign} wei unassigned on ${exitAdapter} is not attributable to ` +
+          `${vaultAddress}; leaving it for its own vault`
+      );
+    }
+
+    if (nativeToAssign > 0n || freeVt > 0n) {
+      const tx = await this.adminSigner.sendAndConfirm(
+        {
+          address: exitAdapter,
+          abi: LP_EXIT_ADAPTER_ABI,
+          functionName: 'assign',
+          args: [vaultAddress, nativeToAssign, vt, freeVt],
+        },
+        ['Assigned']
+      );
+      this.logger.log(`LP exit: assigned native=${nativeToAssign} vt=${freeVt} to ${vaultAddress} tx=${tx.hash}`);
+    }
+
+    // ---- 3. pull native into the vault's custody -----------------------------
+    const owed = (await client.readContract({
+      address: exitAdapter,
+      abi: LP_EXIT_ADAPTER_ABI,
+      functionName: 'nativeOwed',
+      args: [vaultAddress],
+    })) as bigint;
+    if (owed > 0n) {
+      const leg = await this.pickDustLeg(vaultAddress, vt, lpAdapters, exitAdapter);
+      const operationId = keccak256(toBytes(`lp-exit:${vaultAddress.toLowerCase()}:${owed}:${Date.now()}`)) as Hex;
+      const swap = await this.swapService.swap(vault.id, {
+        operationId,
+        adapter: exitAdapter,
+        assetIn: leg.assetIn,
+        amountIn: 1n,
+        assetOut: leg.assetOut,
+        minAmountOut: owed,
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 600),
+        route: '0x',
+      });
+      result.nativeReturned = owed;
+      result.returnedAs = leg.assetOut;
+      this.logger.log(
+        `LP exit: ${owed} wei back in ${vaultAddress} custody as ${leg.assetOut === NATIVE ? 'ETH' : 'WETH'} ` +
+          `(dust leg ${leg.assetIn}) tx=${swap.txHash}`
+      );
+    }
+
+    // ---- 4. retire the pool's VT ---------------------------------------------
+    const vtOwed = (await client.readContract({
+      address: exitAdapter,
+      abi: LP_EXIT_ADAPTER_ABI,
+      functionName: 'tokenOwed',
+      args: [vaultAddress, vt],
+    })) as bigint;
+
+    if (await this.vaultBurnsHeldVt(vaultAddress)) {
+      // V12+: the pool's VT goes to the vault in one call and is burned there. No holder list,
+      // no batches. A run that stopped between the two calls just burns what the vault holds.
+      if (vtOwed > 0n) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          {
+            address: exitAdapter,
+            abi: LP_EXIT_ADAPTER_ABI,
+            functionName: 'releaseToken',
+            args: [vaultAddress, vt, [vaultAddress], [vtOwed]],
+          },
+          ['TokenReleased']
+        );
+        this.logger.log(`LP exit: moved ${vtOwed} pool VT onto ${vaultAddress} for burning tx=${tx.hash}`);
+      }
+      const held = (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [vaultAddress],
+      })) as bigint;
+      if (held > 0n) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: vaultAddress, abi: VAULT_ABI, functionName: 'burnHeldVaultToken', args: [] },
+          ['HeldVaultTokenBurned']
+        );
+        result.vtBurned = held;
+        this.logger.log(`LP exit: burned ${held} VT held by ${vaultAddress} tx=${tx.hash}`);
+      }
+      return result;
+    }
+
+    // Older vaults cannot burn: hand the pool's VT to holders pro rata.
+    if (vtOwed > 0n) {
+      const balances = await this.holderBalances(vault, vt);
+      const excluded = new Set<string>(
+        [exitAdapter, vaultAddress, NATIVE, DEAD, ...lpAdapters].map(a => a.toLowerCase())
+      );
+      for (const adapter of lpAdapters) {
+        const pm = (await client.readContract({
+          address: adapter,
+          abi: V4_LP_ADAPTER_ABI,
+          functionName: 'poolManager',
+        })) as Address;
+        excluded.add(pm.toLowerCase());
+      }
+      for (const holder of balances.keys()) {
+        if (excluded.has(holder)) continue;
+        const isExcluded = (await client.readContract({
+          address: vt,
+          abi: VT_ABI,
+          functionName: 'isExcludedHolder',
+          args: [holder as Address],
+        })) as boolean;
+        if (isExcluded) excluded.add(holder);
+      }
+
+      const plan = computeVtRelease(vtOwed, balances, excluded);
+      for (const chunk of chunkRelease(plan, RELEASE_CHUNK)) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          {
+            address: exitAdapter,
+            abi: LP_EXIT_ADAPTER_ABI,
+            functionName: 'releaseToken',
+            args: [vaultAddress, vt, chunk.recipients, chunk.amounts],
+          },
+          ['TokenReleased']
+        );
+        this.logger.log(`LP exit: released VT to ${chunk.recipients.length} holders of ${vaultAddress} tx=${tx.hash}`);
+      }
+      result.vtReleased = plan.total;
+      result.vtRecipients = plan.recipients.length;
+    }
+
+    return result;
+  }
+
+  /** True when `exitAdapter` is a LiquidityExitAdapterV2 (has `unownedNative()`, V1 has `unassignedNative()`). */
+  async isV2ExitAdapter(exitAdapter: Address): Promise<boolean> {
+    const key = exitAdapter.toLowerCase();
+    const cached = this.v2ExitAdapters.get(key);
+    if (cached !== undefined) return cached;
+    let isV2: boolean;
+    try {
+      await this.contractReader.publicClient.readContract({
+        address: exitAdapter,
+        abi: LP_EXIT_ADAPTER_V2_ABI,
+        functionName: 'unownedNative',
+      });
+      isV2 = true;
+    } catch {
+      isV2 = false;
+    }
+    this.v2ExitAdapters.set(key, isV2);
+    return isV2;
+  }
+
+  /** The V2 exit adapter of `lpAdapter`, or null when it is a V1 adapter (no `exitAdapter()`). */
+  async v2ExitTargetOf(lpAdapter: Address): Promise<Address | null> {
+    const key = lpAdapter.toLowerCase();
+    if (this.exitTargets.has(key)) return this.exitTargets.get(key) ?? null;
+    let exit: Address | null;
+    try {
+      exit = (await this.contractReader.publicClient.readContract({
+        address: lpAdapter,
+        abi: V4_LP_ADAPTER_V2_ABI,
+        functionName: 'exitAdapter',
+      })) as Address;
+    } catch {
+      exit = null;
+    }
+    this.exitTargets.set(key, exit);
+    return exit;
+  }
+
+  /**
+   * V2 exit: every live position is withdrawn with `withdrawToExit` (proceeds are credited to
+   * this vault on-chain — no `assign`, no attribution), native is pulled back through
+   * `Vault.swap`, and the pool's VT is released to the vault and burned. V2 only ever returns VT
+   * to the vault, so it requires a vault that can burn it (V12+ code).
+   */
+  private async exitThroughV2(
+    vault: Vault,
+    v2Exits: Map<Address, Address>,
+    allLpAdapters: Address[],
+    result: LpExitResult
+  ): Promise<void> {
+    const client = this.contractReader.publicClient;
+    const vaultAddress = vault.contract_address as Address;
+    const vt = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'vaultToken',
+    })) as Address;
+
+    // ---- 1. withdraw every live position; proceeds are credited to this vault --------
+    for (const adapter of v2Exits.keys()) {
+      const tokenIds = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'positionsOf',
+        args: [vaultAddress],
+      })) as readonly bigint[];
+      if (tokenIds.length === 0) continue;
+      const posm = (await client.readContract({
+        address: adapter,
+        abi: V4_LP_ADAPTER_ABI,
+        functionName: 'positionManager',
+      })) as Address;
+      for (const tokenId of tokenIds) {
+        const liq = (await client.readContract({
+          address: posm,
+          abi: POSM_ABI,
+          functionName: 'getPositionLiquidity',
+          args: [tokenId],
+        })) as bigint;
+        if (liq === 0n) continue;
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: adapter, abi: V4_LP_ADAPTER_V2_ABI, functionName: 'withdrawToExit', args: [tokenId] },
+          ['LiquidityWithdrawn']
+        );
+        result.withdrawnTokenIds.push(tokenId);
+        this.logger.log(`LP exit (v2): vault=${vaultAddress} tokenId=${tokenId} withdrawn and credited tx=${tx.hash}`);
+      }
+    }
+
+    const burns = await this.vaultBurnsHeldVt(vaultAddress);
+    for (const exit of new Set(v2Exits.values())) {
+      // ---- 2. pull native into the vault's custody ----------------------------------
+      const owed = (await client.readContract({
+        address: exit,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'nativeOwed',
+        args: [vaultAddress],
+      })) as bigint;
+      if (owed > 0n) {
+        const leg = await this.pickDustLeg(vaultAddress, vt, allLpAdapters, exit);
+        const operationId = keccak256(toBytes(`lp-exit-v2:${vaultAddress.toLowerCase()}:${owed}:${Date.now()}`)) as Hex;
+        const swap = await this.swapService.swap(vault.id, {
+          operationId,
+          adapter: exit,
+          assetIn: leg.assetIn,
+          amountIn: 1n,
+          assetOut: leg.assetOut,
+          minAmountOut: owed,
+          deadline: BigInt(Math.floor(Date.now() / 1000) + 600),
+          route: '0x',
+        });
+        result.nativeReturned += owed;
+        result.returnedAs = leg.assetOut;
+        this.logger.log(`LP exit (v2): ${owed} wei back in ${vaultAddress} custody tx=${swap.txHash}`);
+      }
+
+      // ---- 3. the pool's VT goes back to the vault -----------------------------------
+      const vtOwed = (await client.readContract({
+        address: exit,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'tokenOwed',
+        args: [vaultAddress, vt],
+      })) as bigint;
+      if (vtOwed > 0n) {
+        if (!burns) {
+          throw new BadRequestException(
+            `Vault ${vaultAddress} cannot burn VT (pre-V12 code), but its LP sits in a V2 LP adapter that returns ` +
+              `pool VT only to the vault. Releasing it would dilute holders; resolve manually.`
+          );
+        }
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: exit, abi: LP_EXIT_ADAPTER_V2_ABI, functionName: 'releaseToken', args: [vaultAddress, vt] },
+          ['TokenReleased']
+        );
+        this.logger.log(`LP exit (v2): moved ${vtOwed} pool VT onto ${vaultAddress} for burning tx=${tx.hash}`);
+      }
+    }
+
+    // ---- 4. burn what the vault holds -------------------------------------------------
+    if (burns) {
+      const held = (await client.readContract({
+        address: vt,
+        abi: VT_ABI,
+        functionName: 'balanceOf',
+        args: [vaultAddress],
+      })) as bigint;
+      if (held > 0n) {
+        const tx = await this.adminSigner.sendAndConfirm(
+          { address: vaultAddress, abi: VAULT_ABI, functionName: 'burnHeldVaultToken', args: [] },
+          ['HeldVaultTokenBurned']
+        );
+        result.vtBurned += held;
+        this.logger.log(`LP exit (v2): burned ${held} VT held by ${vaultAddress} tx=${tx.hash}`);
+      }
+    }
+  }
+
+  /** True when the vault's code has `burnHeldVaultToken()` (V12+). Read from bytecode: no call, no side effects. */
+  async vaultBurnsHeldVt(vaultAddress: Address): Promise<boolean> {
+    const key = vaultAddress.toLowerCase();
+    const cached = this.burnSupport.get(key);
+    if (cached !== undefined) return cached;
+    const code = await this.contractReader.publicClient.getCode({ address: vaultAddress });
+    if (!code || code === '0x') throw new Error(`No contract code at vault ${vaultAddress}`);
+    const supported = vaultCodeBurnsHeldVt(code);
+    this.burnSupport.set(key, supported);
+    return supported;
+  }
+
+  /**
+   * The input leg of the pull-back swap: 1 base unit of a custody ERC-20 (output native), else
+   * 1 wei of native (output WETH). VT and LP receipts are never used: VT is not a swap leg and
+   * receipts cannot be transferred.
+   */
+  private async pickDustLeg(
+    vaultAddress: Address,
+    vt: Address,
+    lpAdapters: Address[],
+    exitAdapter: Address
+  ): Promise<{ assetIn: Address; assetOut: Address }> {
+    const client = this.contractReader.publicClient;
+    const skip = new Set([vt, ...lpAdapters].map(a => a.toLowerCase()));
+    const custody = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'custodyTokens',
+    })) as Address[];
+    for (const token of custody) {
+      if (skip.has(token.toLowerCase())) continue;
+      const free = (await client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: 'availableErc20ForOperations',
+        args: [token],
+      })) as bigint;
+      if (free > 0n) return { assetIn: token, assetOut: NATIVE };
+    }
+
+    const freeNative = (await client.readContract({
+      address: vaultAddress,
+      abi: VAULT_ABI,
+      functionName: 'availableNativeForOperations',
+    })) as bigint;
+    if (freeNative > 0n) {
+      const weth = (await client.readContract({
+        address: exitAdapter,
+        abi: LP_EXIT_ADAPTER_ABI,
+        functionName: 'weth',
+      })) as Address;
+      return { assetIn: NATIVE, assetOut: weth };
+    }
+    throw new BadRequestException(
+      `Vault ${vaultAddress} holds no free ERC-20 or native to use as the 1-unit input of the LP pull-back swap`
+    );
+  }
+
+  /**
+   * Native that this vault's past withdrawals brought onto the exit adapter and that was never
+   * assigned to it: Σ adapter balance increase in each block holding one of its
+   * `LiquidityWithdrawn(vault, *, exitAdapter)` events, minus Σ `Assigned(vault).nativeAmount`.
+   * Blocks withdrawn in the current run are skipped (counted by the caller). Exits are serialized,
+   * so a block's balance change is that withdrawal's. Throws if history cannot be read (e.g. a
+   * non-archive RPC); the caller then assigns none of it.
+   */
+  private async unassignedNativeOf(
+    vaultAddress: Address,
+    exitAdapter: Address,
+    lpAdapters: Address[],
+    skipBlocks: Set<bigint>
+  ): Promise<bigint> {
+    const client = this.contractReader.publicClient;
+    const fromBlock = await this.vaultCreationBlock(vaultAddress);
+    const latest = await client.getBlockNumber();
+
+    const blocks = new Set<bigint>();
+    let assigned = 0n;
+    for (let from = fromBlock; from <= latest; from += LOG_CHUNK_BLOCKS) {
+      const to = from + LOG_CHUNK_BLOCKS - 1n > latest ? latest : from + LOG_CHUNK_BLOCKS - 1n;
+      for (const adapter of lpAdapters) {
+        const logs = await client.getLogs({
+          address: adapter,
+          event: LIQUIDITY_WITHDRAWN_EVENT,
+          args: { vault: vaultAddress, recipient: exitAdapter },
+          fromBlock: from,
+          toBlock: to,
+        });
+        for (const log of logs)
+          if (log.blockNumber != null && !skipBlocks.has(log.blockNumber)) blocks.add(log.blockNumber);
+      }
+      const assignedLogs = await client.getLogs({
+        address: exitAdapter,
+        event: ASSIGNED_EVENT,
+        args: { vault: vaultAddress },
+        fromBlock: from,
+        toBlock: to,
+      });
+      for (const log of assignedLogs) assigned += log.args.nativeAmount ?? 0n;
+    }
+
+    let received = 0n;
+    for (const block of blocks) {
+      const [after, before] = await Promise.all([
+        client.getBalance({ address: exitAdapter, blockNumber: block }),
+        client.getBalance({ address: exitAdapter, blockNumber: block - 1n }),
+      ]);
+      const delta = BigInt(after) - BigInt(before);
+      if (delta > 0n) received += delta;
+    }
+    return received > assigned ? received - assigned : 0n;
+  }
+
+  /** Block of the vault's createVault tx — the lower bound for its log scans. */
+  private async vaultCreationBlock(vaultAddress: Address): Promise<bigint> {
+    const createTx = await this.dataSource
+      .getRepository(Transaction)
+      .createQueryBuilder('t')
+      .innerJoin('t.vault', 'v')
+      .where('LOWER(v.contract_address) = :addr', {
+        addr: vaultAddress.toLowerCase(),
+      })
+      .andWhere('t.type = :type', { type: TransactionType.createVault })
+      .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+      .orderBy('t.created_at', 'DESC')
+      .getOne();
+    if (!createTx?.tx_hash) throw new Error(`No confirmed createVault tx for vault ${vaultAddress}`);
+    const receipt = await this.contractReader.publicClient.getTransactionReceipt({
+      hash: createTx.tx_hash as Hex,
+    });
+    return receipt.blockNumber;
+  }
+
+  /**
+   * Current VT balances. Blockscout first; on failure (e.g. Cloudflare 403 on mainnet)
+   * fall back to replaying VT Transfer logs from the vault's createVault block.
+   */
+  private async holderBalances(vault: Vault, vt: Address): Promise<Map<string, bigint>> {
+    try {
+      return await this.fetchHolderBalances(vt, vault.chain_id);
+    } catch (err) {
+      this.logger.warn(
+        `LP exit: holders API failed for VT ${vt} (${(err as Error).message}); falling back to Transfer replay`
+      );
+      return this.replayHolderBalances(vault, vt);
+    }
+  }
+
+  private async replayHolderBalances(vault: Vault, vt: Address): Promise<Map<string, bigint>> {
+    const client = this.contractReader.publicClient;
+    const createTx = await this.dataSource.getRepository(Transaction).findOne({
+      where: {
+        vault_id: vault.id,
+        type: TransactionType.createVault,
+        status: TransactionStatus.confirmed,
+      },
+      order: { created_at: 'DESC' },
+    });
+    if (!createTx?.tx_hash) {
+      throw new Error(`Cannot replay VT holders for vault ${vault.id}: no confirmed createVault tx`);
+    }
+    const receipt = await client.getTransactionReceipt({
+      hash: createTx.tx_hash as Hex,
+    });
+    const latest = await client.getBlockNumber();
+
+    const balances = new Map<string, bigint>();
+    for (let from = receipt.blockNumber; from <= latest; from += LOG_CHUNK_BLOCKS) {
+      const to = from + LOG_CHUNK_BLOCKS - 1n > latest ? latest : from + LOG_CHUNK_BLOCKS - 1n;
+      const logs = await client.getLogs({
+        address: vt,
+        event: TRANSFER_EVENT,
+        fromBlock: from,
+        toBlock: to,
+      });
+      for (const log of logs) {
+        const { from: src, to: dst, value } = log.args;
+        if (value === undefined) continue;
+        if (src && src !== NATIVE) {
+          const k = src.toLowerCase();
+          balances.set(k, (balances.get(k) ?? 0n) - value);
+        }
+        if (dst && dst !== NATIVE) {
+          const k = dst.toLowerCase();
+          balances.set(k, (balances.get(k) ?? 0n) + value);
+        }
+      }
+    }
+    for (const [k, v] of balances) if (v <= 0n) balances.delete(k);
+    return balances;
+  }
+
+  /**
+   * Current VT balances from the Blockscout holders API (paged), trying every configured base
+   * in order with retries. A base that hard-blocks (403) is put on cooldown.
+   */
+  private async fetchHolderBalances(vt: Address, chainId: number | string | undefined): Promise<Map<string, bigint>> {
+    const errors: string[] = [];
+    for (const base of resolveBlockscoutBases(this.configService, chainId)) {
+      if (isBaseDown(base)) {
+        errors.push(`${base}: on cooldown`);
+        continue;
+      }
+      try {
+        return await this.fetchHolderBalancesFrom(base, vt);
+      } catch (err) {
+        if (isBlockedHttpError(err)) markBaseDown(base);
+        errors.push(`${base}: ${(err as Error).message}`);
+      }
+    }
+    throw new Error(`All holders API bases failed: ${errors.join(' | ')}`);
+  }
+
+  private async fetchHolderBalancesFrom(base: string, vt: Address): Promise<Map<string, bigint>> {
+    const balances = new Map<string, bigint>();
+    let next: Record<string, unknown> | null = null;
+    for (let page = 0; page < 500; page++) {
+      const url = withBlockscoutKey(new URL(`${base}/tokens/${vt}/holders`), this.configService);
+      for (const [k, v] of Object.entries(next ?? {})) if (v != null) url.searchParams.set(k, String(v));
+      const data = await fetchJsonWithRetry<{
+        items?: any[];
+        next_page_params?: Record<string, unknown> | null;
+      }>(url.toString(), { timeoutMs: 20_000 });
+      for (const item of data.items ?? []) {
+        const addr = String(item.address?.hash ?? '').toLowerCase();
+        if (addr) balances.set(addr, BigInt(item.value));
+      }
+      next = data.next_page_params ?? null;
+      if (!next) return balances;
+    }
+    throw new Error(`Holders API for ${vt} did not finish paging`);
+  }
+}

@@ -20,6 +20,7 @@ import { GoogleCloudModule } from '@/modules/google_cloud/google-cloud.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     HttpModule,
     BlockchainModule,

@@ -1,0 +1,63 @@
+{
+ "routing": "CLASSIC",
+ "quote": {
+  "output": {
+   "amount": "5527621115802452",
+   "token": "0xB197F36C25BA9b66960688882A4dC595C6b04309",
+   "recipient": "0x80d16567Eb07084BCB33eF031EF28994bE2979DB",
+   "minimumAmount": "5472344904644427"
+  },
+  "txFailureReasons": [],
+  "route": [
+   [
+    {
+     "type": "v4-pool",
+     "address": "0x24107d152f14a76d292123265ae3f3c71f863fc2f4ef7ba49d64e78d28ea379e",
+     "tokenIn": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "chainId": 4663,
+      "symbol": "WETH",
+      "decimals": "18"
+     },
+     "tokenOut": {
+      "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "chainId": 4663,
+      "symbol": "USDG",
+      "decimals": "6"
+     },
+     "sqrtRatioX96": "3660306639310989580828672",
+     "liquidity": "20610037349595926",
+     "tickCurrent": "-199661",
+     "fee": "100",
+     "tickSpacing": "1",
+     "hooks": "0x0000000000000000000000000000000000000000",
+     "amountIn": "5000000000000000"
+    },
+    {
+     "type": "v4-pool",
+     "address": "0xbc06e14967a21ac3fee97ef67e17f5eb8b8735c963c84e3646ca516f5ef1de90",
+     "tokenIn": {
+      "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "chainId": 4663,
+      "symbol": "USDG",
+      "decimals": "6"
+     },
+     "tokenOut": {
+      "address": "0xB197F36C25BA9b66960688882A4dC595C6b04309",
+      "chainId": 4663,
+      "symbol": "TSLAon",
+      "decimals": "18"
+     },
+     "sqrtRatioX96": "4284802958581941031351628213955226",
+     "liquidity": "124301408591",
+     "tickCurrent": "217975",
+     "fee": "3000",
+     "tickSpacing": "1",
+     "hooks": "0x0000000000000000000000000000000000000000",
+     "amountOut": "5527621115802452"
+    }
+   ]
+  ],
+  "routeString": "[v4] 100.00% = [0.01%] [1] [0x0000000000000000000000000000000000000000] 0x24107d152f14a76d292123265ae3f3c71f863fc2f4ef7ba49d64e78d28ea379e -> [0.3%] [1] [0x0000000000000000000000000000000000000000] 0xbc06e14967a21ac3fee97ef67e17f5eb8b8735c963c84e3646ca516f5ef1de90"
+ }
+}

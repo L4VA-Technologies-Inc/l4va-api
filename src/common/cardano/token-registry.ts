@@ -24,7 +24,7 @@ export function buildStakeTokenRegistry(configService: ConfigService): Map<strin
 
   const l4vaPolicy = configService.get<string>('L4VA_POLICY_ID')?.toLowerCase();
   const l4vaName = configService.get<string>('L4VA_ASSET_NAME')?.toLowerCase() ?? '';
-  const l4vaDecimals = getValidatedDecimals(configService, 'L4VA_DECIMALS', 3);
+  const l4vaDecimals = getValidatedDecimals(configService, 'L4VA_DECIMALS', 6);
   if (l4vaPolicy) {
     map.set(`${l4vaPolicy}${l4vaName}`, {
       decimals: l4vaDecimals,

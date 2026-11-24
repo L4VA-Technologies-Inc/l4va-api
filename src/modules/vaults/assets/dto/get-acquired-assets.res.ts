@@ -31,6 +31,13 @@ export class GetAcquiredAssetsRes {
   totalAcquiredUsd: number;
 
   @Expose()
+  @ApiProperty({
+    description: 'Total acquired quantity in ETH units (for EVM vaults; 0 for non-EVM vaults)',
+    example: 1.234567,
+  })
+  totalAcquiredEth: number;
+
+  @Expose()
   @ApiProperty({ description: 'Total number of unique acquirers', example: 25 })
   totalAcquirers: number;
 

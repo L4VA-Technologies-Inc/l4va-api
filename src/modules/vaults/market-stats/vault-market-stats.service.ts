@@ -13,6 +13,7 @@ import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetType } from '@/types/asset.types';
+import { MarketType } from '@/types/market.types';
 import { VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
 
 /**
@@ -413,7 +414,7 @@ export class VaultMarketStatsService {
     };
 
     const delta = calculateDelta(data.mcap, data.tvl);
-    const marketData = { ...data, delta };
+    const marketData = { ...data, delta, type: MarketType.vault_token };
     delete marketData.tvl;
 
     const existingMarket = await this.marketRepository.findOne({

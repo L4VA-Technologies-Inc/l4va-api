@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -18,12 +17,24 @@ import {
   ValidateIf,
   ArrayMinSize,
   IsUUID,
+  ValidateNested,
+  Validate,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 
+import { IndexBasketReq } from '@/modules/vaults/index-vault/dto/index-basket.dto';
+import {
+  basketAssetCapFor,
+  currentEvmVersionRef,
+  maxBasketAssetCapAnyVersion,
+} from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
+import { VaultArchetype } from '@/types/index-vault.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -31,7 +42,37 @@ import {
   ValueMethod,
   VaultPrivacy,
   VaultType,
+  ChainType,
 } from '@/types/vault.types';
+
+/** Max entries in a Cardano vault's asset whitelist. */
+export const MAX_ASSETS_WHITELIST_CARDANO = 10;
+
+/**
+ * Upper bound across chains and EVM versions — for payloads that don't carry a chain (drafts).
+ * The real limit is checked against the chain at create time.
+ */
+export const MAX_ASSETS_WHITELIST = Math.max(MAX_ASSETS_WHITELIST_CARDANO, maxBasketAssetCapAnyVersion());
+
+/**
+ * Max entries in a NEW vault's asset whitelist. Robinhood: the termination cap of the current
+ * factory's contracts minus the slot kept for native ETH (15 up to V13). Cardano: 10.
+ */
+export function maxAssetsWhitelistFor(chainType?: ChainType): number {
+  return chainType === ChainType.robinhood ? basketAssetCapFor(currentEvmVersionRef()) : MAX_ASSETS_WHITELIST_CARDANO;
+}
+
+@ValidatorConstraint({ name: 'assetsWhitelistMaxForChain', async: false })
+class AssetsWhitelistMaxForChain implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    if (!Array.isArray(value)) return true;
+    return value.length <= maxAssetsWhitelistFor((args.object as { chainType?: ChainType }).chainType);
+  }
+  defaultMessage(args: ValidationArguments): string {
+    const chain = (args.object as { chainType?: ChainType }).chainType ?? ChainType.cardano;
+    return `A maximum of ${maxAssetsWhitelistFor(chain)} assets can be whitelisted on ${chain}`;
+  }
+}
 
 export class CreateVaultReq {
   @ApiProperty({ required: false })
@@ -316,14 +357,14 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Creation threshold percentage (between 0.50 and 100.00)',
     required: true,
-    minimum: 0.5,
+    minimum: 0.1,
     maximum: 100,
     type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
   @Type(() => Number)
-  @Min(0.5)
+  @Min(0.1)
   @Max(100)
   @Expose()
   creationThreshold: number;
@@ -396,7 +437,8 @@ export class CreateVaultReq {
   ftTokenImg: string;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
+    description:
+      'List of whitelisted assets with their policy IDs and optional count caps (max 10 on Cardano, 15 on Robinhood)',
     type: [AssetWhitelistDto],
     required: false,
     example: [
@@ -409,7 +451,7 @@ export class CreateVaultReq {
   })
   @IsArray()
   @ArrayMinSize(1, { message: 'At least one asset must be whitelisted' })
-  @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
+  @Validate(AssetsWhitelistMaxForChain)
   @IsObject({ each: true })
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
@@ -452,4 +494,32 @@ export class CreateVaultReq {
   @IsBoolean()
   @Expose()
   isExpandableAssetWhitelist?: boolean;
+
+  @ApiProperty({ description: 'Chain to deploy vault on', enum: ChainType, required: false })
+  @IsOptional()
+  @IsEnum(ChainType)
+  @Expose()
+  chainType?: ChainType;
+
+  @ApiProperty({
+    description: 'Product archetype. index_weighted is Robinhood-only and requires an acquire-only vault.',
+    enum: VaultArchetype,
+    required: false,
+    default: VaultArchetype.standard,
+  })
+  @IsOptional()
+  @IsEnum(VaultArchetype)
+  @Expose()
+  vaultArchetype?: VaultArchetype;
+
+  @ApiProperty({
+    description: 'Target basket the vault buys once the acquire window locks (index_weighted only)',
+    type: IndexBasketReq,
+    required: false,
+  })
+  @ValidateIf(o => o.vaultArchetype === VaultArchetype.index_weighted)
+  @ValidateNested()
+  @Type(() => IndexBasketReq)
+  @Expose()
+  indexBasket?: IndexBasketReq;
 }

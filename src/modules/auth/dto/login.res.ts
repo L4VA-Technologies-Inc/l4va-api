@@ -45,6 +45,10 @@ export class LoginUserDto {
   @Expose()
   @ApiProperty({ description: 'User email', required: false, example: 'user@example.com' })
   email?: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Whether the user email is verified', required: false, example: false })
+  emailVerified?: boolean;
 }
 
 export class LoginRes {

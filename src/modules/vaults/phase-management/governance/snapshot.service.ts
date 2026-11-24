@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
+
+import { snapshotRecipients } from './snapshot-recipients.util';
 
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
@@ -11,6 +13,8 @@ import { User } from '@/database/user.entity';
  */
 @Injectable()
 export class SnapshotService {
+  private readonly logger = new Logger(SnapshotService.name);
+
   constructor(
     @InjectRepository(Snapshot)
     private readonly snapshotsRepository: Repository<Snapshot>,
@@ -19,22 +23,26 @@ export class SnapshotService {
   ) {}
 
   /**
-   * Resolve user IDs from snapshot addressBalances.
-   * All addresses in the snapshot are included; unregistered wallets are silently skipped.
-   * Returns deduplicated user IDs.
-   *
-   * @param addressBalances - Snapshot address balances record
-   * @returns Array of unique user IDs
+   * Resolve user IDs of everyone with voting weight in the snapshot: VT holders plus,
+   * on EVM, owners of Uniswap positions holding VT (`lpBalances`).
+   * Unregistered wallets are silently skipped. Returns deduplicated user IDs.
    */
-  async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
-    if (!addressBalances) return [];
-    const addresses = Object.keys(addressBalances);
+  async getTokenHolderIdsFromSnapshot(
+    snapshot?: Pick<Snapshot, 'addressBalances' | 'lpBalances'> | null
+  ): Promise<string[]> {
+    if (!snapshot) return [];
+    const addresses = [...snapshotRecipients(snapshot)];
     if (addresses.length === 0) return [];
 
-    const users = await this.userRepository.find({
-      where: { address: In(addresses) },
-      select: ['id'],
-    });
+    const users = await this.userRepository
+      .createQueryBuilder('user')
+      .select('user.id', 'id')
+      .where('LOWER(user.address) IN (:...addresses)', { addresses })
+      .getRawMany<{ id: string }>();
+
+    if (users.length === 0) {
+      this.logger.debug(`No token-holder users matched snapshot addresses (addresses=${addresses.length}).`);
+    }
 
     // Deduplicate user IDs (though DB should already ensure uniqueness)
     return [...new Set(users.map(u => u.id))];
@@ -51,9 +59,9 @@ export class SnapshotService {
     const snapshot = await this.snapshotsRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
-      select: ['addressBalances'],
+      select: ['addressBalances', 'lpBalances'],
     });
 
-    return this.getTokenHolderIdsFromSnapshot(snapshot?.addressBalances);
+    return this.getTokenHolderIdsFromSnapshot(snapshot);
   }
 }

@@ -88,9 +88,24 @@ export class AssetValueDto {
   @Expose()
   ticker?: string;
 
-  @ApiProperty({ description: 'Asset quantity owned' })
+  @ApiProperty({
+    description:
+      'Asset quantity owned. For Cardano this is the raw base-unit integer from Blockfrost. For EVM ERC-20 this is the decimal-adjusted (human-readable) amount and callers MUST use rawQuantity for any on-chain or financial computation.',
+  })
   @Expose()
   quantity: number;
+
+  @ApiProperty({
+    description:
+      'Exact base-unit quantity as a decimal string. Populated for EVM assets (uint256 wei) and any Cardano asset where the raw quantity could exceed JS safe integer range. Callers that need to construct on-chain transactions or compute exact valuations MUST use this field, not `quantity`.',
+    required: false,
+  })
+  @Expose()
+  rawQuantity?: string;
+
+  @ApiProperty({ description: 'Number of decimal places for FTs (0 for NFTs).', required: false })
+  @Expose()
+  decimals?: number;
 
   @ApiProperty({ description: 'Whether this asset is an NFT' })
   @Expose()
@@ -108,6 +123,10 @@ export class AssetValueDto {
   @Expose()
   priceUsd: number;
 
+  @ApiProperty({ description: 'Asset price in ETH' })
+  @Expose()
+  priceEth: number;
+
   @ApiProperty({ description: 'Total value in ADA (price * quantity)' })
   @Expose()
   valueAda: number;
@@ -115,6 +134,10 @@ export class AssetValueDto {
   @ApiProperty({ description: 'Total value in USD (price * quantity)' })
   @Expose()
   valueUsd: number;
+
+  @ApiProperty({ description: 'Total value in ETH (price * quantity)' })
+  @Expose()
+  valueEth: number;
 
   @ApiProperty({ description: 'Asset metadata', required: false, type: () => AssetMetadataDto })
   @Expose()

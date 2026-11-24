@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
+import { ChainType } from '@/types/vault.types';
 
 @Injectable()
 export class OgService {
@@ -31,14 +32,17 @@ export class OgService {
 
     const status = vault.vault_status ? this.formatStatus(vault.vault_status) : '';
 
-    const tvlAda = vault.total_assets_cost_ada ? this.formatNumber(Number(vault.total_assets_cost_ada)) : '0';
-    const tvlUsd = vault.total_assets_cost_usd ? this.formatNumber(Number(vault.total_assets_cost_usd)) : '0';
+    const isEvm = vault.chain_type === ChainType.robinhood;
+    const tvlNative = isEvm
+      ? `${this.formatEth(Number(vault.total_assets_cost_eth) || 0)} ETH`
+      : `₳${this.formatNumber(Number(vault.total_assets_cost_ada) || 0)}`;
+    const tvlUsd = this.formatNumber(Number(vault.total_assets_cost_usd) || 0);
 
     const ticker = vault.vault_token_ticker || '';
 
     const statsLine = [
       status ? `Status: ${status}` : '',
-      `TVL: ₳${tvlAda} ($${tvlUsd})`,
+      `TVL: ${tvlNative} ($${tvlUsd})`,
       ticker ? `Token: $${ticker}` : '',
     ]
       .filter(Boolean)
@@ -84,6 +88,12 @@ export class OgService {
 
   private formatStatus(status: string): string {
     return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  /** ETH TVLs are often fractional — keep precision below 1 so they don't read as 0.00. */
+  private formatEth(value: number): string {
+    if (value === 0 || value >= 1) return this.formatNumber(value);
+    return Number(value.toFixed(6)).toString();
   }
 
   private formatNumber(value: number): string {

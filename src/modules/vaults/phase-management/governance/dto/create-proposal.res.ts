@@ -37,6 +37,29 @@ export class CreatedProposalDto {
   endDate: Date;
 }
 
+/**
+ * Native transfer the user's own wallet must broadcast to pay an EVM
+ * governance fee. There is no pre-built transaction to sign here — unlike
+ * Cardano, the wallet constructs and sends the transfer itself.
+ */
+export class EvmFeePaymentDto {
+  @Expose()
+  @ApiProperty({ description: 'Fee recipient address', example: '0x1234...' })
+  to: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Amount to send, in wei (decimal string)', example: '1000000000000000' })
+  value: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Chain the payment must be sent on', example: 46630 })
+  chainId: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Fee amount in wei (decimal string)', example: '1000000000000000' })
+  feeAmount: string;
+}
+
 export class CreateProposalRes {
   @Expose()
   @ApiProperty({ description: 'Whether the proposal was created successfully', example: true })
@@ -69,9 +92,20 @@ export class CreateProposalRes {
 
   @Expose()
   @ApiProperty({
-    description: 'Fee amount in lovelace (if payment required)',
+    description: 'Fee amount in lovelace (Cardano) or wei (EVM, as a decimal string), if payment required',
     example: 5000000,
     required: false,
   })
-  feeAmount?: number;
+  feeAmount?: number | string;
+
+  @Expose()
+  @ApiProperty({
+    description:
+      'Native payment parameters for EVM (Robinhood) vaults. The wallet sends this transfer itself, ' +
+      'then posts the resulting hash to submit-fee-payment. Absent for Cardano vaults, which get presignedTx instead.',
+    type: EvmFeePaymentDto,
+    required: false,
+  })
+  @Type(() => EvmFeePaymentDto)
+  evmPayment?: EvmFeePaymentDto;
 }

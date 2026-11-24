@@ -6,6 +6,11 @@ export enum VaultType {
   cnt = 'cnt',
 }
 
+export enum ChainType {
+  cardano = 'cardano',
+  robinhood = 'robinhood',
+}
+
 export enum VaultPrivacy {
   // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE) in SC
   private = 'private',

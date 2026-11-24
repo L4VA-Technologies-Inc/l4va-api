@@ -2,18 +2,18 @@ version: "3.9"
 
 services:
   l4va-api-blue:
-    container_name: l4va-api-blue
+    container_name: ${CONTAINER_PREFIX:-l4va}-api-blue
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${API_BLUE_HOST_PORT:-3000}:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       DB_HOST: host.docker.internal
       DB_PORT: 5432
-      REDIS_HOST: l4va-redis
+      REDIS_HOST: ${REDIS_HOST:-l4va-redis}
       REDIS_PORT: 6379
       PORT: 3000
     networks:
@@ -28,18 +28,18 @@ services:
       retries: 3
 
   l4va-api-green:
-    container_name: l4va-api-green
+    container_name: ${CONTAINER_PREFIX:-l4va}-api-green
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:${API_GREEN_HOST_PORT:-3001}:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       DB_HOST: host.docker.internal
       DB_PORT: 5432
-      REDIS_HOST: l4va-redis
+      REDIS_HOST: ${REDIS_HOST:-l4va-redis}
       REDIS_PORT: 6379
       PORT: 3000
     networks:
@@ -55,4 +55,5 @@ services:
 
 networks:
   l4va-network:
+    name: ${L4VA_NETWORK_NAME:-l4va-network}
     external: true

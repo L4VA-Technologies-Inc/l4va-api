@@ -7,6 +7,7 @@ import { LifecycleService } from './lifecycle.service';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
+import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -16,6 +17,7 @@ import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { MarketModule } from '@/modules/market/market.module';
 import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
+import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.module';
 import { ContributionModule } from '@/modules/vaults/phase-management/contribution/contribution.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
@@ -35,9 +37,19 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     MarketModule,
     VyfiModule,
     GovernanceModule,
-    TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction, TokenRegistry, Proposal, AssetsWhitelistEntity]),
+    TypeOrmModule.forFeature([
+      Vault,
+      Asset,
+      Claim,
+      Transaction,
+      TokenRegistry,
+      Proposal,
+      AssetsWhitelistEntity,
+      EvmValuationSnapshot,
+    ]),
     ScheduleModule.forRoot(),
     BlockchainModule,
+    IndexVaultModule,
   ],
   providers: [LifecycleService],
   exports: [LifecycleService],

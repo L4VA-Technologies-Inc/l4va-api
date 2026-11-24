@@ -15,6 +15,7 @@ import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
 import { SentryMonitoringService } from './common/services/sentry-monitoring.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { CompetitionModule } from './modules/competition/competition.module';
 import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
 import { DiagnosticModule } from './modules/diagnostics/diagnostic.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
@@ -37,13 +38,20 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 import { WayUpModule } from './modules/wayup/wayup.module';
 
+import { AiModule } from '@/modules/ai/ai.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
+import { BurnLockModule } from '@/modules/burn-lock/burn-lock.module';
+import { CardanoBuybackModule } from '@/modules/cardano-buyback/cardano-buyback.module';
+import { EnvCheckModule } from '@/modules/env-check/env-check.module';
+import { FeeKeeperModule } from '@/modules/fee-keeper/fee-keeper.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
-import { PresaleModule } from '@/modules/presale/presale.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { StakeModule } from '@/modules/stake/stake.module';
+import { SupportModule } from '@/modules/support/support.module';
+import { TokensModule } from '@/modules/tokens/tokens.module';
+import { UniswapModule } from '@/modules/uniswap/uniswap.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 @Module({
@@ -52,15 +60,19 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
+      // ENV_FILE lets a second local stack (e.g. Robinhood mainnet) run from its own file.
+      envFilePath: process.env.ENV_FILE || '.env',
     }),
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         connection: {
           host: configService.get<string>('REDIS_HOST'),
-          port: 6379,
+          // Fixed at 6379 unless overridden; REDIS_PORT can be a host-mapped port that Bull must not use.
+          port: Number(configService.get<string>('BULL_REDIS_PORT') ?? 6379),
           role: 'master',
           password: configService.get<string>('REDIS_PASSWORD'),
+          db: Number(configService.get<string>('REDIS_DB') ?? 0),
         },
       }),
     }),
@@ -91,7 +103,10 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     SystemSettingsModule,
     PriceModule,
     AuthModule,
+    AiModule,
     AlertsModule,
+    EnvCheckModule,
+    SupportModule,
     AssetsModule,
     BlockchainModule,
     VaultsModule,
@@ -105,6 +120,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     ClaimsModule,
     VyfiModule,
     TaptoolsModule,
+    CompetitionModule,
     MarketModule,
     GovernanceModule,
     NotificationModule,
@@ -115,10 +131,14 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     WayUpModule,
     EventEmitterModule.forRoot(),
     PresetsModule,
-    PresaleModule,
+    BurnLockModule,
+    CardanoBuybackModule,
     OgModule,
     RewardsModule,
     StakeModule,
+    TokensModule,
+    UniswapModule,
+    FeeKeeperModule,
   ],
   controllers: [AppController],
   providers: [

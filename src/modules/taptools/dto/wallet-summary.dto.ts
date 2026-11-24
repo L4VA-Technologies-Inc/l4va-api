@@ -17,6 +17,10 @@ export class WalletOverviewDto {
   @Expose()
   totalValueUsd: number;
 
+  @ApiProperty({ description: 'Total wallet value in ETH' })
+  @Expose()
+  totalValueEth: number;
+
   @ApiProperty({ description: 'Last update timestamp' })
   @Expose()
   lastUpdated: string;

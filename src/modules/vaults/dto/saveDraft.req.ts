@@ -27,6 +27,10 @@ import {
 import { ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';
+import { MAX_ASSETS_WHITELIST } from './createVault.req';
+
+import { IndexBasketItemDto } from '@/modules/vaults/index-vault/dto/index-basket.dto';
+import { VaultArchetype } from '@/types/index-vault.types';
 
 export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
@@ -358,7 +362,8 @@ export class SaveDraftReq {
   ftTokenImg?: string | null;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
+    description:
+      'List of whitelisted assets with their policy IDs and optional count caps (max 10 on Cardano, 15 on Robinhood)',
     type: [AssetWhitelistDto],
     required: false,
     example: [
@@ -370,7 +375,7 @@ export class SaveDraftReq {
     ],
   })
   @IsArray()
-  @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
+  @ArrayMaxSize(MAX_ASSETS_WHITELIST, { message: `A maximum of ${MAX_ASSETS_WHITELIST} assets can be whitelisted` })
   @IsObject({ each: true })
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
@@ -429,4 +434,22 @@ export class SaveDraftReq {
   @IsBoolean()
   @Expose()
   isExpandableAssetWhitelist?: boolean | null;
+
+  @ApiProperty({ enum: VaultArchetype, required: false, nullable: true })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsEnum(VaultArchetype)
+  @Expose()
+  vaultArchetype?: VaultArchetype | null;
+
+  @ApiProperty({
+    description: 'Work-in-progress index basket. Validated only when the vault is launched.',
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsObject()
+  @Expose()
+  indexBasket?: { targets: IndexBasketItemDto[]; reserveBps: number } | null;
 }

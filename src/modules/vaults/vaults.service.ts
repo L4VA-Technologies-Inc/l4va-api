@@ -1,9 +1,12 @@
+import { randomBytes } from 'crypto';
+
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import { Brackets, In, Not, Repository } from 'typeorm';
+import { keccak256, encodePacked, formatEther, parseEther, createPublicClient, parseAbi, type Address } from 'viem';
 
 import { DexHunterService } from '../dexhunter/dexhunter.service';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
@@ -20,23 +23,54 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import {
   ActivityType,
+  ExpansionDistribution,
+  ExpansionRecipient,
+  IndexRebalanceActivityAsset,
+  IndexRebalanceActivityEvent,
   PhaseTransitionEvent,
   ProposalActivityEvent,
+  ProposalLifecycleStage,
+  VaultLockSummary,
+  TerminationActivityEvent,
+  TerminationActivityStatus,
+  TerminationStep,
   TransactionActivityEvent,
   VaultActivityItem,
 } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { BoundaryTx, ExpansionWindow, getExpansionWindows } from './expansion-activity';
+import { IndexVaultService } from './index-vault/index-vault.service';
 import { GovernanceService } from './phase-management/governance/governance.service';
+import { countSnapshotRecipients } from './phase-management/governance/snapshot-recipients.util';
+import { TerminationStatus } from './phase-management/governance/termination.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
+import { BlockchainWebhookService } from './processing-tx/onchain/blockchain-webhook.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
+import { EvmContractReader } from './processing-tx/onchain/evm-contract-reader.service';
+import { EvmContributionBackfillService } from './processing-tx/onchain/evm-contribution-backfill.service';
+import { EvmCycleCloseService } from './processing-tx/onchain/evm-cycle-close.service';
+import { EvmLpCarveoutRecord } from './processing-tx/onchain/evm-lp.config';
+import { buildOperationId } from './processing-tx/onchain/evm-position.service';
+import { basketAssetCapFor, findEvmProtocolVersionByFactory } from './processing-tx/onchain/evm-protocol-versions';
+import { readV13RootStatus, vaultIsV13, type V13RootStatus } from './processing-tx/onchain/evm-v13';
+import { EvmVaultSignerService } from './processing-tx/onchain/evm-vault-signer.service';
+import { ProtocolFeeType } from './processing-tx/onchain/protocol-fee-config.abi';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
+import { EvmVaultOnchainStatus, VAULT_ABI } from './processing-tx/onchain/vault.abi';
+import { snapshotHasUser, userVaultMembership } from './utils/user-vault-membership';
 
+import { buildEvmTransport, robinhoodChain } from '@/common/evm/evm-transport';
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Claim } from '@/database/claim.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { EvmAllocation } from '@/database/evm-allocation.entity';
+import { EvmContribution } from '@/database/evm-contribution.entity';
+import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
+import { EvmSnapshotStatus, EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
@@ -47,11 +81,14 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
+import { findSpecBoundsViolations, resolveVaultCreationSpecFromSettings } from '@/modules/ai/spec/resolve-spec';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { IndexConfig, VaultArchetype } from '@/types/index-vault.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -64,6 +101,7 @@ import {
   VaultStatus,
   VaultFailureReason,
   SmartContractVaultStatus,
+  ChainType,
 } from '@/types/vault.types';
 
 /**
@@ -82,6 +120,89 @@ import {
  * - Integrating with AWS S3 for CSV parsing and file management
  * - Integrating with blockchain services for on-chain operations
  */
+
+/**
+ * Parse a bigint DB value that may arrive as a bigint, string, or number.
+ * Returns 0n for null/undefined. Rejects invalid inputs by returning 0n so
+ * that a garbage DB value does not tank the response endpoint.
+ */
+function safeBigIntFromDb(value: bigint | number | string | null | undefined): bigint {
+  if (value === null || value === undefined) return 0n;
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return Number.isInteger(value) ? BigInt(value) : 0n;
+  const trimmed = String(value).trim();
+  if (!/^-?\d+$/.test(trimmed)) return 0n;
+  try {
+    return BigInt(trimmed);
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * Convert a bigint to a JS number for display-scale use. Values exceeding
+ * Number.MAX_SAFE_INTEGER are clamped to that ceiling — the caller decides
+ * whether the resulting approximation is acceptable (min_acquire_threshold is
+ * currently always well within safe range for lovelace / whole-ETH storage).
+ */
+function bigIntToSafeNumber(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) return Number.MAX_SAFE_INTEGER;
+  if (value < BigInt(Number.MIN_SAFE_INTEGER)) return Number.MIN_SAFE_INTEGER;
+  return Number(value);
+}
+
+/**
+ * Normalize minAcquireThreshold into a bigint-safe base-unit string for DB.
+ * - Cardano expects integer lovelace.
+ * - Robinhood accepts fractional ETH and stores wei.
+ */
+function normalizeMinAcquireThresholdForDb(
+  value: number | null | undefined,
+  chainType: ChainType | undefined
+): string | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value) || value < 0) {
+    throw new BadRequestException('minAcquireThreshold must be a non-negative number');
+  }
+
+  if (chainType === ChainType.robinhood) {
+    // The ETH range is checked against the vault creation spec in createVault.
+    try {
+      return parseEther(String(value)).toString();
+    } catch {
+      throw new BadRequestException('Invalid minAcquireThreshold for Robinhood chain');
+    }
+  }
+
+  if (!Number.isInteger(value)) {
+    throw new BadRequestException('For Cardano vaults, minAcquireThreshold must be an integer lovelace value');
+  }
+
+  return String(value);
+}
+
+// ---------------------------------------------------------------------------
+// ERC-165 detection for EVM asset-whitelist entries (used to reject NFT
+// collections at vault-creation time when evm_nft_assets_enabled is off).
+// ---------------------------------------------------------------------------
+/** Recipients listed on an expansion card; the card shows the full count. */
+const EXPANSION_RECIPIENTS_LIMIT = 25;
+
+const ERC165_ABI = parseAbi(['function supportsInterface(bytes4 interfaceId) view returns (bool)']);
+const ERC721_INTERFACE_ID = '0x80ac58cd' as const;
+const ERC1155_INTERFACE_ID = '0xd9b67a26' as const;
+
+/** Admin txs of the EVM termination flow, nested under the termination card. */
+const EVM_TERMINATION_TX_TYPES = [
+  TransactionType.evmBeginTerminationPreparing,
+  TransactionType.evmBeginTermination,
+  TransactionType.evmRedeemFor,
+  TransactionType.evmDeferTerminationAsset,
+  TransactionType.evmResumeTerminationAsset,
+  TransactionType.evmFinalizeTermination,
+  TransactionType.evmSweepTerminationRemainder,
+];
+
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
@@ -119,6 +240,14 @@ export class VaultsService {
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(TokenVerification)
     private readonly tokenVerificationRepository: Repository<TokenVerification>,
+    @InjectRepository(EvmContribution)
+    private readonly evmContributionsRepository: Repository<EvmContribution>,
+    @InjectRepository(EvmIndexRebalance)
+    private readonly indexRebalanceRepository: Repository<EvmIndexRebalance>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
+    @InjectRepository(EvmValuationSnapshot)
+    private readonly evmSnapshotRepository: Repository<EvmValuationSnapshot>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -130,7 +259,13 @@ export class VaultsService {
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly dexHunterService: DexHunterService,
-    private readonly claimsService: ClaimsService
+    private readonly claimsService: ClaimsService,
+    private readonly evmVaultSignerService: EvmVaultSignerService,
+    private readonly indexVaultService: IndexVaultService,
+    private readonly evmCycleCloseService: EvmCycleCloseService,
+    private readonly evmContractReader: EvmContractReader,
+    private readonly evmContributionBackfillService: EvmContributionBackfillService,
+    private readonly blockchainWebhookService: BlockchainWebhookService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -175,6 +310,78 @@ export class VaultsService {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private evmPublicClient: any = null;
+
+  /**
+   * Shared read client: built once, with Multicall3 in the chain definition (so `client.multicall`
+   * works) and concurrent reads batched into one eth_call.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private getEvmPublicClient(): any {
+    if (this.evmPublicClient) return this.evmPublicClient;
+    const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
+    if (!evmRpcUrl) {
+      throw new BadRequestException('EVM RPC URL not configured');
+    }
+    const chainId = Number(this.configService.get<string | number>('EVM_CHAIN_ID') || 46630);
+    this.evmPublicClient = createPublicClient({
+      chain: robinhoodChain(chainId, evmRpcUrl),
+      transport: buildEvmTransport(this.configService, evmRpcUrl),
+      batch: { multicall: true },
+    });
+    return this.evmPublicClient;
+  }
+
+  /**
+   * Rejects EVM asset-whitelist entries that are NFT collections (ERC721/ERC1155)
+   * when evm_nft_assets_enabled is off. Detected via ERC-165 supportsInterface
+   * rather than a client-supplied type, since whitelist entries carry no NFT/FT
+   * marker of their own.
+   */
+  private async assertNoNftWhitelistEntriesForEvm(contractAddresses: string[]): Promise<void> {
+    if (this.systemSettingsService.evmNftAssetsEnabled || contractAddresses.length === 0) {
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client: any = this.getEvmPublicClient();
+    const nftAddresses: string[] = [];
+
+    await Promise.all(
+      contractAddresses.map(async address => {
+        const [isErc721, isErc1155] = await Promise.all([
+          client
+            .readContract({
+              address: address as Address,
+              abi: ERC165_ABI,
+              functionName: 'supportsInterface',
+              args: [ERC721_INTERFACE_ID],
+            })
+            .catch(() => false),
+          client
+            .readContract({
+              address: address as Address,
+              abi: ERC165_ABI,
+              functionName: 'supportsInterface',
+              args: [ERC1155_INTERFACE_ID],
+            })
+            .catch(() => false),
+        ]);
+
+        if (isErc721 || isErc1155) {
+          nftAddresses.push(address);
+        }
+      })
+    );
+
+    if (nftAddresses.length > 0) {
+      throw new BadRequestException(
+        `NFT assets are temporarily disabled for this chain. Remove NFT contract(s) from the whitelist: ${nftAddresses.join(', ')}`
+      );
+    }
+  }
+
   /**
    * Creates a new vault for the specified user with the provided data.
    * Handles validation, file processing, whitelist and tag management, and on-chain transaction creation.
@@ -197,12 +404,22 @@ export class VaultsService {
     data: CreateVaultReq
   ): Promise<{
     vaultId: string;
-    presignedTx: string;
-    txId: string;
+    presignedTx?: string;
+    txId?: string;
+    transactionId?: string;
+    adminSignature?: string;
+    adminNonce?: string;
+    deadline?: number;
+    evmVaultConfig?: Record<string, unknown>;
+    evmFactoryAddress?: string;
+    /** 13 when `evmVaultConfig` must be sent with the V13 factory ABI. */
+    evmConfigVersion?: number;
   }> {
     let newVault: Vault | null = null;
     try {
-      // Check vault creation kill switch
+      // ========================================================================
+      // SHARED VALIDATIONS (all chains)
+      // ========================================================================
       if (!this.systemSettingsService.vaultCreationEnabled) {
         throw new BadRequestException(
           'Vault creation is temporarily unavailable. Please try again later or contact support if this persists.'
@@ -268,16 +485,23 @@ export class VaultsService {
             ]),
           },
         });
-        if (existingVaultWithTicker) {
-          throw new BadRequestException('Ticker is already in use by another active vault');
-        }
+        if (existingVaultWithTicker) throw new BadRequestException('Ticker is already in use by another active vault');
       }
 
-      const uniqueWhitelistItems = Array.from(
-        new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
+      // ========================================================================
+      // CARDANO-ONLY: Asset whitelist LP token validation + collection names
+      // EVM:         skipped — no LP concept, no on-chain verification gate
+      // ========================================================================
+      const uniquePolicyIds = Array.from(
+        new Map((data.assetsWhitelist || []).map(obj => [obj.policyId, obj])).values()
       );
       const collectionNameByPolicyId = new Map<string, string>();
-      if (uniqueWhitelistItems.length > 0) {
+      let lpTokenMap = new Map<string, { onchainId: string | null; isLp: boolean }>();
+
+      if (data.chainType !== ChainType.robinhood && uniquePolicyIds.length > 0) {
+        const uniqueWhitelistItems = Array.from(
+          new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
+        );
         const whitelistCollections = await this.getCollections(
           uniqueWhitelistItems.map(item => ({
             policyId: item.policyId,
@@ -286,25 +510,47 @@ export class VaultsService {
             count: item.count || 1,
           }))
         );
-
         const unverifiedCollections = whitelistCollections.filter(item => !item.is_verified);
         if (unverifiedCollections.length > 0) {
-          const unverifiedPolicies = unverifiedCollections.map(item => item.policy_id);
           throw new BadRequestException(
-            `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedPolicies.join(', ')}`
+            `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedCollections.map(c => c.policy_id).join(', ')}`
           );
         }
-
-        // Build a fallback map for collection names. This prevents saving null collection_name
-        // when the client doesn't send collectionName but verification lookup knows it.
         for (const c of whitelistCollections) {
-          if (c?.policy_id && c.collection_name) {
-            collectionNameByPolicyId.set(c.policy_id, c.collection_name);
+          if (c?.policy_id && c.collection_name) collectionNameByPolicyId.set(c.policy_id, c.collection_name);
+        }
+
+        const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
+        const lpTokensData = await this.tokenVerificationRepository.find({
+          where: { policy_id: In(policyIds) },
+          select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+        });
+        lpTokenMap = new Map(
+          lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+        );
+
+        for (const assetItem of uniquePolicyIds) {
+          const lpData = lpTokenMap.get(assetItem.policyId);
+          if (lpData?.isLp) {
+            if (!lpData.onchainId) {
+              throw new BadRequestException(
+                `Policy ${assetItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications.`
+              );
+            }
+            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+          } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method.`
+            );
           }
         }
+      } else if (data.chainType === ChainType.robinhood && uniquePolicyIds.length > 0) {
+        await this.assertNoNftWhitelistEntriesForEvm(uniquePolicyIds.map(item => item.policyId).filter(Boolean));
       }
 
-      // Process image files - allow reuse of existing files
+      // ========================================================================
+      // SHARED: Process image files
+      // ========================================================================
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
@@ -319,195 +565,274 @@ export class VaultsService {
         this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
-      // Same for whitelist CSVs
-      const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
+      // ========================================================================
+      // CARDANO-ONLY: Process whitelist CSV files
+      // ========================================================================
       let acquirerWhitelistFile = null;
-      if (acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
-        this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
-      }
-
-      const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
-      const contributorWhitelistFile = contributorWhitelistCsvKey
-        ? await this.filesRepository.findOne({
+      let contributorWhitelistFile = null;
+      if (data.chainType !== ChainType.robinhood) {
+        const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
+        if (acquirerWhitelistCsvKey) {
+          acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+          this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
+        }
+        const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
+        if (contributorWhitelistCsvKey) {
+          contributorWhitelistFile = await this.filesRepository.findOne({
             where: { file_key: contributorWhitelistCsvKey },
-          })
-        : null;
+          });
+        }
+      }
 
       const contributionOpenWindowTime = data.contributionOpenWindowTime
         ? new Date(data.contributionOpenWindowTime)
         : null;
       const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
+
+      // ========================================================================
+      // CHAIN-SPECIFIC: Build and save the vault entity
+      // ========================================================================
+      // Numeric bounds come from the same resolved spec the AI assistant and the client form use
+      // (GET /ai/vault-creation-spec), with system settings applied: one place to change a limit.
+      const specChain = data.chainType === ChainType.robinhood ? ChainType.robinhood : ChainType.cardano;
+      const creationSpec = resolveVaultCreationSpecFromSettings(
+        this.systemSettingsService,
+        specChain,
+        undefined,
+        data.vaultArchetype === VaultArchetype.index_weighted ? VaultArchetype.index_weighted : VaultArchetype.standard
+      );
+      const hasAcquirePhase = Number(data.tokensForAcquires) !== 0;
+      const boundsViolations = findSpecBoundsViolations(creationSpec, data as unknown as Record<string, unknown>, {
+        creationThreshold: 'Proposal threshold',
+        cosigningThreshold: 'Vote quorum threshold',
+        executionThreshold: 'Approval threshold',
+        ...(hasAcquirePhase
+          ? { liquidityPoolContribution: 'Liquidity pool contribution', acquireWindowDuration: 'Acquire window' }
+          : {}),
+        ...(data.isAcquireOnly ? {} : { contributionDuration: 'Contribution window' }),
+        ...(specChain === ChainType.robinhood && data.isAcquireOnly
+          ? { minAcquireThreshold: 'Minimum acquire threshold' }
+          : {}),
+      });
+      if (boundsViolations.length) {
+        throw new BadRequestException(boundsViolations.map(v => v.message).join('; '));
+      }
+      if (hasAcquirePhase && !Number.isFinite(Number(data.acquireWindowDuration))) {
+        throw new BadRequestException('Acquire window duration is required');
+      }
+
+      if (hasAcquirePhase) {
+        // A custom start in the past would silently open at creation instead; make the user pick again.
+        if (
+          data.isAcquireOnly &&
+          data.acquireOpenWindowType === InvestmentWindowType.custom &&
+          acquireOpenWindowTime &&
+          acquireOpenWindowTime.getTime() < Date.now()
+        ) {
+          throw new BadRequestException(
+            'The acquire launch date is in the past. Pick a future date or "Upon vault launch".'
+          );
+        }
+      }
+
+      let evmVaultId: `0x${string}` | undefined;
+
       const skipsAcquirePhase = Number(data.tokensForAcquires) === 0;
       const contributionDuration = data.isAcquireOnly ? null : data.contributionDuration;
       const acquireWindowDuration = skipsAcquirePhase ? null : data.acquireWindowDuration;
       const acquireOpenWindowTimeForDb = skipsAcquirePhase ? null : acquireOpenWindowTime;
       const contributionOpenWindowTimeForDb = data.isAcquireOnly ? null : contributionOpenWindowTime;
 
-      // Prepare vault data
-      // For acquire-only vaults, exclude contribution-related fields (they skip contribution phase)
-      const vaultData = transformToSnakeCase({
-        ...data,
-        owner: owner,
-        contributionDuration,
-        acquireWindowDuration,
-        acquireOpenWindowTime: acquireOpenWindowTimeForDb,
-        contributionOpenWindowTime: contributionOpenWindowTimeForDb,
-        timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
-        vaultStatus: VaultStatus.created,
-        vaultImage: vaultImg,
-        ftTokenImg: ftTokenImg,
-        acquirerWhitelistCsv: acquirerWhitelistFile,
-        contributorWhitelistCsv: contributorWhitelistFile,
-      });
+      // Index-weighted vaults raise native only and buy the basket at lock, so
+      // the basket is resolved (decimals, tradeability) before anything is saved.
+      const isIndexVault = data.vaultArchetype === VaultArchetype.index_weighted;
+      const archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
+      // Which vault types a chain offers is operational policy, not a code
+      // constant: Robinhood is index-only until RWA and NFT vaults land there.
+      const chainType = data.chainType === ChainType.robinhood ? ChainType.robinhood : ChainType.cardano;
+      if (chainType === ChainType.robinhood && !this.systemSettingsService.evmEnabled) {
+        throw new BadRequestException(
+          'Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.'
+        );
+      }
+      if (!this.systemSettingsService.isVaultArchetypeEnabled(chainType, archetype)) {
+        throw new BadRequestException(
+          `${archetype === VaultArchetype.index_weighted ? 'Index-weighted' : 'Standard'} vaults are not available on ` +
+            `${chainType === ChainType.robinhood ? 'Robinhood Chain' : 'Cardano'} right now`
+        );
+      }
 
-      delete vaultData.assets_whitelist;
-      delete vaultData.acquirer_whitelist;
-      delete vaultData.contributor_whitelist;
-      delete vaultData.tags;
-
-      try {
-        newVault = await this.vaultsRepository.save(vaultData as Vault);
-        // Always reload the entity to ensure it's managed and has all relations
-        newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
-      } catch (error) {
-        // Handle unique constraint violation for file relations as fallback
-        if (error.code === '23505' && error.detail?.includes('already exists')) {
-          this.logger.warn(
-            'Duplicate key constraint violation during vault creation, retrying without file relations:',
-            error.detail
-          );
-
-          // Remove file relations and retry
-          const vaultDataWithoutFiles = { ...vaultData };
-          delete vaultDataWithoutFiles.vaultImage;
-          delete vaultDataWithoutFiles.ftTokenImg;
-          delete vaultDataWithoutFiles.acquirerWhitelistCsv;
-          delete vaultDataWithoutFiles.contributorWhitelistCsv;
-
-          try {
-            newVault = await this.vaultsRepository.save(vaultDataWithoutFiles as Vault);
-            this.logger.log('Vault creation succeeded without file relations');
-          } catch (retryError) {
-            this.logger.error('Vault creation failed even without file relations:', retryError);
-            throw new BadRequestException('Failed to create vault due to file conflicts. Please try again.');
-          }
-        } else {
-          throw error;
+      let indexConfig: IndexConfig | null = null;
+      if (isIndexVault) {
+        if (data.chainType !== ChainType.robinhood) {
+          throw new BadRequestException('Index-weighted vaults are only available on Robinhood Chain');
         }
-      }
-
-      // Handle social links
-      if (data.socialLinks?.length > 0) {
-        const links = data.socialLinks.map(linkItem => {
-          return this.linksRepository.create({
-            vault: newVault,
-            name: linkItem.name,
-            url: linkItem.url,
-          });
-        });
-        await this.linksRepository.save(links);
-      }
-
-      // Handle assets whitelist
-      // TODO: Add lovelace support
-      let maxCountOf = 0;
-
-      // Then process them
-      const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
-
-      // Fetch LP token metadata AND verify valuation methods
-      const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
-      const lpTokensData =
-        policyIds.length > 0
-          ? await this.tokenVerificationRepository.find({
-              where: { policy_id: In(policyIds) },
-              select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
-            })
-          : [];
-      const lpTokenMap = new Map(
-        lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
-      );
-
-      // Validate LP token pricing configuration
-      for (const assetItem of uniquePolicyIds) {
-        const lpData = lpTokenMap.get(assetItem.policyId);
-
-        if (lpData?.isLp) {
-          // LP token detected - enforce lp_token_dynamic pricing
-          // Validate that LP token has an on-chain pool ID
-          if (!lpData.onchainId) {
-            throw new BadRequestException(
-              `Policy ${assetItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications. ` +
-                `Please ensure the LP token has a valid pool ID before adding it to the vault.`
-            );
-          }
-          // Auto-set to LP_TOKEN_DYNAMIC for LP tokens
-          assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
-        } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
-          // Non-LP token attempting to use lp_token_dynamic
+        if (!data.isAcquireOnly || Number(data.tokensForAcquires) !== 100) {
           throw new BadRequestException(
-            `Policy ${assetItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method. ` +
-              `Please mark it as an LP token in token_verifications or use a different valuation method.`
+            'Index-weighted vaults must use the acquire-only preset with 100% of tokens for acquirers'
           );
+        }
+        if (!data.indexBasket?.targets?.length) {
+          throw new BadRequestException('Index-weighted vaults need a target basket');
+        }
+        const targets = await this.indexVaultService.resolveBasket(data.indexBasket.targets);
+        indexConfig = this.indexVaultService.buildConfig(targets, data.indexBasket.reserveBps, null, undefined, {
+          autoRebalance: data.indexBasket.autoRebalance,
+          rebalanceCadenceDays: data.indexBasket.rebalanceCadenceDays,
+        });
+      }
+
+      if (data.chainType === ChainType.robinhood) {
+        const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
+        // V10+ factories scope IDs to the creator. Pinned V8/V9 factories keep them global, so
+        // 32 random bytes stay: the ID is unguessable until the creator's transaction is public.
+        evmVaultId = keccak256(
+          encodePacked(
+            ['address', 'uint256', 'bytes32'],
+            [owner.address as `0x${string}`, BigInt(Date.now()), `0x${randomBytes(32).toString('hex')}`]
+          )
+        );
+        const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
+        const vaultData = transformToSnakeCase({
+          ...data,
+          // EVM VT follows the standard 18-decimal precision.
+          ftTokenDecimals: 18,
+          minAcquireThreshold: minAcquireThresholdForDb,
+          owner,
+          contributionDuration,
+          acquireWindowDuration,
+          acquireOpenWindowTime: acquireOpenWindowTimeForDb,
+          contributionOpenWindowTime: contributionOpenWindowTimeForDb,
+          timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
+          vaultStatus: VaultStatus.draft,
+          chainType: ChainType.robinhood,
+          chainId,
+          evmVaultId,
+          // Pinned at creation: the vault keeps this address set for life.
+          evmProtocolVersion:
+            findEvmProtocolVersionByFactory(Number(chainId), this.configService.get<string>('EVM_FACTORY_ADDRESS'))
+              ?.version ?? null,
+          vaultImage: vaultImg,
+          ftTokenImg,
+        });
+        delete vaultData.assets_whitelist;
+        delete vaultData.acquirer_whitelist;
+        delete vaultData.contributor_whitelist;
+        delete vaultData.tags;
+        delete vaultData.acquirer_whitelist_csv;
+        delete vaultData.contributor_whitelist_csv;
+        delete vaultData.index_basket;
+        // Set after the snake-case transform, which would otherwise rewrite the config's own keys.
+        vaultData.vault_archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
+        vaultData.index_config = indexConfig;
+        newVault = await this.vaultsRepository.save(vaultData as Vault);
+      } else {
+        const minAcquireThresholdForDb = normalizeMinAcquireThresholdForDb(data.minAcquireThreshold, data.chainType);
+        const vaultData = transformToSnakeCase({
+          ...data,
+          minAcquireThreshold: minAcquireThresholdForDb,
+          owner,
+          contributionDuration,
+          acquireWindowDuration,
+          acquireOpenWindowTime: acquireOpenWindowTimeForDb,
+          contributionOpenWindowTime: contributionOpenWindowTimeForDb,
+          timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
+          vaultStatus: VaultStatus.created,
+          vaultImage: vaultImg,
+          ftTokenImg,
+          acquirerWhitelistCsv: acquirerWhitelistFile,
+          contributorWhitelistCsv: contributorWhitelistFile,
+        });
+        delete vaultData.assets_whitelist;
+        delete vaultData.acquirer_whitelist;
+        delete vaultData.contributor_whitelist;
+        delete vaultData.tags;
+        try {
+          newVault = await this.vaultsRepository.save(vaultData as Vault);
+          newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
+        } catch (error) {
+          if ((error as any).code === '23505' && (error as any).detail?.includes('already exists')) {
+            this.logger.warn(
+              'Duplicate key constraint violation during vault creation, retrying without file relations:',
+              (error as any).detail
+            );
+            const vaultDataWithoutFiles = { ...vaultData };
+            delete vaultDataWithoutFiles.vaultImage;
+            delete vaultDataWithoutFiles.ftTokenImg;
+            delete vaultDataWithoutFiles.acquirerWhitelistCsv;
+            delete vaultDataWithoutFiles.contributorWhitelistCsv;
+            try {
+              newVault = await this.vaultsRepository.save(vaultDataWithoutFiles as Vault);
+              this.logger.log('Vault creation succeeded without file relations');
+            } catch (retryError) {
+              this.logger.error('Vault creation failed even without file relations:', retryError);
+              throw new BadRequestException('Failed to create vault due to file conflicts. Please try again.');
+            }
+          } else {
+            throw error;
+          }
         }
       }
 
+      // ========================================================================
+      // SHARED: Save all related entities (same for both chains)
+      // ========================================================================
+
+      // Social links
+      if (data.socialLinks?.length > 0) {
+        await this.linksRepository.save(
+          data.socialLinks.map(link => this.linksRepository.create({ vault: newVault, name: link.name, url: link.url }))
+        );
+      }
+
+      // Assets whitelist
+      // - Cardano: lpTokenMap and collectionNameByPolicyId are populated above
+      // - EVM:     both maps are empty → lp_pool_onchain_id saves as null, names fall back to client-provided values
+      let maxCountOf = 0;
       await Promise.all(
         uniquePolicyIds.map(async assetItem => {
           if (!assetItem.policyId) return;
-
-          const rawFallbackCollectionName =
+          const lpData = lpTokenMap.get(assetItem.policyId);
+          const rawName =
             assetItem.collectionName ||
             collectionNameByPolicyId.get(assetItem.policyId) ||
             assetItem.name ||
             assetItem.policyName ||
             null;
-
-          const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
-          const lpData = lpTokenMap.get(assetItem.policyId);
-
           const result = await this.assetsWhitelistRepository
             .createQueryBuilder()
             .insert()
             .values({
               vault: newVault,
               policy_id: assetItem.policyId,
-              collection_name: fallbackCollectionName,
+              collection_name: rawName ? rawName.slice(0, 255) : null,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
               valuation_method: assetItem.valuationMethod || 'market',
               custom_price_ada: assetItem.customPriceAda || null,
+              custom_price_native_wei: assetItem.customPriceNativeWei ?? null,
               lp_pool_onchain_id: lpData?.onchainId || null,
             })
             .orIgnore()
             .execute();
-
-          if (result.identifiers.length > 0 && assetItem.countCapMax) {
-            maxCountOf += Number(assetItem.countCapMax);
-          }
+          if (result.identifiers.length > 0 && assetItem.countCapMax) maxCountOf += Number(assetItem.countCapMax);
         })
       );
-
-      newVault.max_contribute_assets = Number(maxCountOf) || 0;
+      newVault.max_contribute_assets = maxCountOf;
       await this.vaultsRepository.save(newVault);
-      // Handle acquirer whitelist
+
+      // Acquirer whitelist
+      // - Cardano: merges CSV addresses + inline list
+      // - EVM:     inline list only (no CSV)
       const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromGCS(acquirerWhitelistFile.file_key) : [];
-
-      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
-
-      const allAcquirer = new Set([...acquirer, ...acquirerFromCsv]);
-
+      const allAcquirer = new Set([...(data.acquirerWhitelist?.map(i => i.walletAddress) ?? []), ...acquirerFromCsv]);
       await Promise.all(
-        Array.from(allAcquirer).map(walletAddress => {
-          return this.acquirerWhitelistRepository.save({
-            vault: newVault,
-            wallet_address: walletAddress,
-          });
-        })
+        [...allAcquirer].map(walletAddress =>
+          this.acquirerWhitelistRepository.save({ vault: newVault, wallet_address: walletAddress })
+        )
       );
 
-      // Handle contributors whitelist
+      // Contributor whitelist
       const contributorsFromCsv = contributorWhitelistFile
         ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
         : [];
@@ -520,24 +845,12 @@ export class VaultsService {
         [...allContributors].map(wa => ({ vault: newVault, wallet_address: wa }))
       );
 
-      // this.eventEmitter.emit('vault.whitelist_added', {
-      //   vaultId: newVault.id,
-      //   vaultName: newVault.name,
-      //   userIds: [],
-      // });
-
-      // Handle tags
+      // Tags
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
           data.tags.map(async tagName => {
-            let tag = await this.tagsRepository.findOne({
-              where: { name: tagName },
-            });
-            if (!tag) {
-              tag = await this.tagsRepository.save({
-                name: tagName,
-              });
-            }
+            let tag = await this.tagsRepository.findOne({ where: { name: tagName } });
+            if (!tag) tag = await this.tagsRepository.save({ name: tagName });
             return tag;
           })
         );
@@ -545,23 +858,41 @@ export class VaultsService {
         await this.vaultsRepository.save(newVault);
       }
 
+      // ========================================================================
+      // CHAIN-SPECIFIC: On-chain transaction creation
+      // ========================================================================
+      if (data.chainType === ChainType.robinhood) {
+        const payload = await this.evmVaultSignerService.prepareVaultCreationWithExistingVault(
+          userId,
+          newVault.id,
+          evmVaultId,
+          data
+        );
+        return {
+          vaultId: newVault.id,
+          transactionId: payload.transactionId,
+          adminSignature: payload.adminSignature,
+          adminNonce: payload.adminNonce,
+          deadline: payload.deadline,
+          evmVaultConfig: payload.evmVaultConfig as unknown as Record<string, unknown>,
+          evmFactoryAddress: payload.factoryAddress,
+          ...(payload.configVersion ? { evmConfigVersion: payload.configVersion } : {}),
+        };
+      }
+
+      // ---- Cardano: load whitelists, validate size, build presigned tx -------
       const finalVault = await this.vaultsRepository.findOne({
         where: { id: newVault.id },
         relations: ['owner', 'social_links', 'tags', 'vault_image', 'ft_token_img'],
       });
+      if (!finalVault) throw new BadRequestException('Failed to retrieve created vault');
 
-      if (!finalVault) {
-        throw new BadRequestException('Failed to retrieve created vault');
-      }
-
-      // Load only policy_id from assets_whitelist
       const assetsWhitelistData = await this.assetsWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['policy_id'],
       });
       const policyWhitelist = [...new Set(assetsWhitelistData.map(item => item.policy_id))];
 
-      // Load wallet addresses from both contributor and acquirer whitelists
       const contributorWhitelistData = await this.contributorWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['wallet_address'],
@@ -571,7 +902,6 @@ export class VaultsService {
         select: ['wallet_address'],
       });
 
-      // Combine both whitelists into a unique array for smart contract
       const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
       const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
       const allowedContributors = [
@@ -582,7 +912,6 @@ export class VaultsService {
         ]),
       ];
 
-      // Validate combined whitelist size (Cardano transaction size limit)
       const MAX_COMBINED_WHITELIST_SIZE = 100;
       if (allowedContributors.length > MAX_COMBINED_WHITELIST_SIZE) {
         throw new BadRequestException(
@@ -592,17 +921,13 @@ export class VaultsService {
             `Maximum allowed is ${MAX_COMBINED_WHITELIST_SIZE} unique addresses to stay within Cardano transaction size limits.`
         );
       }
-
       this.logger.log(
-        `Vault ${newVault.id}: Combined whitelist - ` +
-          `${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ` +
-          `${allowedContributors.length} unique addresses`
+        `Vault ${newVault.id}: Combined whitelist — ${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ${allowedContributors.length} unique addresses`
       );
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
 
-      // Calculate start time based on contribution window type
       let startTime: number;
       let assetWindow: { start: number; end: number };
       let acquireWindow: { start: number; end: number };
@@ -709,9 +1034,9 @@ export class VaultsService {
           customerAddress: finalVault.owner.address,
           vaultId: finalVault.id,
           allowedPolicies: policyWhitelist,
-          allowedContributors: allowedContributors,
+          allowedContributors,
           contractType: privacy,
-          valueMethod: valueMethod,
+          valueMethod,
           assetWindow,
           acquireWindow,
           userId: finalVault.owner.id,
@@ -721,16 +1046,11 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      finalVault.ft_token_decimals = 6; //Default decimals, can be updated later based on asset properties
-
+      finalVault.ft_token_decimals = 6;
       await this.vaultsRepository.save(finalVault);
 
-      return {
-        vaultId: finalVault.id,
-        presignedTx,
-        txId: transactionId,
-      };
-    } catch (error) {
+      return { vaultId: finalVault.id, presignedTx, txId: transactionId };
+    } catch (error: any) {
       this.logger.error('Error creating vault:', error);
 
       // Revert the partially-created vault to draft so the user can retry from their drafts.
@@ -772,6 +1092,33 @@ export class VaultsService {
   }
 
   /**
+   * Polls briefly for the creation receipt and runs the webhook's confirmation
+   * logic on it (sets contract_address from VaultCreated, confirms the tx).
+   * Idempotent with the webhook and the stuck-tx cron, which stay as fallbacks.
+   */
+  private async applyEvmCreationReceipt(txHash: string): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 3_000));
+      let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>;
+      try {
+        receipt = await this.evmContractReader.getTransactionReceipt(txHash as `0x${string}`);
+      } catch {
+        continue; // not mined yet, or RPC lag
+      }
+      if (!receipt) continue;
+
+      await this.blockchainWebhookService.applyEvmTransactionStatus(
+        txHash,
+        Number(receipt.transactionIndex ?? 0),
+        receipt.status === 'success' ? TransactionStatus.confirmed : TransactionStatus.failed,
+        (receipt.logs ?? []).map((l: any) => ({ topics: (l.topics ?? []) as string[], data: String(l.data ?? '0x') }))
+      );
+      return;
+    }
+    this.logger.warn(`EVM vault creation ${txHash} not visible after 60s — leaving it to the webhook / stuck-tx cron`);
+  }
+
+  /**
    * Publishes a vault by submitting a signed transaction and updating vault status.
    * Starts transaction confirmation in the background.
    * @param userId - ID of the vault owner
@@ -779,6 +1126,22 @@ export class VaultsService {
    * @returns Full vault response
    */
   async publishVault(userId: string, signedTx: PublishVaultDto): Promise<VaultFullResponse> {
+    // ---- EVM (Robinhood) path -----------------------------------------------
+    if (signedTx.chainType === ChainType.robinhood) {
+      if (!signedTx.txHash) throw new BadRequestException('txHash is required for EVM vault publishing');
+      if (!signedTx.txId)
+        throw new BadRequestException('txId (transaction record ID) is required for EVM vault publishing');
+      await this.evmVaultSignerService.confirmVaultCreation(userId, signedTx.vaultId, signedTx.txHash, signedTx.txId);
+      // The on-chain windows open at creation, so waiting for the webhook (or,
+      // without one, the 10-minute stuck-tx cron) can eat a short acquire window
+      // before the vault ever leaves `published`. Apply the receipt ourselves.
+      this.applyEvmCreationReceipt(signedTx.txHash).catch(err =>
+        this.logger.warn(`EVM vault creation catch-up failed for ${signedTx.txHash}: ${(err as Error).message}`)
+      );
+      return this.getVaultById(signedTx.vaultId, userId);
+    }
+
+    // ---- Cardano path (original) --------------------------------------------
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
@@ -881,6 +1244,7 @@ export class VaultsService {
           'asset_count_cap_max',
           'valuation_method',
           'custom_price_ada',
+          'custom_price_native_wei',
         ],
       }),
       this.acquirerWhitelistRepository.find({
@@ -991,6 +1355,9 @@ export class VaultsService {
     let acquireExpansionCurrentAdaLovelace: number | undefined;
     let acquireExpansionMaxAdaLovelace: number | undefined;
     let acquireExpansionNoMax: boolean | undefined;
+    let acquireExpansionPriceType: 'limit' | 'market' | undefined;
+    let acquireExpansionLimitPrice: number | undefined;
+    let acquireExpansionMarketPrice: number | undefined;
 
     // Only check vault_status to determine if vault is currently in expansion
     // expansion_phase_start is preserved as a historical timestamp
@@ -1013,9 +1380,17 @@ export class VaultsService {
         expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
         const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
         const expansionLabels = expansionProposal.metadata.expansion.labels || [];
+        // EVM expansion uses contractAddress instead of Cardano policyIds
+        const evmAssets: Array<{ contractAddress: string; label?: string }> =
+          expansionProposal.metadata.expansion.evmAssets || [];
 
-        // Fetch collection names for expansion policies
-        if (expansionPolicyIds.length > 0) {
+        if (evmAssets.length > 0) {
+          // EVM: map contractAddress → policyId so downstream wallet-summary filtering works
+          expansionWhitelist = evmAssets.map(a => ({
+            policyId: a.contractAddress,
+            collectionName: a.label ?? null,
+          }));
+        } else if (expansionPolicyIds.length > 0) {
           if (expansionLabels.length > 0 && expansionLabels.length === expansionPolicyIds.length) {
             expansionWhitelist = expansionPolicyIds.map((policyId, index) => ({
               policyId,
@@ -1036,7 +1411,7 @@ export class VaultsService {
               collectionName: tv.collection_name,
             }));
           }
-        }
+        } // close: else if (expansionPolicyIds.length > 0)
 
         // Count confirmed expansion contributions
         const expansionAssetData = await this.assetsRepository
@@ -1107,6 +1482,9 @@ export class VaultsService {
         acquireExpansionNoMax = config.noMax;
         acquireExpansionMaxAdaLovelace = config.maxAda;
         acquireExpansionCurrentAdaLovelace = config.currentAdaRaised || 0;
+        acquireExpansionPriceType = config.priceType;
+        acquireExpansionLimitPrice = config.limitPrice;
+        acquireExpansionMarketPrice = config.marketPriceSnapshot;
       }
     }
 
@@ -1135,28 +1513,21 @@ export class VaultsService {
     const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
-      select: ['addressBalances'],
+      select: ['addressBalances', 'lpBalances'],
     });
 
-    const tokenHolders = latestSnapshot?.addressBalances
-      ? Object.keys(latestSnapshot.addressBalances).filter(addr => {
-          const balance = latestSnapshot.addressBalances[addr];
-          try {
-            return BigInt(balance) > 0n;
-          } catch {
-            return parseFloat(balance) > 0;
-          }
-        }).length
-      : 0;
+    const tokenHolders = countSnapshotRecipients(latestSnapshot);
 
-    const adaPrice = await this.priceService.getAdaPrice();
+    const [adaPrice, ethPrice] = await Promise.all([this.priceService.getAdaPrice(), this.priceService.getEthPrice()]);
     const totalAcquiredAda = Number(vault.total_acquired_value_ada ?? 0);
     const assetsPrices = {
       adaPrice,
       totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
       totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
+      totalValueEth: Number(vault.total_assets_cost_eth ?? 0),
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
+      totalAcquiredEth: ethPrice > 0 ? (totalAcquiredAda * adaPrice) / ethPrice : 0,
       assetsByPolicy,
     };
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
@@ -1169,17 +1540,42 @@ export class VaultsService {
     // For normal vaults, calculate based on asset value and reserve percentages
     let requireReservedCostAda: number;
     let requireReservedCostUsd: number;
+    let requireReservedCostEth: number;
+    const isRobinhoodVault = vault.chain_type === ChainType.robinhood;
 
     if (vault.is_acquire_only) {
-      // Acquire-only vault: use min_acquire_threshold (in lovelace) or 0 if not set
-      requireReservedCostAda = vault.min_acquire_threshold ? vault.min_acquire_threshold / 1_000_000 : 0;
-      requireReservedCostUsd = requireReservedCostAda * adaPrice;
+      // Acquire-only vault threshold is stored in chain-native units:
+      // Cardano: lovelace; Robinhood: ETH.
+      // NOTE: For Robinhood, the on-chain uint256 threshold (wei) is the source
+      // of truth for lifecycle decisions and is read via getCycle() in
+      // evm-refund-orchestrator / evm-allocation.service. The DB value here is
+      // only used for API display and Cardano lifecycle. Parse as bigint first
+      // so we never silently truncate an oversized value.
+      const rawThresholdBigInt = safeBigIntFromDb(vault.min_acquire_threshold);
+      if (isRobinhoodVault) {
+        requireReservedCostEth = Number(formatEther(rawThresholdBigInt));
+        requireReservedCostUsd = requireReservedCostEth * ethPrice;
+        requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
+      } else {
+        const lovelace = bigIntToSafeNumber(rawThresholdBigInt);
+        requireReservedCostAda = lovelace ? lovelace / 1_000_000 : 0;
+        requireReservedCostUsd = requireReservedCostAda * adaPrice;
+        requireReservedCostEth = ethPrice > 0 ? requireReservedCostUsd / ethPrice : 0;
+      }
     } else {
-      // Normal vault: calculate based on asset value and percentages
-      requireReservedCostAda =
-        assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
-      requireReservedCostUsd =
-        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+      // Normal vault: derive reserve threshold in each currency.
+      if (isRobinhoodVault) {
+        requireReservedCostEth =
+          assetsPrices.totalValueEth * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+        requireReservedCostUsd = requireReservedCostEth * ethPrice;
+        requireReservedCostAda = adaPrice > 0 ? requireReservedCostUsd / adaPrice : 0;
+      } else {
+        requireReservedCostAda =
+          assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+        requireReservedCostUsd =
+          assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+        requireReservedCostEth = ethPrice > 0 ? requireReservedCostUsd / ethPrice : 0;
+      }
     }
 
     // Use raw units for LP calculations (on-chain transactions need decimal-adjusted amounts)
@@ -1201,10 +1597,46 @@ export class VaultsService {
       projectedFdvAda = fdv;
     }
 
+    // V13: contributors' VT from the latest closed cycle unlocks after the allocation delay.
+    let evmV13: V13RootStatus | undefined;
+    if (vault.chain_type === ChainType.robinhood && vaultIsV13(vault) && vault.contract_address) {
+      evmV13 = await readV13RootStatus(
+        this.evmContractReader.publicClient,
+        vault.contract_address,
+        BigInt(vault.evm_current_cycle_id ?? 1)
+      ).catch(err => {
+        this.logger.warn(`V13 root status for vault ${vault.id}: ${(err as Error).message}`);
+        return undefined;
+      });
+    }
+
+    // The acquire fee the vault actually takes at close, from its fee config (cached); the system
+    // setting is only the target the fee-sync job tries to set, and can differ (e.g. without the role).
+    let evmAcquireFeeBps = this.systemSettingsService.evmAcquireFeeBps ?? 0;
+    if (vault.chain_type === ChainType.robinhood && vault.contract_address) {
+      evmAcquireFeeBps = await this.evmContractReader
+        .protocolFeeBpsCached(vault.contract_address as `0x${string}`, ProtocolFeeType.Contribution)
+        .catch(err => {
+          this.logger.warn(`Acquire fee for vault ${vault.id}: ${(err as Error).message}`);
+          return evmAcquireFeeBps;
+        });
+    }
+
     const additionalData = {
+      evmV13,
+      maxBasketAssets: isRobinhoodVault ? basketAssetCapFor(vault) : null,
       maxContributeAssets: Number(vault.max_contribute_assets),
       requireReservedCostUsd,
       requireReservedCostAda,
+      requireReservedCostEth,
+      minAcquireThreshold:
+        vault.min_acquire_threshold != null
+          ? isRobinhoodVault
+            ? Number(formatEther(safeBigIntFromDb(vault.min_acquire_threshold)))
+            : bigIntToSafeNumber(safeBigIntFromDb(vault.min_acquire_threshold))
+          : null,
+      minAcquireThresholdRaw:
+        vault.min_acquire_threshold != null ? safeBigIntFromDb(vault.min_acquire_threshold).toString(10) : null,
       lpMinLiquidityAda,
       lpMinLiquidityUsd,
       projectedLpAdaAmount,
@@ -1233,19 +1665,17 @@ export class VaultsService {
       expansionAssetsByPolicy,
       expansionWhitelist,
       // Acquire expansion data
-      acquireExpansionCurrentAdaLovelace,
-      acquireExpansionCurrentAda: acquireExpansionCurrentAdaLovelace
-        ? acquireExpansionCurrentAdaLovelace / 1_000_000
-        : undefined,
-      acquireExpansionCurrentUsd: acquireExpansionCurrentAdaLovelace
-        ? (acquireExpansionCurrentAdaLovelace / 1_000_000) * adaPrice
-        : undefined,
-      acquireExpansionMaxAdaLovelace,
-      acquireExpansionMaxAda: acquireExpansionMaxAdaLovelace ? acquireExpansionMaxAdaLovelace / 1_000_000 : undefined,
-      acquireExpansionMaxUsd: acquireExpansionMaxAdaLovelace
-        ? (acquireExpansionMaxAdaLovelace / 1_000_000) * adaPrice
-        : undefined,
+      ...this.acquireExpansionAmounts(
+        vault.chain_type === ChainType.robinhood,
+        acquireExpansionCurrentAdaLovelace,
+        acquireExpansionMaxAdaLovelace,
+        adaPrice,
+        ethPrice
+      ),
       acquireExpansionNoMax,
+      acquireExpansionPriceType,
+      acquireExpansionLimitPrice,
+      acquireExpansionMarketPrice,
       // Protocol fees
       // Per-asset rate: total fee = assetCount × protocolFeePerAssetLovelace
       protocolFeePerAssetLovelace: this.systemSettingsService.protocolFeePerAsset,
@@ -1254,6 +1684,10 @@ export class VaultsService {
       protocolAcquiresFeeLovelace: this.systemSettingsService.protocolAcquiresFee,
       protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
       protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
+      // EVM (Robinhood) rates, wei as decimal strings
+      protocolFeePerAssetWei: this.systemSettingsService.protocolFeePerAssetEvm,
+      protocolAcquiresFeeWei: this.systemSettingsService.protocolAcquiresFeeEvm,
+      protocolAcquireFeeBps: evmAcquireFeeBps,
       protocolEnabled: this.systemSettingsService.protocolEnabled,
       // Max acquire amount (vault-specific override or protocol default)
       maxAcquireAmountAda: vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda,
@@ -1316,26 +1750,28 @@ export class VaultsService {
 
     // Calculate if acquire window is currently active
     // Considers both acquire and expansion windows for acquire_expansion status
-    const BUTTON_DISABLE_THRESHOLD_MS = 300000; // 5 minutes buffer before window closes
     const now = Date.now();
+    // Action buttons close a little before the window does, so a tx sent at the last moment
+    // still lands in time: 2 minutes, none for short (< 1 h, staging) windows.
+    // Keep in sync with l4va-client VaultProfileView (phaseCloseBufferMs).
+    const closeBuffer = (durationMs: number): number => (Number(durationMs) >= 3_600_000 ? 120_000 : 0);
+    const isOpen = (start: Date | string, durationMs: number): boolean =>
+      new Date(start).getTime() + Number(durationMs) > now + closeBuffer(durationMs);
     let isAcquireWindowActive = false;
 
     if (vault.vault_status === VaultStatus.acquire && vault.acquire_phase_start && vault.acquire_window_duration) {
-      const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
-      isAcquireWindowActive = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      isAcquireWindowActive = isOpen(vault.acquire_phase_start, vault.acquire_window_duration);
     } else if (vault.vault_status === VaultStatus.acquire_expansion) {
       // For acquire_expansion: button is active if EITHER acquire OR expansion window is open
       let acquireWindowOpen = false;
       let expansionWindowOpen = false;
 
       if (vault.acquire_phase_start && vault.acquire_window_duration) {
-        const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
-        acquireWindowOpen = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+        acquireWindowOpen = isOpen(vault.acquire_phase_start, vault.acquire_window_duration);
       }
 
       if (vault.expansion_phase_start && vault.expansion_duration) {
-        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
-        expansionWindowOpen = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+        expansionWindowOpen = isOpen(vault.expansion_phase_start, vault.expansion_duration);
       }
 
       isAcquireWindowActive = acquireWindowOpen || expansionWindowOpen;
@@ -1351,20 +1787,17 @@ export class VaultsService {
       vault.contribution_phase_start &&
       vault.contribution_duration
     ) {
-      const contributionEndTime = new Date(vault.contribution_phase_start).getTime() + vault.contribution_duration;
-      isContributionWindowActive = contributionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      isContributionWindowActive = isOpen(vault.contribution_phase_start, vault.contribution_duration);
     } else if (
       vault.vault_status === VaultStatus.expansion &&
       vault.expansion_phase_start &&
       vault.expansion_duration
     ) {
-      const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
-      isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      isContributionWindowActive = isOpen(vault.expansion_phase_start, vault.expansion_duration);
     } else if (vault.vault_status === VaultStatus.acquire_expansion) {
       // For acquire_expansion: contribution button is active if expansion window is open
       if (vault.expansion_phase_start && vault.expansion_duration) {
-        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
-        isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+        isContributionWindowActive = isOpen(vault.expansion_phase_start, vault.expansion_duration);
       }
     }
 
@@ -1378,9 +1811,11 @@ export class VaultsService {
     // Compute vaultStats object for frontend stats bar consumption
     const isAcquirePhase = vault.vault_status === VaultStatus.acquire;
     const hasActiveLp = vault.has_active_lp ?? false;
-    // TVL: acquire-only vaults use totalAcquiredAda (no contributed assets)
-    const vaultStatsTvlAda = vault.is_acquire_only ? assetsPrices.totalAcquiredAda : assetsPrices.totalValueAda;
-    const vaultStatsTvlUsd = vault.is_acquire_only ? assetsPrices.totalAcquiredUsd : assetsPrices.totalValueUsd;
+    // TVL: acquire-only vaults use totalAcquiredAda (no contributed assets). Index vaults spend
+    // the raise on their basket, so their stored totals (on-chain holdings) are the TVL.
+    const tvlFromAcquired = vault.is_acquire_only && vault.vault_archetype !== VaultArchetype.index_weighted;
+    const vaultStatsTvlAda = tvlFromAcquired ? assetsPrices.totalAcquiredAda : assetsPrices.totalValueAda;
+    const vaultStatsTvlUsd = tvlFromAcquired ? assetsPrices.totalAcquiredUsd : assetsPrices.totalValueUsd;
     // FDV: for acquire-only vaults FDV = TVL (all acquired ADA is the market cap proxy), so FDV/TVL = 1
     let vaultStatsFdvAda: number | null = null;
     let vaultStatsFdvUsd: number | null = null;
@@ -1389,11 +1824,25 @@ export class VaultsService {
       vaultStatsFdvAda = assetsPrices.totalAcquiredAda > 0 ? assetsPrices.totalAcquiredAda : null;
       vaultStatsFdvUsd = assetsPrices.totalAcquiredUsd > 0 ? assetsPrices.totalAcquiredUsd : null;
       vaultStatsFdvTvl = assetsPrices.totalAcquiredAda > 0 ? 1 : null;
-    } else if (hasActiveLp || isAcquirePhase) {
+    } else if ((hasActiveLp && additionalData.fdv) || isAcquirePhase) {
+      // A listed LP prices FDV from the DEX index; EVM pools are not indexed there, so they
+      // (like any LP the index has no FDV for) fall through to the vault-NAV FDV below.
       vaultStatsFdvAda = additionalData.fdv ?? null;
       vaultStatsFdvUsd = additionalData.fdvUsd ?? null;
       vaultStatsFdvTvl = additionalData.fdvTvl ?? null;
+    } else {
+      // No DexHunter index (typical on testnet). Price/FDV come from vault NAV, not a DEX.
+      const fdvFromVault = vault.fdv != null ? Number(vault.fdv) : null;
+      vaultStatsFdvAda = fdvFromVault && fdvFromVault > 0 ? fdvFromVault : (vaultStatsTvlAda ?? null);
+      vaultStatsFdvUsd =
+        vaultStatsFdvAda != null && adaPrice > 0 ? vaultStatsFdvAda * adaPrice : (vaultStatsTvlUsd ?? null);
+      vaultStatsFdvTvl =
+        vaultStatsFdvAda != null && vaultStatsTvlAda > 0 ? Number(vaultStatsFdvAda) / Number(vaultStatsTvlAda) : null;
     }
+    const supplyNum = vault.ft_token_supply != null ? Number(vault.ft_token_supply) : 0;
+    const navPriceAda = supplyNum > 0 && vaultStatsTvlAda > 0 ? Number(vaultStatsTvlAda) / supplyNum : null;
+    const listedPriceAda = vault.vt_price != null && Number(vault.vt_price) > 0 ? Number(vault.vt_price) : null;
+    const vtPriceAda = hasActiveLp ? (listedPriceAda ?? navPriceAda) : navPriceAda;
     additionalData['vaultStats'] = {
       tvlAda: vaultStatsTvlAda ?? null,
       tvlUsd: vaultStatsTvlUsd ?? null,
@@ -1402,8 +1851,8 @@ export class VaultsService {
       fdvTvl: vaultStatsFdvTvl,
       ftGainsAda: hasActiveLp ? (vault.gains_ada != null ? Number(vault.gains_ada) : null) : null,
       ftGainsUsd: hasActiveLp ? (vault.gains_usd != null ? Number(vault.gains_usd) : null) : null,
-      vtPriceAda: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) : null) : null,
-      vtPriceUsd: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) * adaPrice : null) : null,
+      vtPriceAda,
+      vtPriceUsd: vtPriceAda != null && adaPrice > 0 ? vtPriceAda * adaPrice : null,
     };
 
     // First transform the vault to plain object with class-transformer
@@ -1441,6 +1890,7 @@ export class VaultsService {
         .select('vault.id')
         .addSelect('vault.owner_id')
         .addSelect('snapshot.address_balances')
+        .addSelect('snapshot.lp_balances')
         .addSelect('transaction.id', 'has_transaction')
         .where('vault.id = :vaultId', { vaultId })
         .andWhere('vault.deleted = false')
@@ -1459,7 +1909,12 @@ export class VaultsService {
         return true;
       }
 
-      if (result.address_balances?.[user.address]) {
+      if (
+        snapshotHasUser(
+          { address_balances: result.snapshot_address_balances, lp_balances: result.snapshot_lp_balances },
+          user.address
+        )
+      ) {
         return true;
       }
 
@@ -1501,6 +1956,8 @@ export class VaultsService {
       filter,
       reserveMet,
       isOfficialPartner,
+      chainType,
+      vaultArchetype,
       search,
       page = 1,
       limit = 10,
@@ -1533,30 +1990,7 @@ export class VaultsService {
 
       if (user) {
         if (myVaults) {
-          queryBuilder.andWhere(
-            new Brackets(qb => {
-              qb.where('vault.owner_id = :userId', { userId })
-                .orWhere(
-                  `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-                  { userId }
-                )
-                .orWhere(
-                  `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-                  { userAddress: user.address }
-                );
-            })
-          );
+          queryBuilder.andWhere(userVaultMembership(userId, user.address));
         }
 
         userWalletAddress = user.address;
@@ -1684,21 +2118,19 @@ export class VaultsService {
         case VaultFilter.acquire:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
           break;
-        case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+        case VaultFilter.acquiring:
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [
+              VaultStatus.published,
+              VaultStatus.acquire,
+              VaultStatus.expansion,
+              VaultStatus.acquire_expansion,
+            ],
+          });
           break;
+        case VaultFilter.locked:
         case VaultFilter.govern:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked }).andWhere(
-            `
-              EXISTS (
-                SELECT 1
-                FROM proposal
-                WHERE proposal.vault_id = vault.id
-                AND proposal.status = :activeStatus
-              )
-            `,
-            { activeStatus: ProposalStatus.ACTIVE }
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
@@ -1743,17 +2175,25 @@ export class VaultsService {
       );
     }
 
-    if (contributionWindow) {
-      queryBuilder.andWhere('vault.contribution_open_window_time BETWEEN :start AND :end', {
-        start: contributionWindow.from,
-        end: contributionWindow.to,
+    if (contributionWindow?.from) {
+      queryBuilder.andWhere('vault.contribution_open_window_time >= :contributionWindowFrom', {
+        contributionWindowFrom: contributionWindow.from,
+      });
+    }
+    if (contributionWindow?.to) {
+      queryBuilder.andWhere('vault.contribution_open_window_time <= :contributionWindowTo', {
+        contributionWindowTo: contributionWindow.to,
       });
     }
 
-    if (acquireWindow) {
-      queryBuilder.andWhere('vault.acquire_open_window_time BETWEEN :start AND :end', {
-        start: acquireWindow.from,
-        end: acquireWindow.to,
+    if (acquireWindow?.from) {
+      queryBuilder.andWhere('vault.acquire_open_window_time >= :acquireWindowFrom', {
+        acquireWindowFrom: acquireWindow.from,
+      });
+    }
+    if (acquireWindow?.to) {
+      queryBuilder.andWhere('vault.acquire_open_window_time <= :acquireWindowTo', {
+        acquireWindowTo: acquireWindow.to,
       });
     }
 
@@ -1762,6 +2202,8 @@ export class VaultsService {
         queryBuilder.andWhere('vault.total_assets_cost_usd >= :minTvl', { minTvl });
       } else if (tvlCurrency === TVLCurrency.ADA) {
         queryBuilder.andWhere('vault.total_assets_cost_ada >= :minTvl', { minTvl });
+      } else if (tvlCurrency === TVLCurrency.ETH) {
+        queryBuilder.andWhere('vault.total_assets_cost_eth >= :minTvl', { minTvl });
       }
     }
 
@@ -1770,11 +2212,23 @@ export class VaultsService {
         queryBuilder.andWhere('vault.total_assets_cost_usd <= :maxTvl', { maxTvl });
       } else if (tvlCurrency === TVLCurrency.ADA) {
         queryBuilder.andWhere('vault.total_assets_cost_ada <= :maxTvl', { maxTvl });
+      } else if (tvlCurrency === TVLCurrency.ETH) {
+        queryBuilder.andWhere('vault.total_assets_cost_eth <= :maxTvl', { maxTvl });
       }
     }
 
     if (minFdv || maxFdv) {
-      const fdvDivider = fdvCurrency === TVLCurrency.USD ? await this.priceService.getAdaPrice() : 1;
+      let fdvDivider = 1;
+      if (fdvCurrency === TVLCurrency.USD) {
+        fdvDivider = await this.priceService.getAdaPrice();
+      } else if (fdvCurrency === TVLCurrency.ETH) {
+        // fdv is stored in ADA; convert ETH input to ADA: ethUsd / adaUsd
+        const [adaPrice, ethPrice] = await Promise.all([
+          this.priceService.getAdaPrice(),
+          this.priceService.getEthPrice(),
+        ]);
+        fdvDivider = ethPrice > 0 ? adaPrice / ethPrice : 1;
+      }
       const effectiveFdvDivider = fdvDivider > 0 ? fdvDivider : 1;
 
       if (minFdv) {
@@ -1818,6 +2272,14 @@ export class VaultsService {
       queryBuilder.andWhere('vault.is_official_partner = :isOfficialPartner', { isOfficialPartner });
     }
 
+    if (chainType) {
+      queryBuilder.andWhere('vault.chain_type = :chainType', { chainType });
+    }
+
+    if (vaultArchetype) {
+      queryBuilder.andWhere('vault.vault_archetype = :vaultArchetype', { vaultArchetype });
+    }
+
     // Apply sorting
     if (sortBy) {
       queryBuilder.orderBy(`vault.${sortBy}`, sortOrder);
@@ -1849,6 +2311,7 @@ export class VaultsService {
         const assetsPrices = {
           totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
           totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
+          totalValueEth: Number(vault.total_assets_cost_eth ?? 0),
           totalAcquiredAda: Number(vault.total_acquired_value_ada ?? 0),
         };
 
@@ -1867,6 +2330,7 @@ export class VaultsService {
           ...plainVault,
           totalValueUsd: assetsPrices.totalValueUsd,
           totalValueAda: assetsPrices.totalValueAda,
+          totalValueEth: assetsPrices.totalValueEth,
           invested: vault.total_acquired_value_ada,
           phaseStartTime: phaseStartTime ? phaseStartTime.toISOString() : null,
           phaseEndTime: phaseEndTime ? phaseEndTime.toISOString() : null,
@@ -1957,6 +2421,10 @@ export class VaultsService {
       if (!vault) {
         throw new UnauthorizedException('Vault is not found or you are not the owner of this vault');
       }
+      await this.transactionsService.assertSubmittableTransaction(publishDto.txId, {
+        vaultId: vault.id,
+        type: TransactionType.burn,
+      });
 
       const { txHash } = await this.blockchainService.submitTransaction({
         transaction: publishDto.transaction,
@@ -1993,7 +2461,7 @@ export class VaultsService {
   async getAssetsWhitelist(
     query: GetAssetsWhitelistDto & { userId?: string }
   ): Promise<PaginatedResponseDto<{ name: string; policyId: string }>> {
-    const { myVaults = false, userId, page = 1, limit = 10, search } = query;
+    const { myVaults = false, userId, page = 1, limit = 10, search, chainType } = query;
     const statuses = [...VAULT_SEARCH_STATUSES];
     const includeDrafts = Boolean(myVaults && userId);
     const safePage = page > 0 ? page : 1;
@@ -2011,6 +2479,10 @@ export class VaultsService {
       .addSelect("MIN(NULLIF(assets_whitelist.collection_name, ''))", 'name')
       .where('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere('vault.deleted != :deleted', { deleted: true });
+
+    if (chainType) {
+      baseQuery.andWhere('vault.chain_type = :chainType', { chainType });
+    }
 
     if (includeDrafts) {
       baseQuery.andWhere('vault.owner_id = :userId', { userId });
@@ -2138,7 +2610,30 @@ export class VaultsService {
   ): Promise<PaginatedResponseDto<VaultActivityItem>> {
     const vault = await this.vaultsRepository.findOne({
       where: { id: vault_id },
-      select: ['id', 'contribution_phase_start', 'acquire_phase_start', 'locked_at', 'vault_status', 'created_at'],
+      select: [
+        'id',
+        'contribution_phase_start',
+        'acquire_phase_start',
+        'locked_at',
+        'vault_status',
+        'created_at',
+        'vault_archetype',
+        'chain_type',
+        'ft_token_supply',
+        'ft_token_decimals',
+        'vault_token_ticker',
+        'tokens_for_acquires',
+        'liquidity_pool_contribution',
+        'total_assets_cost_ada',
+        'total_acquired_value_ada',
+        'fdv',
+        'evm_close_cycle_tx_hash',
+        'failure_reason',
+        'failure_details',
+        'deactivated_at',
+        'updated_at',
+        'termination_metadata',
+      ],
     });
 
     if (!vault) {
@@ -2146,19 +2641,55 @@ export class VaultsService {
     }
 
     const allActivities: VaultActivityItem[] = [];
+    let transactionEvents: TransactionActivityEvent[] = [];
+    let rebalanceEvents: IndexRebalanceActivityEvent[] = [];
 
-    const shouldFetchTransactions = filter !== VaultActivityFilter.GOVERNANCE;
+    // Where expansion windows end: Cardano metadata updates, EVM cycle closes / cancels.
+    const boundaryTxs = await this.transactionRepository.find({
+      where: {
+        vault_id,
+        type: In([TransactionType.updateVault, TransactionType.evmCloseCycle, TransactionType.evmCancelCycle]),
+        status: In([TransactionStatus.submitted, TransactionStatus.confirmed]),
+      },
+      select: ['id', 'type', 'created_at', 'metadata', 'tx_hash'],
+      order: { created_at: 'ASC' },
+    });
+    // EVM rewrites locked_at on every cycle close; the vault first locked at its first close.
+    const firstClose = boundaryTxs.find(tx => tx.type === TransactionType.evmCloseCycle);
+    const lockedAt =
+      firstClose && (!vault.locked_at || firstClose.created_at < vault.locked_at)
+        ? firstClose.created_at
+        : vault.locked_at;
+
+    const shouldFetchTransactions = filter !== VaultActivityFilter.REBALANCE;
+    const shouldFetchRebalances =
+      vault.vault_archetype === VaultArchetype.index_weighted &&
+      (filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.REBALANCE);
     const shouldFetchProposals = filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.GOVERNANCE;
 
     if (shouldFetchTransactions) {
       const transactionTypes: TransactionType[] = [];
 
       if (filter === VaultActivityFilter.ALL) {
-        transactionTypes.push(TransactionType.createVault, TransactionType.contribute, TransactionType.acquire);
+        transactionTypes.push(
+          TransactionType.createVault,
+          TransactionType.contribute,
+          TransactionType.acquire,
+          // Vault-side trades (governance swaps) belong in the vault's history too.
+          TransactionType.evmSwap,
+          // Failed-vault path: cycle cancel + refunds of contributions / acquires.
+          TransactionType.cancel,
+          TransactionType.evmCancelCycle,
+          TransactionType.evmRefund,
+          ...EVM_TERMINATION_TX_TYPES
+        );
       } else if (filter === VaultActivityFilter.CONTRIBUTE) {
         transactionTypes.push(TransactionType.contribute);
       } else if (filter === VaultActivityFilter.ACQUIRE) {
         transactionTypes.push(TransactionType.acquire);
+      } else if (filter === VaultActivityFilter.GOVERNANCE) {
+        // Only to nest under the proposals that executed them.
+        transactionTypes.push(TransactionType.evmSwap, ...EVM_TERMINATION_TX_TYPES);
       }
 
       if (transactionTypes.length > 0) {
@@ -2171,7 +2702,7 @@ export class VaultsService {
           .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
           .getMany();
 
-        const transactionEvents: TransactionActivityEvent[] = transactions.map(tx => ({
+        transactionEvents = transactions.map(tx => ({
           ...tx,
           assets: tx.assets?.map(asset => ({
             ...asset,
@@ -2179,8 +2710,6 @@ export class VaultsService {
           })) as Asset[],
           activityType: ActivityType.TRANSACTION,
         }));
-
-        allActivities.push(...transactionEvents);
       }
     }
 
@@ -2207,22 +2736,87 @@ export class VaultsService {
         allActivities.push(acquirePhaseEvent);
       }
 
-      if (vault.locked_at) {
+      if (lockedAt) {
         const lockedPhaseEvent: PhaseTransitionEvent = {
           id: `${vault.id}_locked_phase`,
           activityType: ActivityType.PHASE_TRANSITION,
           vaultId: vault.id,
           phase: VaultStatus.locked,
-          created_at: vault.locked_at,
+          created_at: lockedAt,
+          summary: await this.getLockSummary(vault),
         };
         allActivities.push(lockedPhaseEvent);
       }
+
+      const expansion = await this.getExpansionActivity(vault, boundaryTxs, transactionEvents);
+      allActivities.push(...expansion.events);
+      // Cancel + refund txs of a cancelled window are shown inside its card.
+      transactionEvents = transactionEvents.filter(tx => !expansion.nestedTxIds.has(tx.id));
+
+      if (vault.vault_status === VaultStatus.failed) {
+        // Cancel + refund txs are shown inside the failed event, not as separate items.
+        const refundTypes: string[] = [
+          TransactionType.cancel,
+          TransactionType.evmCancelCycle,
+          TransactionType.evmRefund,
+        ];
+        const failureActions = transactionEvents
+          .filter(tx => refundTypes.includes(tx.type))
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        transactionEvents = transactionEvents.filter(tx => !refundTypes.includes(tx.type));
+
+        const failedPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_failed_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.failed,
+          created_at: vault.deactivated_at ?? vault.updated_at,
+          failure: {
+            reason: vault.failure_reason ?? null,
+            message: vault.failure_details?.message ?? null,
+            details: vault.failure_details ?? null,
+            hasDeposits: transactionEvents.some(
+              tx => tx.type === TransactionType.contribute || tx.type === TransactionType.acquire
+            ),
+          },
+          actions: failureActions,
+        };
+        allActivities.push(failedPhaseEvent);
+      }
+    }
+
+    if (shouldFetchRebalances) {
+      rebalanceEvents = await this.getIndexRebalancesActivity(vault_id);
+      // A basket buy / rebalance lists its own swaps; don't repeat each one as a separate item.
+      const legHashes = new Set(
+        rebalanceEvents.flatMap(run => run.legs.map(leg => leg.txHash?.toLowerCase()).filter(Boolean))
+      );
+      transactionEvents = transactionEvents.filter(
+        tx => tx.type !== TransactionType.evmSwap || !legHashes.has(tx.tx_hash?.toLowerCase())
+      );
     }
 
     if (shouldFetchProposals) {
-      const proposalEvents = await this.getProposalsActivity(vault_id);
+      const allProposalEvents = await this.getProposalsActivity(vault_id, transactionEvents, rebalanceEvents);
+      // Termination proposals are shown as one termination card with the whole wind-down.
+      const terminationProposals = allProposalEvents.filter(p => p.proposalType === ProposalType.TERMINATION);
+      const proposalEvents = allProposalEvents.filter(p => p.proposalType !== ProposalType.TERMINATION);
+      if (terminationProposals.length > 0) {
+        allActivities.push(...(await this.getTerminationActivity(vault, terminationProposals, transactionEvents)));
+      }
+      const terminationTxTypes: string[] = EVM_TERMINATION_TX_TYPES;
+      transactionEvents = transactionEvents.filter(tx => !terminationTxTypes.includes(tx.type));
+      // Actions a proposal executed are shown inside it, not as separate items.
+      const nested = new Set(proposalEvents.flatMap(p => p.actions.map(a => a.id)));
+      transactionEvents = transactionEvents.filter(tx => !nested.has(tx.id));
+      rebalanceEvents = rebalanceEvents.filter(run => !nested.has(run.id));
       allActivities.push(...proposalEvents);
     }
+
+    if (filter !== VaultActivityFilter.GOVERNANCE) {
+      allActivities.push(...transactionEvents);
+    }
+    allActivities.push(...rebalanceEvents);
 
     allActivities.sort((a, b) => {
       const dateA = new Date(a.created_at).getTime();
@@ -2244,7 +2838,600 @@ export class VaultsService {
     };
   }
 
-  private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+  /**
+   * Started / closed cards for each executed expansion. A cancelled window
+   * (EVM cycle cancelled) carries its cancel + refund txs and the reason; a
+   * closed one carries who received vault tokens for it.
+   */
+  private async getExpansionActivity(
+    vault: Pick<Vault, 'id' | 'chain_type' | 'failure_details' | 'ft_token_decimals' | 'vault_token_ticker'>,
+    boundaryTxs: BoundaryTx[],
+    transactions: TransactionActivityEvent[]
+  ): Promise<{ events: PhaseTransitionEvent[]; nestedTxIds: Set<string> }> {
+    const nestedTxIds = new Set<string>();
+    const proposals = await this.proposalRepository.find({
+      where: {
+        vaultId: vault.id,
+        proposalType: In([ProposalType.EXPANSION, ProposalType.ACQUIRE_EXPANSION]),
+        status: ProposalStatus.EXECUTED,
+      },
+      select: ['id', 'proposalType', 'executionDate', 'metadata'],
+    });
+    if (proposals.length === 0) return { events: [], nestedTxIds };
+
+    const windows = getExpansionWindows(proposals, boundaryTxs);
+    if (vault.chain_type !== ChainType.cardano) await this.resolveExpansionCycles(vault.id, windows);
+    const distributions = await this.getExpansionDistributions(
+      vault,
+      windows.filter(w => w.closedAt && !w.cancelled)
+    );
+    const refundTypes: string[] = [TransactionType.evmCancelCycle, TransactionType.evmRefund, TransactionType.cancel];
+
+    const events: PhaseTransitionEvent[] = [];
+    for (const w of windows) {
+      const phase =
+        w.proposalType === ProposalType.ACQUIRE_EXPANSION ? VaultStatus.acquire_expansion : VaultStatus.expansion;
+      events.push({
+        id: `${vault.id}_expansion_${w.proposalId}_started`,
+        activityType: ActivityType.PHASE_TRANSITION,
+        vaultId: vault.id,
+        phase,
+        created_at: w.startedAt,
+        expansion: { proposalId: w.proposalId, number: w.number, stage: 'started' },
+      });
+      if (!w.closedAt) continue;
+
+      let actions: TransactionActivityEvent[] | undefined;
+      let reasonMessage: string | null = null;
+      if (w.cancelled) {
+        const from = w.closedAt.getTime();
+        const to = w.nextStartedAt?.getTime() ?? Infinity;
+        actions = transactions
+          .filter(tx => refundTypes.includes(tx.type))
+          .filter(tx => {
+            const t = new Date(tx.created_at).getTime();
+            return t >= from && t < to;
+          })
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        actions.forEach(tx => nestedTxIds.add(tx.id));
+        // Older cancels kept no message on the tx; the vault keeps the latest cancel's details.
+        const details = vault.failure_details;
+        reasonMessage =
+          w.closeTx?.metadata?.message ??
+          (details?.cycleId && details.cycleId === w.cycleId ? (details.message ?? null) : null);
+      }
+
+      events.push({
+        id: `${vault.id}_expansion_${w.proposalId}_closed`,
+        activityType: ActivityType.PHASE_TRANSITION,
+        vaultId: vault.id,
+        phase,
+        created_at: w.closedAt,
+        actions,
+        expansion: {
+          proposalId: w.proposalId,
+          number: w.number,
+          stage: 'closed',
+          outcome: w.cancelled ? 'cancelled' : 'completed',
+          reason: w.reason,
+          reasonMessage,
+          distribution: w.cancelled ? null : (distributions.get(w.proposalId) ?? null),
+        },
+      });
+    }
+    return { events, nestedTxIds };
+  }
+
+  /**
+   * EVM cycle each window ran as: a closed window from the snapshot its close
+   * tx committed, a cancelled one from the contributions made during it.
+   * Cycle ids can't be counted from openCycle txs: not every open left a row.
+   */
+  private async resolveExpansionCycles(vaultId: string, windows: ExpansionWindow[]): Promise<void> {
+    const manager = this.claimRepository.manager;
+    const closeHashes = windows.map(w => w.closeTx?.tx_hash).filter(Boolean);
+    const [snapshots, contributions] = await Promise.all([
+      closeHashes.length
+        ? manager.find(EvmValuationSnapshot, {
+            where: { vault_id: vaultId, submit_tx_hash: In(closeHashes) },
+            select: ['id', 'cycle_id', 'submit_tx_hash'],
+          })
+        : ([] as EvmValuationSnapshot[]),
+      manager.find(EvmContribution, { where: { vault_id: vaultId }, select: ['id', 'cycle_id', 'created_at'] }),
+    ]);
+    const cycleByHash = new Map(snapshots.map(s => [s.submit_tx_hash?.toLowerCase(), String(s.cycle_id)]));
+
+    for (const w of windows) {
+      const fromSnapshot = w.closeTx?.tx_hash ? cycleByHash.get(w.closeTx.tx_hash.toLowerCase()) : undefined;
+      const end = (w.closedAt ?? w.nextStartedAt)?.getTime() ?? Infinity;
+      const contribution = contributions.find(c => {
+        const t = new Date(c.created_at).getTime();
+        return t >= w.startedAt.getTime() && t < end;
+      });
+      w.cycleId = fromSnapshot ?? (contribution ? String(contribution.cycle_id) : null);
+    }
+  }
+
+  /**
+   * Vault tokens issued per closed window, keyed by proposal id. EVM: the
+   * cycle's allocation leaves. Cardano: the expansion / acquirer claims the
+   * proposal created.
+   */
+  private async getExpansionDistributions(
+    vault: Pick<Vault, 'id' | 'chain_type' | 'ft_token_decimals' | 'vault_token_ticker'>,
+    windows: ExpansionWindow[]
+  ): Promise<Map<string, ExpansionDistribution>> {
+    const result = new Map<string, ExpansionDistribution>();
+    if (windows.length === 0) return result;
+    const recipientsByProposal = new Map<string, ExpansionRecipient[]>();
+
+    if (vault.chain_type !== ChainType.cardano) {
+      const byCycle = new Map(windows.filter(w => w.cycleId).map(w => [w.cycleId, w.proposalId]));
+      if (byCycle.size === 0) return result;
+      const leaves = await this.claimRepository.manager.find(EvmAllocation, {
+        where: { vault_id: vault.id, cycle_id: In([...byCycle.keys()]) },
+        select: ['id', 'cycle_id', 'contributor', 'vt_amount', 'claimed_at', 'claim_tx_hash'],
+      });
+      for (const leaf of leaves) {
+        const proposalId = byCycle.get(String(leaf.cycle_id));
+        if (!proposalId) continue;
+        const list = recipientsByProposal.get(proposalId) ?? [];
+        list.push({
+          address: leaf.contributor,
+          vtAmount: leaf.vt_amount,
+          received: Boolean(leaf.claimed_at),
+          txHash: leaf.claim_tx_hash ?? null,
+        });
+        recipientsByProposal.set(proposalId, list);
+      }
+    } else {
+      const claims = await this.claimRepository.find({
+        where: {
+          proposal_id: In(windows.map(w => w.proposalId)),
+          type: In([ClaimType.EXPANSION, ClaimType.ACQUIRER]),
+        },
+        relations: { user: true, distribution_transaction: true },
+        select: {
+          id: true,
+          proposal_id: true,
+          amount: true,
+          status: true,
+          user: { id: true, address: true },
+          distribution_transaction: { id: true, tx_hash: true },
+        },
+      });
+      for (const claim of claims) {
+        const list = recipientsByProposal.get(claim.proposal_id) ?? [];
+        list.push({
+          address: claim.user?.address ?? null,
+          vtAmount: claim.amount,
+          received: claim.status === ClaimStatus.CLAIMED,
+          txHash: claim.distribution_transaction?.tx_hash ?? null,
+        });
+        recipientsByProposal.set(claim.proposal_id, list);
+      }
+    }
+
+    for (const [proposalId, recipients] of recipientsByProposal) {
+      const sorted = recipients.sort((a, b) => (BigInt(b.vtAmount) > BigInt(a.vtAmount) ? 1 : -1));
+      result.set(proposalId, {
+        vtTicker: vault.vault_token_ticker ?? null,
+        vtDecimals: vault.ft_token_decimals ?? 0,
+        totalVt: recipients.reduce((sum, r) => sum + BigInt(r.vtAmount), 0n).toString(),
+        recipientsCount: recipients.length,
+        receivedCount: recipients.filter(r => r.received).length,
+        recipients: sorted.slice(0, EXPANSION_RECIPIENTS_LIMIT),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * One card per termination proposal. Only the proposal named in
+   * `termination_metadata` carries on-chain steps; older ones (rejected) show
+   * just their vote. Steps come from admin tx rows (EVM) or the Cardano
+   * termination status machine plus the hashes it stored.
+   */
+  private async getTerminationActivity(
+    vault: Vault,
+    proposals: ProposalActivityEvent[],
+    transactions: TransactionActivityEvent[]
+  ): Promise<TerminationActivityEvent[]> {
+    const meta = vault.termination_metadata;
+    const isEvm = vault.chain_type !== ChainType.cardano;
+
+    // One query for all termination proposals' dates (the activity events don't carry them).
+    const rows = await this.proposalRepository.find({
+      where: { id: In(proposals.map(p => p.proposalId)) },
+      select: ['id', 'title', 'status', 'startDate', 'endDate', 'createdAt'],
+    });
+    const byId = new Map(rows.map(row => [row.id, row]));
+
+    return Promise.all(
+      proposals.map(async proposal => {
+        const p = byId.get(proposal.proposalId);
+        const isActive = meta?.proposalId === proposal.proposalId;
+        const voting = [ProposalStatus.UPCOMING, ProposalStatus.ACTIVE].includes(p.status);
+        const rejected = p.status === ProposalStatus.REJECTED;
+
+        const steps: TerminationStep[] = [{ key: 'proposal_created', status: 'done', at: p.createdAt }];
+        if (voting) {
+          steps.push({ key: 'voting_ends', status: 'current', at: p.endDate });
+        } else if (rejected) {
+          steps.push({ key: 'voting_rejected', status: 'failed', at: p.endDate });
+        } else {
+          steps.push({ key: 'voting_ended', status: 'done', at: p.endDate, note: 'Passed' });
+        }
+
+        let status: TerminationActivityStatus = voting
+          ? TerminationActivityStatus.VOTING
+          : rejected
+            ? TerminationActivityStatus.REJECTED
+            : TerminationActivityStatus.IN_PROGRESS;
+        let redemption: TerminationActivityEvent['redemption'] = null;
+
+        if (!voting && !rejected) {
+          const chainSteps = isEvm
+            ? this.getEvmTerminationSteps(vault, transactions)
+            : await this.getCardanoTerminationSteps(vault, isActive);
+          steps.push(...chainSteps.steps);
+          redemption = isActive ? chainSteps.redemption : null;
+
+          if (vault.vault_status === VaultStatus.burned) {
+            status = TerminationActivityStatus.COMPLETED;
+          } else if (isActive && meta?.error) {
+            status = TerminationActivityStatus.FAILED;
+          }
+        }
+
+        const latest = steps
+          .filter(step => step.at && step.status !== 'upcoming')
+          .reduce((max, step) => Math.max(max, new Date(step.at).getTime()), 0);
+
+        return {
+          id: `${vault.id}_termination_${p.id}`,
+          activityType: ActivityType.TERMINATION,
+          vaultId: vault.id,
+          chain: isEvm ? 'evm' : 'cardano',
+          status,
+          proposal: { id: p.id, title: p.title, status: p.status, startDate: p.startDate, endDate: p.endDate },
+          redemption,
+          steps,
+          error: isActive ? (meta?.error ?? null) : null,
+          created_at: latest ? new Date(latest) : p.createdAt,
+        } satisfies TerminationActivityEvent;
+      })
+    );
+  }
+
+  private getEvmTerminationSteps(
+    vault: Vault,
+    transactions: TransactionActivityEvent[]
+  ): { steps: TerminationStep[]; redemption: TerminationActivityEvent['redemption'] } {
+    const evm = vault.termination_metadata?.evm;
+    const txs = transactions
+      .filter(tx => (EVM_TERMINATION_TX_TYPES as string[]).includes(tx.type))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const has = (type: TransactionType): boolean => txs.some(tx => tx.type === type);
+    const keyByType: Record<string, string> = {
+      [TransactionType.evmBeginTerminationPreparing]: 'preparing',
+      [TransactionType.evmBeginTermination]: 'rates_committed',
+      [TransactionType.evmRedeemFor]: 'redemption_sent',
+      [TransactionType.evmDeferTerminationAsset]: 'asset_deferred',
+      [TransactionType.evmResumeTerminationAsset]: 'asset_resumed',
+      [TransactionType.evmFinalizeTermination]: 'finalized',
+      [TransactionType.evmSweepTerminationRemainder]: 'remainder_swept',
+    };
+
+    const deadline = evm?.terminationDeadline ? new Date(Number(evm.terminationDeadline) * 1000) : null;
+    const steps: TerminationStep[] = txs.map(tx => ({
+      key: keyByType[tx.type],
+      status: 'done',
+      at: tx.created_at,
+      txHash: tx.tx_hash ?? null,
+      note:
+        tx.type === TransactionType.evmBeginTermination && evm?.assets?.length
+          ? `${evm.assets.length} ${evm.assets.length === 1 ? 'asset' : 'assets'} redeemable per VT`
+          : null,
+    }));
+
+    // Steps not reached yet, in protocol order.
+    if (!has(TransactionType.evmBeginTerminationPreparing) && !has(TransactionType.evmBeginTermination)) {
+      steps.push({ key: 'preparing', status: 'current' });
+    }
+    if (!has(TransactionType.evmBeginTermination)) steps.push({ key: 'rates_committed', status: 'upcoming' });
+    if (deadline) {
+      steps.push({ key: 'deadline', status: deadline.getTime() <= Date.now() ? 'done' : 'upcoming', at: deadline });
+    }
+    if (!has(TransactionType.evmFinalizeTermination)) steps.push({ key: 'finalized', status: 'upcoming' });
+    if (!has(TransactionType.evmSweepTerminationRemainder)) {
+      steps.push({ key: 'remainder_swept', status: 'upcoming' });
+    }
+    steps.sort((a, b) => {
+      // Keep undated (upcoming) steps last, in insertion order.
+      if (!a.at || !b.at) return a.at ? -1 : b.at ? 1 : 0;
+      return new Date(a.at).getTime() - new Date(b.at).getTime();
+    });
+
+    const pushes = txs.filter(tx => tx.type === TransactionType.evmRedeemFor).length;
+    return {
+      steps,
+      redemption: has(TransactionType.evmBeginTermination) ? { deadline, claimed: pushes, total: null } : null,
+    };
+  }
+
+  private async getCardanoTerminationSteps(
+    vault: Vault,
+    isActive: boolean
+  ): Promise<{ steps: TerminationStep[]; redemption: TerminationActivityEvent['redemption'] }> {
+    const meta = vault.termination_metadata;
+    if (!isActive || !meta) return { steps: [], redemption: null };
+
+    const flow: { key: string; status: TerminationStatus; hash?: string }[] = [
+      { key: 'nfts_burned', status: TerminationStatus.NFT_BURNED, hash: meta.nftBurnTxHash },
+      { key: 'lp_removal_sent', status: TerminationStatus.LP_REMOVAL_PENDING, hash: meta.lpRemovalTxHash },
+      { key: 'lp_returned', status: TerminationStatus.LP_RETURN_RECEIVED, hash: meta.lpReturnTxHash },
+      { key: 'vt_burned', status: TerminationStatus.VT_BURNED, hash: meta.vtBurnTxHash },
+      { key: 'ada_to_treasury', status: TerminationStatus.ADA_IN_TREASURY, hash: meta.adaTransferTxHash },
+      { key: 'claims_created', status: TerminationStatus.CLAIMS_CREATED },
+      { key: 'claims_processing', status: TerminationStatus.CLAIMS_COMPLETE },
+      { key: 'vault_burned', status: TerminationStatus.VAULT_BURNED, hash: meta.vaultBurnTxHash },
+    ];
+    const order = Object.values(TerminationStatus);
+    const reached = order.indexOf(meta.status as TerminationStatus);
+
+    const hashes = flow.map(f => f.hash).filter(Boolean);
+    const txs = hashes.length
+      ? await this.transactionRepository.find({
+          where: { tx_hash: In(hashes) },
+          select: ['tx_hash', 'updated_at', 'created_at'],
+        })
+      : [];
+    const timeByHash = new Map(txs.map(tx => [tx.tx_hash, tx.updated_at ?? tx.created_at]));
+
+    let currentMarked = false;
+    const steps: TerminationStep[] = flow.map(f => {
+      // A step is done once the machine reached its status or stored its hash.
+      const done = order.indexOf(f.status) <= reached || !!f.hash;
+      let status: TerminationStep['status'] = done ? 'done' : 'upcoming';
+      if (!done && !currentMarked) {
+        status = meta.error ? 'failed' : 'current';
+        currentMarked = true;
+      }
+      return {
+        key: f.key,
+        status,
+        txHash: f.hash ?? null,
+        at:
+          (f.hash && timeByHash.get(f.hash)) ||
+          (f.key === 'claims_created' && meta.claimsCreatedAt ? new Date(meta.claimsCreatedAt) : null),
+      };
+    });
+
+    const claims = await this.claimRepository.find({
+      where: { vault_id: vault.id, type: ClaimType.TERMINATION },
+      select: ['id', 'status'],
+    });
+    const claimed = claims.filter(c => c.status === ClaimStatus.CLAIMED).length;
+    const processing = steps.find(step => step.key === 'claims_processing');
+    if (processing && claims.length) processing.note = `${claimed} / ${claims.length} claimed`;
+
+    return { steps, redemption: claims.length ? { claimed, total: claims.length } : null };
+  }
+
+  /**
+   * Basket trades of an index-weighted vault — initial buy and governance
+   * re-weights — one event per run with its swap legs. Runs that never
+   * planned a leg are noise and skipped.
+   */
+  private async getIndexRebalancesActivity(vault_id: string): Promise<IndexRebalanceActivityEvent[]> {
+    const runs = await this.indexRebalanceRepository.find({
+      where: { vault_id },
+      order: { created_at: 'DESC' },
+    });
+
+    const native: IndexRebalanceActivityAsset = {
+      address: '0x0000000000000000000000000000000000000000',
+      symbol: 'ETH',
+      decimals: 18,
+    };
+
+    // A run that traded nothing is still shown when something blocked it (e.g. the vault is too
+    // small for the minimum trade), so holders can see why the basket was not bought.
+    const blockedSkips = (run: EvmIndexRebalance) =>
+      (run.skipped_legs ?? []).filter(item => item.reason !== 'within_tolerance');
+
+    return runs
+      .filter(run => run.legs?.length > 0 || blockedSkips(run).length > 0)
+      .map(run => {
+        // Assets sold during a re-weight may have left the current basket; the
+        // run's own frozen targets plus native cover every leg it planned.
+        const known = new Map<string, IndexRebalanceActivityAsset>(
+          (run.targets ?? []).map(t => [
+            t.assetAddress.toLowerCase(),
+            { address: t.assetAddress, symbol: t.symbol, decimals: t.decimals, image: t.image ?? null },
+          ])
+        );
+        const resolve = (address: string): IndexRebalanceActivityAsset => {
+          if (BigInt(address || 0) === 0n) return native;
+          return known.get(address.toLowerCase()) ?? { address, symbol: `${address.slice(0, 6)}…`, decimals: 18 };
+        };
+
+        return {
+          id: run.id,
+          activityType: ActivityType.INDEX_REBALANCE as const,
+          vaultId: run.vault_id,
+          trigger: run.trigger,
+          status: run.status,
+          proposalId: run.proposal_id ?? null,
+          navNative: run.nav_native ?? null,
+          legs: run.legs.map(leg => ({
+            index: leg.index,
+            side: leg.side,
+            status: leg.status,
+            assetIn: resolve(leg.assetIn),
+            assetOut: resolve(leg.assetOut),
+            amountIn: leg.amountIn,
+            amountOut: leg.grossOut ?? leg.quotedOut ?? null,
+            fee: leg.fee ?? null,
+            txHash: leg.txHash ?? null,
+            error: leg.error ?? null,
+          })),
+          skipped: blockedSkips(run),
+          lastError: run.last_error ?? null,
+          completedAt: run.completed_at ?? null,
+          created_at: run.completed_at ?? run.created_at,
+        };
+      });
+  }
+
+  /**
+   * Acquire-expansion raised / max in every display unit. Both are stored on the lovelace scale:
+   * Cardano in lovelace; EVM raised = wei × 1e6 and max = ETH × 1e6 (the proposal form's scale).
+   * On EVM the ETH values are the real amounts, so USD uses the ETH price and ADA is derived.
+   */
+  private acquireExpansionAmounts(
+    isEvm: boolean,
+    currentScaled: number | undefined,
+    maxScaled: number | undefined,
+    adaPrice: number,
+    ethPrice: number
+  ): {
+    acquireExpansionCurrentAdaLovelace?: number;
+    acquireExpansionCurrentAda?: number;
+    acquireExpansionCurrentUsd?: number;
+    acquireExpansionCurrentEth?: number;
+    acquireExpansionMaxAdaLovelace?: number;
+    acquireExpansionMaxAda?: number;
+    acquireExpansionMaxUsd?: number;
+    acquireExpansionMaxEth?: number;
+  } {
+    if (!isEvm) {
+      return {
+        acquireExpansionCurrentAdaLovelace: currentScaled,
+        acquireExpansionCurrentAda: currentScaled ? currentScaled / 1_000_000 : undefined,
+        acquireExpansionCurrentUsd: currentScaled ? (currentScaled / 1_000_000) * adaPrice : undefined,
+        acquireExpansionMaxAdaLovelace: maxScaled,
+        acquireExpansionMaxAda: maxScaled ? maxScaled / 1_000_000 : undefined,
+        acquireExpansionMaxUsd: maxScaled ? (maxScaled / 1_000_000) * adaPrice : undefined,
+      };
+    }
+    const currentEth = currentScaled ? Number(currentScaled) / 1e24 : undefined;
+    const maxEth = maxScaled ? maxScaled / 1_000_000 : undefined;
+    const toAda = (eth: number | undefined) =>
+      eth !== undefined && adaPrice > 0 ? (eth * ethPrice) / adaPrice : undefined;
+    return {
+      acquireExpansionCurrentAdaLovelace: currentScaled,
+      acquireExpansionCurrentEth: currentEth,
+      acquireExpansionCurrentUsd: currentEth !== undefined ? currentEth * ethPrice : undefined,
+      acquireExpansionCurrentAda: toAda(currentEth),
+      // Raw scaled max kept for callers that compare against the stored proposal value.
+      acquireExpansionMaxAdaLovelace: maxScaled,
+      acquireExpansionMaxEth: maxEth,
+      acquireExpansionMaxUsd: maxEth !== undefined ? maxEth * ethPrice : undefined,
+      acquireExpansionMaxAda: toAda(maxEth),
+    };
+  }
+
+  /** Lock outcome for the activity feed; null when it cannot be derived (yet). */
+  private async getLockSummary(vault: Vault): Promise<VaultLockSummary | null> {
+    try {
+      const isEvm = vault.chain_type === ChainType.robinhood;
+      const vtDecimals = Number(vault.ft_token_decimals ?? 0);
+      const vtSupply = BigInt(Math.round(Number(vault.ft_token_supply ?? 0))) * 10n ** BigInt(vtDecimals);
+
+      const participants = await this.transactionRepository
+        .createQueryBuilder('t')
+        .select('t.type', 'type')
+        .addSelect('COUNT(DISTINCT t.user_id)', 'count')
+        .where('t.vault_id = :id', { id: vault.id })
+        .andWhere('t.type IN (:...types)', { types: [TransactionType.contribute, TransactionType.acquire] })
+        .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+        .groupBy('t.type')
+        .getRawMany<{ type: TransactionType; count: string }>();
+      const countOf = (type: TransactionType): number => Number(participants.find(p => p.type === type)?.count ?? 0);
+
+      const base = {
+        vtTicker: vault.vault_token_ticker ?? null,
+        vtDecimals,
+        vtSupply: vtSupply.toString(),
+        acquirersPercent: Number(vault.tokens_for_acquires ?? 0),
+        lpPercent: Number(vault.liquidity_pool_contribution ?? 0),
+        contributorsCount: countOf(TransactionType.contribute),
+        acquirersCount: countOf(TransactionType.acquire),
+      };
+
+      if (isEvm) {
+        const snapshot = await this.evmSnapshotRepository.findOne({
+          where: { vault_id: vault.id, status: EvmSnapshotStatus.confirmed },
+          order: { created_at: 'ASC' },
+        });
+        if (!snapshot) return null;
+        const lp = snapshot.lp_carveout as Partial<EvmLpCarveoutRecord>;
+        const lpVt = BigInt(lp.lpVtAmount ?? 0);
+        // Mirrors computeEvmAllocationRows: the acquirer pool is a share of the supply left after the LP.
+        const acquirersVt = ((vtSupply - lpVt) * BigInt(Math.round(base.acquirersPercent * 100))) / 10_000n;
+        const contributorsVt = BigInt(snapshot.total_vt_allocation) - acquirersVt;
+        return {
+          ...base,
+          nativeSymbol: 'ETH',
+          nativeDecimals: 18,
+          assetsValue: snapshot.total_asset_value_native,
+          totalRaised: snapshot.total_native_raised,
+          fdv: snapshot.fdv_native ?? null,
+          // Per-wallet floors can leave the allocation total a few units under the pools.
+          contributorsVt: (contributorsVt > 0n ? contributorsVt : 0n).toString(),
+          acquirersVt: acquirersVt.toString(),
+          lpVt: lpVt.toString(),
+          contributorsNative: snapshot.total_native_allocation,
+          lpNative: String(lp.lpNativeAmount ?? '0'),
+          txHash: vault.evm_close_cycle_tx_hash ?? null,
+        };
+      }
+
+      const totals = await this.claimRepository
+        .createQueryBuilder('c')
+        .select('c.type', 'type')
+        .addSelect('COALESCE(SUM(c.amount), 0)::text', 'vt')
+        .addSelect('COALESCE(SUM(c.lovelace_amount), 0)::text', 'native')
+        .where('c.vault_id = :id', { id: vault.id })
+        .andWhere('c.type IN (:...types)', { types: [ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER, ClaimType.LP] })
+        .groupBy('c.type')
+        .getRawMany<{ type: ClaimType; vt: string; native: string }>();
+      if (totals.length === 0) return null;
+      const total = (type: ClaimType, field: 'vt' | 'native'): string =>
+        BigInt(totals.find(t => t.type === type)?.[field]?.split('.')[0] ?? '0').toString();
+      const toLovelace = (ada: unknown): string => BigInt(Math.round(Number(ada ?? 0) * 1_000_000)).toString();
+
+      return {
+        ...base,
+        nativeSymbol: 'ADA',
+        nativeDecimals: 6,
+        assetsValue: toLovelace(vault.total_assets_cost_ada),
+        totalRaised: toLovelace(vault.total_acquired_value_ada),
+        fdv: vault.fdv ? toLovelace(vault.fdv) : null,
+        contributorsVt: total(ClaimType.CONTRIBUTOR, 'vt'),
+        acquirersVt: total(ClaimType.ACQUIRER, 'vt'),
+        lpVt: total(ClaimType.LP, 'vt'),
+        contributorsNative: total(ClaimType.CONTRIBUTOR, 'native'),
+        lpNative: total(ClaimType.LP, 'native'),
+        txHash: null,
+      };
+    } catch (error) {
+      this.logger.warn(`Lock summary for vault ${vault.id} unavailable: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * One item per proposal: the lifecycle stages it reached plus the swaps and
+   * rebalance runs it executed, picked out of `transactions` / `rebalances`.
+   */
+  private async getProposalsActivity(
+    vault_id: string,
+    transactions: TransactionActivityEvent[],
+    rebalances: IndexRebalanceActivityEvent[]
+  ): Promise<ProposalActivityEvent[]> {
     // Exclude UNPAID proposals from activity feed (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
       where: {
@@ -2254,53 +3441,76 @@ export class VaultsService {
       order: { createdAt: 'DESC' },
     });
 
+    const actionsByProposal = new Map<string, ProposalActivityEvent['actions']>();
+    const addAction = (proposalId: string, action: ProposalActivityEvent['actions'][number]): void => {
+      actionsByProposal.set(proposalId, [...(actionsByProposal.get(proposalId) ?? []), action]);
+    };
+
+    const swaps = transactions.filter(tx => tx.type === TransactionType.evmSwap);
+    if (swaps.length > 0) {
+      // Swaps recorded before `metadata.proposalId` existed are matched by their
+      // operationId, which is derived from (vault, proposal, action index).
+      const proposalByOperationId = new Map<string, string>();
+      for (const proposal of proposals) {
+        (proposal.metadata?.marketplaceActions ?? []).forEach((_, i) =>
+          proposalByOperationId.set(buildOperationId(vault_id, proposal.id, i).toLowerCase(), proposal.id)
+        );
+      }
+      for (const tx of swaps) {
+        const proposalId =
+          tx.metadata?.proposalId ?? proposalByOperationId.get(String(tx.metadata?.operationId ?? '').toLowerCase());
+        if (proposalId) addAction(proposalId, tx);
+      }
+    }
+    for (const run of rebalances) {
+      if (run.proposalId) addAction(run.proposalId, run);
+    }
+
     const events: ProposalActivityEvent[] = [];
     const now = new Date();
 
     for (const proposal of proposals) {
-      const createdAt = new Date(proposal.createdAt);
+      const lifecycle: ProposalActivityEvent['lifecycle'] = [
+        { stage: ProposalLifecycleStage.CREATED, at: new Date(proposal.createdAt) },
+      ];
       const startDate = new Date(proposal.startDate);
       const endDate = new Date(proposal.endDate);
+      if (startDate < now) lifecycle.push({ stage: ProposalLifecycleStage.STARTED, at: startDate });
+      if (endDate < now) lifecycle.push({ stage: ProposalLifecycleStage.ENDED, at: endDate });
+
+      const actions = (actionsByProposal.get(proposal.id) ?? []).sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      const latest = Math.max(
+        ...lifecycle.map(e => e.at.getTime()),
+        ...actions.map(a => new Date(a.created_at).getTime())
+      );
 
       events.push({
-        id: `${proposal.id}_created`,
-        activityType: ActivityType.PROPOSAL_CREATED,
+        id: proposal.id,
+        activityType: ActivityType.PROPOSAL,
         proposalId: proposal.id,
+        proposalType: proposal.proposalType,
         title: proposal.title,
         description: proposal.description,
         status: proposal.status,
+        stage: lifecycle[lifecycle.length - 1].stage,
+        lifecycle,
+        // Lets the feed show the upcoming "Voting ends" step while voting is open.
+        endDate: proposal.endDate ? endDate : null,
+        actions,
         creatorId: proposal.creatorId,
-        created_at: createdAt,
+        created_at: new Date(latest),
         executionError: proposal.metadata?.executionError?.message,
+        distribution: proposal.metadata?.evmDistribution
+          ? {
+              asset: proposal.metadata.evmDistribution.asset,
+              netPot: proposal.metadata.evmDistribution.netPot,
+              openTxHash: proposal.metadata.evmDistribution.txHash ?? null,
+              payouts: proposal.metadata.evmDistribution.payouts ?? [],
+            }
+          : undefined,
       });
-
-      if (startDate < now) {
-        events.push({
-          id: `${proposal.id}_started`,
-          activityType: ActivityType.PROPOSAL_STARTED,
-          proposalId: proposal.id,
-          title: proposal.title,
-          description: proposal.description,
-          status: proposal.status,
-          creatorId: proposal.creatorId,
-          created_at: startDate,
-          executionError: proposal.metadata?.executionError?.message,
-        });
-      }
-
-      if (endDate < now) {
-        events.push({
-          id: `${proposal.id}_ended`,
-          activityType: ActivityType.PROPOSAL_ENDED,
-          proposalId: proposal.id,
-          title: proposal.title,
-          description: proposal.description,
-          status: proposal.status,
-          creatorId: proposal.creatorId,
-          created_at: endDate,
-          executionError: proposal.metadata?.executionError?.message,
-        });
-      }
     }
 
     return events;
@@ -2378,7 +3588,7 @@ export class VaultsService {
           platform: VerificationPlatform.WAYUP,
         })
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to fetch collection info for policyId ${policyId}: ${error.message}`);
 
       return Object.assign(new TokenVerification(), {
@@ -2424,6 +3634,10 @@ export class VaultsService {
 
     const hasRefundableFlows = contribCount > 0 || acquireCount > 0;
 
+    if (vault.chain_type === ChainType.robinhood) {
+      return this.cancelEvmVaultByOwner(vault, hasRefundableFlows);
+    }
+
     if (hasRefundableFlows) {
       const response = await this.vaultContractService.updateVaultMetadataTx({
         vault,
@@ -2443,6 +3657,100 @@ export class VaultsService {
       return { success: true };
     }
 
+    vault.deleted = true;
+    vault.deactivated_at = new Date();
+    await this.vaultsRepository.save(vault);
+
+    return { success: true };
+  }
+
+  /**
+   * EVM (Robinhood) owner cancel.
+   *
+   * The DB can lag behind the chain (webhook/receipt not processed yet), so the
+   * "delete vs refund" decision is made from on-chain state, not from DB rows:
+   *   1. Freeze the vault: admin `cancelCurrentCycle()` while the cycle is Active.
+   *      After this no new contribution can land.
+   *   2. Materialize any contributions the DB hasn't seen yet (backfill from logs),
+   *      so EvmRefundOrchestrator can refund them.
+   *   3. Soft-delete only when the chain confirms zero contributions; otherwise mark
+   *      the vault failed and let the refund cron return the assets.
+   */
+  private async cancelEvmVaultByOwner(vault: Vault, hasRefundableFlows: boolean): Promise<{ success: boolean }> {
+    if (!vault.contract_address) {
+      if (hasRefundableFlows) {
+        throw new BadRequestException('Vault contract is not synced yet. Please try again later.');
+      }
+      return this.softDeleteCancelledVault(vault);
+    }
+
+    const vaultAddress = vault.contract_address as Address;
+    let cancelTxHash: string | undefined = vault.evm_cancel_cycle_tx_hash;
+
+    if (!cancelTxHash && (await this.readEvmVaultStatus(vaultAddress)) === EvmVaultOnchainStatus.Active) {
+      try {
+        const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(
+          vault.id,
+          'Cancelled by owner',
+          'Cancelled by the vault owner'
+        );
+        cancelTxHash = txHash;
+        vault.evm_cancel_cycle_tx_hash = txHash;
+      } catch (err) {
+        this.logger.error(`Owner cancel: cancelCurrentCycle failed for vault ${vault.id}: ${(err as Error).message}`);
+        throw new BadRequestException('Failed to cancel vault on-chain. Please try again later.');
+      }
+    }
+
+    let onChainContributions: bigint;
+    try {
+      await this.evmContributionBackfillService.backfillVault(vault.id);
+      onChainContributions = await this.evmContractReader.totalContributions(vaultAddress);
+    } catch (err) {
+      // Cycle may already be cancelled here; the vault stays listed and the owner can retry.
+      this.logger.error(`Owner cancel: contribution sync failed for vault ${vault.id}: ${(err as Error).message}`);
+      throw new BadRequestException('Failed to verify vault contributions on-chain. Please try again later.');
+    }
+
+    if (onChainContributions === 0n && !hasRefundableFlows) {
+      return this.softDeleteCancelledVault(vault);
+    }
+
+    const inDb = await this.evmContributionsRepository.count({ where: { vault_id: vault.id } });
+    if (BigInt(inDb) < onChainContributions) {
+      // Contributors can still self-refund on-chain since the cycle is Cancelled.
+      this.logger.warn(
+        `Owner cancel: vault ${vault.id} has ${onChainContributions} on-chain contributions but only ${inDb} in DB`
+      );
+    }
+
+    vault.vault_status = VaultStatus.failed;
+    vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+    vault.last_update_tx_hash = cancelTxHash;
+    vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
+    vault.failure_details = { message: 'Cancelled by owner', chainType: ChainType.robinhood };
+    vault.deactivated_at = new Date();
+    await this.vaultsRepository.save(vault);
+
+    return { success: true };
+  }
+
+  private async readEvmVaultStatus(vaultAddress: Address): Promise<EvmVaultOnchainStatus> {
+    try {
+      return Number(
+        await this.evmContractReader.publicClient.readContract({
+          address: vaultAddress,
+          abi: VAULT_ABI,
+          functionName: 'status',
+        })
+      ) as EvmVaultOnchainStatus;
+    } catch (err) {
+      this.logger.error(`Owner cancel: status read failed for ${vaultAddress}: ${(err as Error).message}`);
+      throw new BadRequestException('Failed to read vault state on-chain. Please try again later.');
+    }
+  }
+
+  private async softDeleteCancelledVault(vault: Vault): Promise<{ success: boolean }> {
     vault.deleted = true;
     vault.deactivated_at = new Date();
     await this.vaultsRepository.save(vault);
@@ -2478,6 +3786,20 @@ export class VaultsService {
             'Vault can only be cancelled within 24 hours after the contribution phase has started'
           );
         }
+      }
+    }
+
+    if (vault.chain_type === ChainType.robinhood) {
+      // A broadcast contribution may not have produced asset rows yet.
+      const hasInFlightTx = await this.transactionRepository.exists({
+        where: {
+          vault_id: vault.id,
+          type: In([TransactionType.contribute, TransactionType.acquire]),
+          status: In([TransactionStatus.pending, TransactionStatus.submitted]),
+        },
+      });
+      if (hasInFlightTx) {
+        throw new BadRequestException('Vault cannot be cancelled while a contribution is being processed');
       }
     }
 

@@ -6,12 +6,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { EvmAdminSigner } from '../../processing-tx/onchain/evm-admin-signer.service';
 
 import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { ProposalStatus } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { ChainType } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceRefundService {
@@ -28,7 +30,8 @@ export class GovernanceRefundService {
     private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly evmAdminSigner: EvmAdminSigner
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -43,7 +46,7 @@ export class GovernanceRefundService {
 
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
-      relations: ['creator'],
+      relations: ['creator', 'vault'],
     });
 
     if (!proposal) {
@@ -77,6 +80,23 @@ export class GovernanceRefundService {
 
     const feeAmount = paymentTx?.amount ?? 0;
     if (feeAmount <= 0) {
+      return { refunded: false };
+    }
+
+    const isEvmVault = proposal.vault?.chain_type === ChainType.robinhood;
+    // transaction.amount is read back through parseFloat, which rounds wei above
+    // 2^53. The metadata copy is written as an exact decimal string, so it — not
+    // the column — is authoritative for EVM refunds.
+    const exactFeeAmount = String((paymentTx?.metadata as { feeAmount?: string | number })?.feeAmount ?? feeAmount);
+    if (isEvmVault && !/^\d+$/.test(exactFeeAmount)) {
+      // Refusing beats refunding a rounded amount: a non-integer here means the
+      // exact value was lost, and guessing it would pay the user the wrong sum.
+      this.logger.error(
+        `Cannot refund proposal ${proposalId}: fee amount "${exactFeeAmount}" is not an exact wei value`
+      );
+      if (throwOnFailure) {
+        throw new Error(`Fee amount for proposal ${proposalId} is not an exact wei value`);
+      }
       return { refunded: false };
     }
 
@@ -132,13 +152,14 @@ export class GovernanceRefundService {
           vault_id: proposal.vaultId,
           type: TransactionType.payment,
           assets: [],
-          amount: feeAmount,
+          amount: isEvmVault ? exactFeeAmount : feeAmount,
           userId: proposal.creatorId,
           metadata: {
             kind: 'governance_creation_fee_refund',
             refundOfProposalId: proposalId,
             refundedAt,
             paymentTxHash: paymentTx?.tx_hash,
+            feeAmount: isEvmVault ? exactFeeAmount : feeAmount,
           },
         });
         refundTxId = refundTx.id;
@@ -147,12 +168,18 @@ export class GovernanceRefundService {
       // Commit transaction before submitting to blockchain to ensure DB state is persisted.
       await queryRunner.commitTransaction();
 
-      const refundTxHash = await this.submitAdminRefundTx({
-        proposalId,
-        proposalTitle: proposal.title,
-        toAddress: creatorAddress,
-        lovelaceAmount: feeAmount,
-      });
+      const refundTxHash = isEvmVault
+        ? await this.submitEvmRefundTx({
+            proposalId,
+            toAddress: creatorAddress,
+            weiAmount: BigInt(exactFeeAmount),
+          })
+        : await this.submitAdminRefundTx({
+            proposalId,
+            proposalTitle: proposal.title,
+            toAddress: creatorAddress,
+            lovelaceAmount: feeAmount,
+          });
 
       await this.transactionsService.updateTransactionHash(refundTxId, refundTxHash, {
         kind: 'governance_creation_fee_refund',
@@ -200,6 +227,25 @@ export class GovernanceRefundService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  /**
+   * EVM sibling of submitAdminRefundTx: pay the creator back with a native
+   * transfer from the admin wallet. No Lucid, no metadata label — the on-chain
+   * link back to the proposal is the refund Transaction row, as it is for the
+   * Cardano path.
+   */
+  private async submitEvmRefundTx(config: {
+    proposalId: string;
+    toAddress: string;
+    weiAmount: bigint;
+  }): Promise<string> {
+    const { proposalId, toAddress, weiAmount } = config;
+
+    const { hash } = await this.evmAdminSigner.sendNativeAndConfirm(toAddress as `0x${string}`, weiAmount);
+
+    this.logger.log(`Refunded ${weiAmount} wei to ${toAddress} for proposal ${proposalId} (tx ${hash})`);
+    return hash;
   }
 
   private async submitAdminRefundTx(config: {

@@ -1,8 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 import { PaginationDto } from './pagination.dto';
+
+import { VaultArchetype } from '@/types/index-vault.types';
+import { ChainType } from '@/types/vault.types';
 
 export enum VaultFilter {
   open = 'open',
@@ -10,6 +13,8 @@ export enum VaultFilter {
   contribution = 'contribution',
   expansion = 'expansion',
   acquire = 'acquire',
+  /** Acquire tab: upcoming (published) + acquire + expansion phases. */
+  acquiring = 'acquiring',
   published = 'published',
   draft = 'draft',
   failed = 'failed',
@@ -63,12 +68,11 @@ export enum VaultTagFilter {
 export enum TVLCurrency {
   ADA = 'ADA',
   USD = 'USD',
+  ETH = 'ETH',
 }
 
 export class DateRangeDto {
-  @IsNotEmpty({
-    message: 'from must be a valid ISO date string',
-  })
+  @IsOptional()
   @ApiProperty({
     example: '2025-09-03T12:00:00.000Z',
     required: false,
@@ -82,9 +86,7 @@ export class DateRangeDto {
   })
   from?: Date;
 
-  @IsNotEmpty({
-    message: 'to must be a valid ISO date string',
-  })
+  @IsOptional()
   @ApiProperty({
     example: '2025-09-10T12:00:00.000Z',
     required: false,
@@ -288,7 +290,7 @@ export class GetVaultsDto extends PaginationDto {
     enum: TVLCurrency,
     required: false,
     default: TVLCurrency.USD,
-    description: 'Currency for TVL filtering (ADA or USD)',
+    description: 'Currency for TVL filtering (ADA, USD or ETH)',
   })
   @Expose()
   tvlCurrency?: TVLCurrency = TVLCurrency.USD;
@@ -326,7 +328,7 @@ export class GetVaultsDto extends PaginationDto {
     enum: TVLCurrency,
     required: false,
     default: TVLCurrency.USD,
-    description: 'Currency for FDV filtering (ADA or USD)',
+    description: 'Currency for FDV filtering (ADA, USD or ETH)',
   })
   @Expose()
   fdvCurrency?: TVLCurrency = TVLCurrency.USD;
@@ -397,4 +399,24 @@ export class GetVaultsDto extends PaginationDto {
   @Expose()
   @IsOptional()
   search?: string;
+
+  @IsEnum(ChainType)
+  @IsOptional()
+  @ApiProperty({
+    enum: ChainType,
+    required: false,
+    description: 'Filter by chain type (cardano or robinhood)',
+  })
+  @Expose()
+  chainType?: ChainType;
+
+  @IsEnum(VaultArchetype)
+  @IsOptional()
+  @ApiProperty({
+    enum: VaultArchetype,
+    required: false,
+    description: 'Filter by vault archetype (standard or index_weighted)',
+  })
+  @Expose()
+  vaultArchetype?: VaultArchetype;
 }

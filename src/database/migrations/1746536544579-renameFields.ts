@@ -3,20 +3,28 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class RenameFields1746536544579 implements MigrationInterface {
   name = 'RenameFields1746536544579';
 
+  // Guarded so the chain also runs on an empty database, where databaseStruct already
+  // creates the post-rename schema; existing databases ran this long ago.
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "acquirer_whitelist" DROP CONSTRAINT "FK_4996e41bd51ba848c8f6ac22a03"`);
-    await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
-    await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "valuation_type"`);
-    await queryRunner.query(`DROP TYPE "public"."vaults_valuation_type_enum"`);
+    await queryRunner.query(
+      `ALTER TABLE "acquirer_whitelist" DROP CONSTRAINT IF EXISTS "FK_4996e41bd51ba848c8f6ac22a03"`
+    );
+    await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT IF EXISTS "FK_adf9f0b047319be1ec67ac1d1eb"`);
+    await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT IF EXISTS "FK_2b3fd4667b2be7a2d7a329083cc"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "valuation_type"`);
+    await queryRunner.query(`DROP TYPE IF EXISTS "public"."vaults_valuation_type_enum"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "off_assets_offered"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "ft_token_ticker"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "ft_acquire_reserve"`);
-    await queryRunner.query(`CREATE TYPE "public"."vaults_value_method_enum" AS ENUM('lbe', 'fixed')`);
-    await queryRunner.query(`ALTER TABLE "vaults" ADD "value_method" "public"."vaults_value_method_enum"`);
-    await queryRunner.query(`ALTER TABLE "vaults" ADD "tokens_for_acquires" numeric`);
-    await queryRunner.query(`ALTER TABLE "vaults" ADD "acquire_reserve" numeric`);
-    await queryRunner.query(`ALTER TABLE "vaults" ADD "vault_token_ticker" character varying`);
+    await queryRunner.query(
+      `DO $$ BEGIN CREATE TYPE "public"."vaults_value_method_enum" AS ENUM('lbe', 'fixed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$`
+    );
+    await queryRunner.query(
+      `ALTER TABLE "vaults" ADD COLUMN IF NOT EXISTS "value_method" "public"."vaults_value_method_enum"`
+    );
+    await queryRunner.query(`ALTER TABLE "vaults" ADD COLUMN IF NOT EXISTS "tokens_for_acquires" numeric`);
+    await queryRunner.query(`ALTER TABLE "vaults" ADD COLUMN IF NOT EXISTS "acquire_reserve" numeric`);
+    await queryRunner.query(`ALTER TABLE "vaults" ADD COLUMN IF NOT EXISTS "vault_token_ticker" character varying`);
     await queryRunner.query(
       `ALTER TABLE "vault_tags" ADD CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc" FOREIGN KEY ("tag_id") REFERENCES "tags"("id") ON DELETE CASCADE ON UPDATE CASCADE`
     );

@@ -6,11 +6,11 @@ export class AssetItemDto {
   @ApiProperty({ description: 'Asset ID', example: 'uuid' })
   id: string;
 
-  @Expose({ name: 'policy_id' })
+  @Expose({ name: 'policyId' })
   @ApiProperty({ description: 'Policy ID', example: 'policy123...' })
   policyId: string;
 
-  @Expose({ name: 'asset_id' })
+  @Expose({ name: 'assetId' })
   @ApiProperty({ description: 'Asset ID (hex)', example: 'asset456...' })
   assetId: string;
 
@@ -18,16 +18,15 @@ export class AssetItemDto {
   @ApiProperty({ description: 'Asset type', enum: ['nft', 'ft'], example: 'nft' })
   type: string;
 
-  // Map from Asset entity's normalizedQuantity getter (auto-adjusts for decimals)
-  @Expose({ name: 'normalizedQuantity' })
+  @Expose({ name: 'quantity' })
   @ApiProperty({ description: 'Quantity (adjusted for decimals in FTs)', example: 1 })
   quantity: number;
 
-  @Expose({ name: 'floor_price' })
+  @Expose({ name: 'floorPrice' })
   @ApiProperty({ description: 'Floor price in ADA (adjusted for decimals in FTs)', example: 100.5, required: false })
   floorPrice?: number;
 
-  @Expose({ name: 'dex_price' })
+  @Expose({ name: 'dexPrice' })
   @ApiProperty({ description: 'DEX price in ADA (adjusted for decimals in FTs)', example: 0.5, required: false })
   dexPrice?: number;
 
@@ -47,7 +46,7 @@ export class AssetItemDto {
   @ApiProperty({ description: 'Asset status', example: 'locked' })
   status: string;
 
-  @Expose({ name: 'origin_type' })
+  @Expose({ name: 'originType' })
   @ApiProperty({ description: 'Origin type', example: 'contributed' })
   originType: string;
 
@@ -67,27 +66,27 @@ export class AssetItemDto {
   @ApiProperty({ description: 'Asset description', required: false })
   description?: string;
 
-  @Expose({ name: 'added_at' })
+  @Expose({ name: 'addedAt' })
   @ApiProperty({ description: 'Date added', example: '2024-01-01T00:00:00Z' })
   addedAt: Date;
 
-  @Expose({ name: 'updated_at' })
+  @Expose({ name: 'updatedAt' })
   @ApiProperty({ description: 'Date updated', example: '2024-01-01T00:00:00Z' })
   updatedAt: Date;
 
-  @Expose({ name: 'locked_at' })
+  @Expose({ name: 'lockedAt' })
   @ApiProperty({ description: 'Date locked', required: false })
   lockedAt?: Date;
 
-  @Expose({ name: 'released_at' })
+  @Expose({ name: 'releasedAt' })
   @ApiProperty({ description: 'Date released', required: false })
   releasedAt?: Date;
 
-  @Expose({ name: 'last_valuation' })
+  @Expose({ name: 'lastValuation' })
   @ApiProperty({ description: 'Last valuation date', required: false })
   lastValuation?: Date;
 
-  @Expose({ name: 'added_by' })
+  @Expose({ name: 'addedBy' })
   @ApiProperty({ description: 'User who added the asset', type: Object, required: false })
   addedBy?: {
     id: string;

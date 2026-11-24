@@ -165,8 +165,9 @@ export class DistributionCalculationService {
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
     const percentOfTotalAcquireAdaSent = this.round25(adaSent / totalAcquiredValueAda);
     const vtReceived = this.round25(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
-    const multiplier = Math.floor(vtReceived / adaSent / 1_000_000);
-    const adjustedVtAmount = multiplier * adaSent * 1_000_000;
+    // adaSent is lovelace; on-chain mints multiplier × lovelace, so the multiplier is VT base units per lovelace
+    const multiplier = Math.floor(vtReceived / adaSent);
+    const adjustedVtAmount = multiplier * adaSent;
     return {
       vtReceived: adjustedVtAmount,
       multiplier,
@@ -340,11 +341,11 @@ export class DistributionCalculationService {
         // Distribute VT PROPORTIONALLY to asset value
         // Each asset gets: (assetValue / totalTxValue) * claim.amount
         const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / contributedAssets.length;
-        const vtShare = Math.floor(proportion * claim.amount);
+        const vtShare = Math.floor(proportion * Number(claim.amount));
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
 
         // Distribute ADA proportionally as well
-        const adaShare = Math.floor(proportion * contributorLovelaceAmount);
+        const adaShare = Math.floor(proportion * Number(contributorLovelaceAmount));
         const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
 
         // Add to grouping items
@@ -383,7 +384,7 @@ export class DistributionCalculationService {
 
     const multiplier =
       acquirerClaims[0].multiplier ||
-      Math.floor(acquirerClaims[0].amount / acquirerClaims[0].transaction.amount / 1_000_000);
+      Math.floor(Number(acquirerClaims[0].amount) / Number(acquirerClaims[0].transaction.amount) / 1_000_000);
     acquireMultiplier.push(['', '', multiplier]);
 
     return {
@@ -504,11 +505,11 @@ export class DistributionCalculationService {
 
         // Distribute VT PROPORTIONALLY to asset value
         const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / contributedAssets.length;
-        const vtShare = Math.floor(proportion * claim.amount);
+        const vtShare = Math.floor(proportion * Number(claim.amount));
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
 
         // Distribute ADA proportionally as well (if needed)
-        const adaShare = includeAdaDistribution ? Math.floor(proportion * contributorLovelaceAmount) : 0;
+        const adaShare = includeAdaDistribution ? Math.floor(proportion * Number(contributorLovelaceAmount)) : 0;
         const adaSharePerUnit = includeAdaDistribution ? Math.floor(adaShare / assetQuantity) : 0;
 
         // Add to grouping items
@@ -647,13 +648,13 @@ export class DistributionCalculationService {
     for (const claim of claims) {
       const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
       if (recalculatedVt !== undefined) {
-        claim.amount = recalculatedVt;
+        claim.amount = recalculatedVt.toString();
       }
 
       if (recalculatedLovelaceAmounts) {
         const recalculatedAda = recalculatedLovelaceAmounts.get(claim.id);
         if (recalculatedAda !== undefined) {
-          claim.lovelace_amount = recalculatedAda;
+          claim.lovelace_amount = recalculatedAda.toString();
         }
       }
     }

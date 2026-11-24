@@ -11,6 +11,7 @@ import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { PriceService } from '@/modules/price/price.service';
 import {
+  ChainType,
   VAULT_STATUSES_ACTIVE,
   VAULT_STATUSES_FOR_CONTRIBUTED_STATS,
   VAULT_STATUSES_FOR_STAGE_STATS,
@@ -40,7 +41,7 @@ export class StatisticsService {
    *
    * @returns Object containing platform statistics
    */
-  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
+  async getVaultStatistics(chainType?: ChainType): Promise<VaultStatisticsResponse> {
     try {
       // Count active vaults (contribution, acquire, locked, expansion, acquire_expansion), excluding hidden vaults on mainnet
       const activeVaultsWhere: any = {
@@ -49,6 +50,9 @@ export class StatisticsService {
       };
       if (this.isMainnet) {
         activeVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
+      }
+      if (chainType) {
+        activeVaultsWhere.chain_type = chainType;
       }
       const activeVaultsCount = await this.vaultsRepository.count({
         where: activeVaultsWhere,
@@ -67,6 +71,9 @@ export class StatisticsService {
       if (this.isMainnet) {
         totalVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
       }
+      if (chainType) {
+        totalVaultsWhere.chain_type = chainType;
+      }
       const totalVaultsCount = await this.vaultsRepository.count({
         where: totalVaultsWhere,
       });
@@ -75,12 +82,16 @@ export class StatisticsService {
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
+        .addSelect('SUM(vault.total_assets_cost_eth)', 'totalValueEth')
         .where('vault.vault_status IN (:...statuses)', { statuses: VAULT_STATUSES_WITH_TVL })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
         totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        totalValueQuery.andWhere('vault.chain_type = :chainType', { chainType });
       }
       const totalValueResult = await totalValueQuery.getRawOne();
 
@@ -89,6 +100,7 @@ export class StatisticsService {
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
+        .addSelect('SUM(vault.total_assets_cost_eth)', 'totalValueEth')
         .where('vault.vault_status IN (:...statuses)', {
           statuses: VAULT_STATUSES_FOR_CONTRIBUTED_STATS,
         })
@@ -97,6 +109,9 @@ export class StatisticsService {
         totalContributedQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        totalContributedQuery.andWhere('vault.chain_type = :chainType', { chainType });
       }
       const totalContributedResult = await totalContributedQuery.getRawOne();
 
@@ -109,6 +124,11 @@ export class StatisticsService {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
       }
+      if (chainType) {
+        totalAssetsQueryBuilder
+          .innerJoin('asset.vault', 'vault')
+          .andWhere('vault.chain_type = :chainType', { chainType });
+      }
       const totalAssetsQuery = await totalAssetsQueryBuilder.getRawOne();
 
       // Get total acquired value (both ADA and USD) across all vaults, excluding hidden vaults on mainnet
@@ -120,23 +140,35 @@ export class StatisticsService {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
       }
+      if (chainType) {
+        totalAcquiredQuery.andWhere('vault.chain_type = :chainType', { chainType });
+      }
       const totalAcquiredResult = await totalAcquiredQuery.getRawOne();
 
-      const vaultsByStage = await this.getVaultsByStageData();
-      const vaultsByType = await this.getVaultsByTypeData();
+      const vaultsByStage = await this.getVaultsByStageData(chainType);
+      const vaultsByType = await this.getVaultsByTypeData(chainType);
 
-      const adaPrice = await this.priceService.getAdaPrice();
+      const [adaPrice, ethPrice] = await Promise.all([
+        this.priceService.getAdaPrice(),
+        this.priceService.getEthPrice(),
+      ]);
+
+      const totalAcquiredAda = Number(totalAcquiredResult?.totalAcquiredAda || 0);
+      const totalAcquiredUsd = totalAcquiredAda * adaPrice;
 
       const statistics = {
         activeVaults: activeVaultsCount,
         totalVaults: totalVaultsCount,
         totalValueUsd: Number(totalValueResult?.totalValueUsd || 0),
         totalValueAda: Number(totalValueResult?.totalValueAda || 0),
+        totalValueEth: Number(totalValueResult?.totalValueEth || 0),
         totalContributedUsd: Number(totalContributedResult?.totalValueUsd || 0),
         totalContributedAda: Number(totalContributedResult?.totalValueAda || 0),
+        totalContributedEth: Number(totalContributedResult?.totalValueEth || 0),
         totalAssets: Number(totalAssetsQuery?.count || 0),
-        totalAcquiredAda: Number(totalAcquiredResult?.totalAcquiredAda || 0),
-        totalAcquiredUsd: parseFloat((Number(totalAcquiredResult?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
+        totalAcquiredAda,
+        totalAcquiredUsd: parseFloat(totalAcquiredUsd.toFixed(2)),
+        totalAcquiredEth: ethPrice > 0 ? parseFloat((totalAcquiredUsd / ethPrice).toFixed(6)) : 0,
         vaultsByStage,
         vaultsByType,
       };
@@ -154,16 +186,17 @@ export class StatisticsService {
    * Gets distribution of vaults by stage with TVL in both ADA and USD
    * @returns Record of stages with percentages and TVL values
    */
-  private async getVaultsByStageData(): Promise<
-    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
-  > {
+  private async getVaultsByStageData(
+    chainType?: ChainType
+  ): Promise<Record<string, { percentage: number; valueAda: string; valueUsd: string; valueEth: string }>> {
     try {
-      // Get TVL by vault status for both currencies, excluding hidden vaults on mainnet
+      // Get TVL by vault status for all currencies, excluding hidden vaults on mainnet
       const statusQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('vault.vault_status', 'status')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
         .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('SUM(vault.total_assets_cost_eth)', 'valueEth')
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false })
         .andWhere('vault.vault_status IN (:...statuses)', {
@@ -174,17 +207,20 @@ export class StatisticsService {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
       }
+      if (chainType) {
+        statusQuery.andWhere('vault.chain_type = :chainType', { chainType });
+      }
       const statusResults = await statusQuery.groupBy('vault.vault_status').getRawMany();
 
       // Calculate total ADA value for percentages
       const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
 
       const result = {
-        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        expansion: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        expansion: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
       };
 
       const statusMap = {
@@ -199,12 +235,14 @@ export class StatisticsService {
         const status = statusMap[item.status] || item.status;
         const valueAda = Number(item.valueAda || 0);
         const valueUsd = Number(item.valueUsd || 0);
+        const valueEth = Number(item.valueEth || 0);
         const percentage = totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0;
 
         result[status.toLowerCase()] = {
           percentage: parseFloat(percentage.toFixed(2)),
           valueAda,
           valueUsd,
+          valueEth,
         };
       });
 
@@ -213,11 +251,11 @@ export class StatisticsService {
       this.logger.error('Error calculating vaults by stage:', error);
       // Return default object with zero values for all required statuses
       return {
-        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        expansion: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
+        expansion: { percentage: 0, valueAda: '0', valueUsd: '0', valueEth: '0' },
       };
     }
   }
@@ -226,21 +264,25 @@ export class StatisticsService {
    * Gets distribution of vaults by privacy type with TVL in both ADA and USD
    * @returns Record of privacy types with percentages and TVL values
    */
-  private async getVaultsByTypeData(): Promise<
-    Record<string, { percentage: number; valueAda: number; valueUsd: number }>
-  > {
+  private async getVaultsByTypeData(
+    chainType?: ChainType
+  ): Promise<Record<string, { percentage: number; valueAda: number; valueUsd: number; valueEth: number }>> {
     try {
       const privacyQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('vault.privacy', 'type')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
         .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('SUM(vault.total_assets_cost_eth)', 'valueEth')
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
         privacyQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
           hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
         });
+      }
+      if (chainType) {
+        privacyQuery.andWhere('vault.chain_type = :chainType', { chainType });
       }
       const privacyResults = await privacyQuery.groupBy('vault.privacy').getRawMany();
 
@@ -251,16 +293,19 @@ export class StatisticsService {
           percentage: 0,
           valueAda: 0,
           valueUsd: 0,
+          valueEth: 0,
         },
         public: {
           percentage: 0,
           valueAda: 0,
           valueUsd: 0,
+          valueEth: 0,
         },
         semiPrivate: {
           percentage: 0,
           valueAda: 0,
           valueUsd: 0,
+          valueEth: 0,
         },
       };
 
@@ -269,6 +314,7 @@ export class StatisticsService {
           const type = item.type;
           const valueAda = Number(item.valueAda || 0);
           const valueUsd = Number(item.valueUsd || 0);
+          const valueEth = Number(item.valueEth || 0);
           const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
 
           const key = type === 'semi-private' ? 'semiPrivate' : type.toLowerCase();
@@ -276,6 +322,7 @@ export class StatisticsService {
             percentage,
             valueAda,
             valueUsd,
+            valueEth,
           };
         }
       });
@@ -284,9 +331,9 @@ export class StatisticsService {
     } catch (error) {
       this.logger.error('Error calculating vaults by type:', error);
       return {
-        private: { percentage: 0, valueAda: 0, valueUsd: 0 },
-        public: { percentage: 0, valueAda: 0, valueUsd: 0 },
-        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        private: { percentage: 0, valueAda: 0, valueUsd: 0, valueEth: 0 },
+        public: { percentage: 0, valueAda: 0, valueUsd: 0, valueEth: 0 },
+        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0, valueEth: 0 },
       };
     }
   }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards, Query, Request, Body, Param, Res, Header } from '@nestjs/common';
+import { Controller, Get, UseGuards, Query, Request, Param, Res, Header } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 import { Response } from 'express';
 
@@ -11,7 +11,6 @@ import { ClaimResponseDto } from './dto/claim-response.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
 import { VerifyClaimsQueryDto } from './dto/verify-claims-query.dto';
 import { VerifyClaimsResponseDto } from './dto/verify-claims.dto';
-import { L4vaRewardsService } from './l4va-rewards.service';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { AdminGuard } from '@/modules/auth/admin.guard';
@@ -21,8 +20,7 @@ import { AdminGuard } from '@/modules/auth/admin.guard';
 export class ClaimsController {
   constructor(
     private readonly claimsService: ClaimsService,
-    private readonly claimsVerificationService: ClaimsVerificationService,
-    private readonly l4vaRewardsService: L4vaRewardsService
+    private readonly claimsVerificationService: ClaimsVerificationService
   ) {}
 
   @ApiDoc({
@@ -38,71 +36,9 @@ export class ClaimsController {
     return this.claimsService.getUserClaims(userId, query);
   }
 
-  @ApiDoc({
-    summary: 'Build L4VA claim transaction',
-    description: 'Build transaction for claiming specific L4VA rewards',
-    status: 200,
-  })
-  @UseGuards(AuthGuard)
-  @Post('l4va/build')
-  async buildL4VAClaim(
-    @Request() req: AuthRequest,
-    @Body() body: { claimIds: string[] }
-  ): Promise<{
-    transactionId: string;
-    presignedTx: string;
-    totalL4VA: number;
-    claimsCount: number;
-  }> {
-    const userId = req.user.sub;
-    const result = await this.l4vaRewardsService.buildBatchL4VAClaimTransaction(userId, body.claimIds);
-
-    return {
-      transactionId: result.transactionId,
-      presignedTx: result.presignedTx,
-      totalL4VA: result.totalL4VAClaimed,
-      claimsCount: result.claimedCount,
-    };
-  }
-
-  @ApiDoc({
-    summary: 'Submit signed L4VA claim transaction',
-    description: 'Submit a signed L4VA claim transaction to the blockchain',
-    status: 200,
-  })
-  @UseGuards(AuthGuard)
-  @Post('l4va/:transactionId/submit')
-  async submitL4VAClaim(
-    @Param('transactionId') transactionId: string,
-    @Body() body: { claimIds: string[]; signedTx: string }
-  ): Promise<{
-    success: boolean;
-    txHash: string;
-  }> {
-    const result = await this.l4vaRewardsService.submitSignedTransaction(transactionId, body.claimIds, body.signedTx);
-
-    return {
-      success: result.success,
-      txHash: result.blockchainTxHash,
-    };
-  }
-
-  @ApiDoc({
-    summary: 'Claim all available L4VA rewards',
-    description: 'Build transaction to claim all available L4VA rewards for current user',
-    status: 200,
-  })
-  @UseGuards(AuthGuard)
-  @Post('l4va/claim-all')
-  async claimAllL4VA(@Request() req: AuthRequest): Promise<{
-    transactionId: string;
-    presignedTx: string;
-    totalL4VAClaimed: number;
-    claimedCount: number;
-  }> {
-    const userId = req.user.sub;
-    return this.l4vaRewardsService.claimAllAvailableL4VA(userId);
-  }
+  // C-3: the legacy /claims/l4va/* routes were removed. They handed out admin-signed payouts
+  // without reserving the claim (replayable until the admin wallet is empty). L4VA claims go
+  // through the rewards-proxy flow only.
 
   @ApiDoc({
     summary: 'Verify vault claims calculations',

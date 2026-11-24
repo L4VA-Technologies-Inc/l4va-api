@@ -6,7 +6,11 @@ import {
   FungibleTokenDto,
   NonFungibleTokenDto,
 } from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
-import { DistributionMetadata } from '../modules/vaults/phase-management/governance/dto/distribution.dto';
+import {
+  DistributionMetadata,
+  EvmDistributionMetadata,
+} from '../modules/vaults/phase-management/governance/dto/distribution.dto';
+import { IndexTarget } from '../types/index-vault.types';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
 import { Claim } from './claim.entity';
@@ -85,19 +89,41 @@ export class Proposal {
     // Buy/Sell data - each action can include a displayName field (fetched from Blockfrost on-chain metadata)
     marketplaceActions?: MarketplaceActionDto[];
 
-    // Distribution data - total lovelace amount to distribute
+    // Distribution data - total lovelace amount to distribute (CARDANO ONLY)
     distributionLovelaceAmount?: string;
+
+    // Distribution data - EVM. Deliberately separate from the lovelace field
+    // rather than overloading it: lovelace is 6-decimal ADA, EVM native is
+    // 18-decimal wei, and silently reinterpreting one as the other would be a
+    // twelve-order-of-magnitude error in a payout amount.
+    /** `address(0)` for native, else the ERC-20 address. */
+    distributionAsset?: string;
+    /** Base units (wei for native), as a decimal string. */
+    distributionAmount?: string;
+    /**
+     * Chain timestamp the pro-rata shares are computed against — the proposal's
+     * own snapshot, captured at creation so execution commits exactly what was
+     * voted on rather than whatever the holder set looks like days later.
+     */
+    distributionTimepoint?: string;
 
     // Distribution execution tracking (for ADA distributions)
     distribution?: DistributionMetadata;
+
+    // Distribution execution tracking (EVM). Separate key so the Cardano
+    // batch-retry cron, which keys off `distribution.batches`, never picks up
+    // an EVM proposal and runs Cardano retry logic against it.
+    evmDistribution?: EvmDistributionMetadata;
 
     // Burning data
     burnAssets?: string[];
 
     // Expansion data
     expansion?: {
-      policyIds: string[];
+      policyIds?: string[];
       labels?: string[];
+      /** EVM: ERC-20/ERC-721 contract addresses selected for this expansion cycle */
+      evmAssets?: Array<{ contractAddress: string; label?: string }>;
       duration?: number;
       /** No time limit (always open) */
       noLimit?: boolean;
@@ -110,6 +136,28 @@ export class Proposal {
       /** For limit: VT per 1 ADA */
       limitPrice?: number;
       currentAssetCount?: number; // Track progress
+    };
+
+    // Expansion / acquire expansion: how the window closed (set by ExpansionService on close).
+    expansionClose?: {
+      closedAt: string; // ISO date string
+      reason: 'duration_expired' | 'asset_max_reached' | 'max_ada_reached';
+      txHash?: string;
+    };
+
+    // Index re-weight: the basket holders vote on, frozen at proposal creation.
+    indexReweight?: {
+      targets: IndexTarget[];
+      reserveBps: number;
+      previousTargets: IndexTarget[];
+      previousReserveBps: number | null;
+      /** Auto-rebalance schedule after the proposal; absent on proposals created before the feature. */
+      autoRebalance?: boolean;
+      rebalanceCadenceDays?: number | null;
+      previousAutoRebalance?: boolean;
+      previousRebalanceCadenceDays?: number | null;
+      /** Weights and reserve unchanged: execution only updates the schedule and makes no trades. */
+      scheduleOnly?: boolean;
     };
 
     // Acquire Expansion data (ADA → VT minting)
@@ -139,6 +187,7 @@ export class Proposal {
       collectionName?: string | null;
       valuationMethod?: string;
       customPriceAda?: number | null;
+      customPriceNativeWei?: string | null;
       lpPoolOnchainId?: string | null;
     }>;
 
@@ -151,17 +200,38 @@ export class Proposal {
       actualSlippage?: number;
     }>;
 
+    // Vote reminder (non-voters, near end of voting window)
+    voteReminderSentAt?: string; // ISO date string
+
     // Execution retry tracking
     _executionRetry?: {
       count: number;
       lastAttempt: string; // ISO date string
+      /** Set once the "gave up" alert was sent. */
+      alertedAt?: string;
     };
 
     // Pending payment tracking (for UNPAID proposals)
     _pendingPayment?: {
       duration: number; // Voting duration in ms
       originalStartDate: string; // ISO date string
-      feeAmount: number; // Fee amount in lovelace
+      /** Lovelace (Cardano) or wei as a decimal string (EVM). */
+      feeAmount: number | string;
+      /** Absent on legacy rows, which are all Cardano. */
+      chain?: 'cardano' | 'evm';
+      /**
+       * Recipient quoted when the fee was issued (EVM only). Verification
+       * checks against this rather than current settings, so changing the
+       * treasury address cannot invalidate an in-flight payment.
+       */
+      feeRecipient?: string;
+      /**
+       * Hash the user reported that we could not yet see on chain (EVM only).
+       * Recorded so a payment that outran our RPC is retryable and traceable
+       * rather than lost.
+       */
+      submittedTxHash?: string;
+      submittedAt?: string;
     };
 
     // Error tracking
@@ -170,6 +240,12 @@ export class Proposal {
       timestamp: string;
       errorCode?: string;
       userFriendlyMessage?: string;
+      /** WAITING_FOR_VAULT_STATE: what the proposal is waiting for. */
+      reason?: string;
+      /** WAITING_FOR_VAULT_STATE: when the wait began (ISO). */
+      waitingSince?: string;
+      /** WAITING_FOR_VAULT_STATE: set once the "waiting too long" alert was sent. */
+      waitingAlertedAt?: string;
     };
   };
 

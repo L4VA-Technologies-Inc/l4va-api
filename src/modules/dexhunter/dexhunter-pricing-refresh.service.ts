@@ -29,7 +29,6 @@ export class DexHunterPricingRefreshService {
   })
   async refreshPrices(): Promise<void> {
     if (!this.isMainnet) {
-      this.logger.debug('Skipping VyFi price refresh for non-mainnet environment');
       return;
     }
     try {

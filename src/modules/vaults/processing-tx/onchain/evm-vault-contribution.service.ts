@@ -1,0 +1,863 @@
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Brackets, EntityManager, Repository } from 'typeorm';
+import { decodeEventLog, formatEther, parseEther, type Address, type Hex } from 'viem';
+
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
+import { BlockchainWebhookService } from './blockchain-webhook.service';
+import { evmMinAcquireWei, sumOutstandingAcquireSignatures } from './evm-acquire-signatures';
+import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmContributionCapsService } from './evm-contribution-caps.service';
+import { deriveContributionNonce } from './evm-contribution-nonce';
+import { EvmKmsSigners } from './evm-kms-signers.service';
+import { readVaultFrozen } from './evm-pause.service';
+import { acquireExpansionVtForWei, isV13Version, toV13CycleView, VAULT_V13_ABI } from './evm-v13';
+import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
+import { VAULT_ABI } from './vault.abi';
+
+import { Asset } from '@/database/asset.entity';
+import { Proposal } from '@/database/proposal.entity';
+import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import {
+  EvmGovernanceFeeService,
+  FeePaymentNotVisibleError,
+  type EvmGovernanceFeePayment,
+} from '@/modules/vaults/phase-management/governance/evm-governance-fee.service';
+import { AssetType } from '@/types/asset.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
+
+/**
+ * Numeric values mirror the on-chain enum in
+ * `vault-contract-solidity/src/libraries/VaultTypes.sol#AssetKind`.
+ */
+export enum EvmAssetKind {
+  Native = 0,
+  ERC20 = 1,
+  ERC721 = 2,
+  ERC1155 = 3,
+}
+
+const KIND_TO_FUNCTION: Record<EvmAssetKind, string> = {
+  [EvmAssetKind.Native]: 'contributeNative',
+  [EvmAssetKind.ERC20]: 'contributeERC20',
+  [EvmAssetKind.ERC721]: 'contributeERC721',
+  [EvmAssetKind.ERC1155]: 'contributeERC1155',
+};
+
+export interface EvmContributionAuthorization {
+  cycleId: string;
+  contributor: Address;
+  kind: EvmAssetKind;
+  asset: Address;
+  tokenId: string;
+  amount: string;
+  nonce: string;
+  deadline: number;
+}
+
+export interface EvmContributionCall {
+  /** Index into the transaction metadata assets array. */
+  assetIndex: number;
+  /** Solidity function to invoke on the Vault contract. */
+  functionName: string;
+  /** EIP-712 authorization struct — send to the contract as the first argument. */
+  authorization: EvmContributionAuthorization;
+  /** 65-byte compact ECDSA signature over the authorization digest. */
+  signature: Hex;
+  /**
+   * For ERC20 / ERC721 / ERC1155 the caller must approve() (or setApprovalForAll())
+   * the vault address before invoking the contribute function.
+   */
+  approval:
+    | { required: false }
+    | { required: true; standard: 'ERC20' | 'ERC721' | 'ERC1155'; token: Address; amountOrTokenId: string };
+  /** Native ETH value that must be forwarded with the call (contributeNative only). */
+  value: string;
+}
+
+export interface EvmContributionPrepareResponse {
+  txId: string;
+  vaultAddress: Address;
+  chainId: number;
+  mintingSigner: Address;
+  /**
+   * Empty while `feePayment` is set: no authorization is signed until the
+   * protocol fee has been paid and verified.
+   */
+  calls: EvmContributionCall[];
+  /**
+   * Native transfer the wallet must send before calling prepare again with
+   * the resulting `feeTxHash`. Null when there is no fee or it is already paid.
+   */
+  feePayment: EvmGovernanceFeePayment | null;
+}
+
+/** Metadata `purpose` on the `payment` row that records a verified fee. */
+const CONTRIBUTION_FEE_PURPOSE = 'evm-contribution-fee';
+
+// ---------------------------------------------------------------------------
+// EIP-712 typed data — MUST mirror
+// `vault-contract-solidity/src/libraries/VaultAuthorizations.sol`.
+// ---------------------------------------------------------------------------
+
+const DOMAIN_NAME = 'L4VA Vault';
+const DOMAIN_VERSION = '3';
+
+const CONTRIBUTION_TYPES = {
+  ContributionAuthorization: [
+    { name: 'cycleId', type: 'uint256' },
+    { name: 'contributor', type: 'address' },
+    { name: 'kind', type: 'uint8' },
+    { name: 'asset', type: 'address' },
+    { name: 'tokenId', type: 'uint256' },
+    { name: 'amount', type: 'uint256' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'deadline', type: 'uint256' },
+  ],
+} as const;
+
+/**
+ * V3 EVM contribution flow.
+ *
+ *  1. Frontend calls `POST /contribute/:vaultId` (existing Cardano endpoint).
+ *     A `Transaction` row with `metadata = [...assets]` is created.
+ *  2. Frontend calls `POST /blockchain/evm/contribution/prepare { txId }`
+ *     (this service). If a protocol fee is due (per-asset for contribute,
+ *     flat for acquire — see SystemSettingsService *_evm keys) and unpaid,
+ *     we return `feePayment` and no calls; the wallet sends that native
+ *     transfer and calls prepare again with `feeTxHash`. Once the fee is
+ *     verified (or zero) we sign one EIP-712 `ContributionAuthorization` per
+ *     asset using the vault's `mintingKey` private key, and return everything
+ *     the wallet needs to submit N on-chain calls.
+ *  3. Frontend loops through `calls`, sends approve() + contributeXxx() per
+ *     asset via wagmi, awaits each receipt.
+ *  4. Frontend calls `POST /blockchain/evm/contribution/confirm
+ *     { txId, txHash }` — we persist the primary tx hash, create the Asset
+ *     rows from `metadata`, and let the Alchemy webhook handle final
+ *     status confirmation.
+ */
+
+@Injectable()
+export class EvmVaultContributionService {
+  private readonly logger = new Logger(EvmVaultContributionService.name);
+
+  private readonly chainId: number;
+  private readonly mintingSignerAddress: Address;
+  /** Validity window for issued authorization signatures. */
+  private readonly AUTH_VALIDITY_SECONDS = 60 * 60; // 1 hour: asset contributions (approvals, NFT batches)
+  /**
+   * ETH acquires are one transaction, included within seconds on Robinhood Chain. A short life
+   * keeps acquire-expansion reservations (and the wait before an early close at the maximum) short.
+   */
+  private readonly ACQUIRE_AUTH_VALIDITY_SECONDS = 15 * 60;
+
+  constructor(
+    @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
+    @InjectRepository(Transaction) private readonly transactionRepository: Repository<Transaction>,
+    private readonly transactionsService: TransactionsService,
+    private readonly configService: ConfigService,
+    private readonly blockchainWebhookService: BlockchainWebhookService,
+    private readonly contractReader: EvmContractReader,
+    private readonly vaultEventReconciler: EvmVaultEventReconciler,
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly evmFeeService: EvmGovernanceFeeService,
+    private readonly alerts: AlertsService,
+    private readonly signers: EvmKmsSigners,
+    private readonly contributionCaps: EvmContributionCapsService
+  ) {
+    this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
+
+    // The key itself is in KMS (EVM_MINTING_SIGNER_KMS_KEY), checked against this address on load.
+    if (!this.signers.mintingAddress) {
+      throw new Error('EVM_MINTING_SIGNER_ADDRESS is not configured.');
+    }
+    this.mintingSignerAddress = this.signers.mintingAddress;
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API
+  // --------------------------------------------------------------------------
+
+  async prepareContribution(txId: string, userId: string, feeTxHash?: string): Promise<EvmContributionPrepareResponse> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: txId },
+      relations: ['user'],
+    });
+    if (!transaction) throw new NotFoundException('Transaction not found');
+    if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
+    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+      throw new BadRequestException('Transaction is not a contribution or acquire');
+    }
+
+    const vault = await this.vaultsRepository.findOne({ where: { id: transaction.vault_id } });
+    if (!vault) throw new NotFoundException('Vault not found');
+    if (vault.chain_type !== ChainType.robinhood) {
+      throw new BadRequestException('Vault is not an EVM (Robinhood) vault');
+    }
+    if (!this.systemSettingsService.evmEnabled) {
+      throw new BadRequestException(
+        'Robinhood Chain vaults are temporarily unavailable. Please try again later or contact support if this persists.'
+      );
+    }
+    if (!vault.contract_address) {
+      throw new BadRequestException('Vault contract address is not set — the vault may not yet be created on-chain');
+    }
+
+    const isPaused = (await this.contractReader.publicClient.readContract({
+      address: vault.contract_address as Address,
+      abi: VAULT_ABI,
+      functionName: 'paused',
+    })) as boolean;
+    if (isPaused) throw new BadRequestException('Vault is paused — contributions are temporarily suspended');
+    if (await readVaultFrozen(this.contractReader.publicClient, vault.contract_address as Address)) {
+      throw new BadRequestException(
+        'This vault is temporarily frozen by the protocol guardian — contributions are suspended'
+      );
+    }
+
+    // An acquire-expansion cycle ends on its governance duration, but the on-chain acquire
+    // window stays open far longer. ETH sent after the DB snapshot would sit in no Merkle leaf
+    // and could not be refunded once the cycle locks, so stop authorizing at the governance end.
+    const expansionEndMs =
+      vault.vault_status === VaultStatus.acquire_expansion &&
+      vault.expansion_phase_start &&
+      vault.expansion_duration != null
+        ? new Date(vault.expansion_phase_start).getTime() + Number(vault.expansion_duration)
+        : null;
+    if (expansionEndMs !== null && expansionEndMs <= Date.now()) {
+      throw new BadRequestException('The acquire expansion window has closed');
+    }
+
+    const contributor = transaction.user?.address as Address | undefined;
+    if (!contributor) throw new BadRequestException('User has no EVM address on record');
+
+    // Metadata shape varies by tx type:
+    //  - contribute: metadata is the raw assets array
+    //  - acquire   : metadata is { assets: [...] } (see AcquireService)
+    const meta = transaction.metadata as any;
+    const rawAssets: any[] = Array.isArray(meta) ? meta : Array.isArray(meta?.assets) ? meta.assets : [];
+    if (rawAssets.length === 0) {
+      throw new BadRequestException('Transaction has no assets to contribute');
+    }
+
+    const vaultAddress = vault.contract_address as Address;
+
+    // Protocol fee gate. Signatures are what let the user contribute at all,
+    // so withholding them until the fee is verified is the enforcement point.
+    const feePayment = await this.resolveFeePayment(transaction, rawAssets.length, contributor, feeTxHash);
+    if (feePayment) {
+      return {
+        txId,
+        vaultAddress,
+        chainId: this.chainId,
+        mintingSigner: this.mintingSignerAddress,
+        calls: [],
+        feePayment,
+      };
+    }
+
+    const deadline = Math.min(
+      Math.floor(Date.now() / 1000) +
+        (transaction.type === TransactionType.acquire
+          ? this.ACQUIRE_AUTH_VALIDITY_SECONDS
+          : this.AUTH_VALIDITY_SECONDS),
+      ...(expansionEndMs !== null ? [Math.floor(expansionEndMs / 1000)] : [])
+    );
+
+    // Fetch the current on-chain cycle ID so expansion cycles (>1) work correctly
+    const currentCycleId = await this.contractReader.currentCycleId(vaultAddress);
+
+    const calls: EvmContributionCall[] = [];
+    for (let i = 0; i < rawAssets.length; i++) {
+      const asset = rawAssets[i];
+      const kind = this.resolveAssetKind(asset);
+      const assetAddress = this.resolveAssetAddress(kind, asset);
+      const tokenId = this.resolveTokenId(kind, asset);
+      const amount = this.resolveAmount(kind, asset);
+
+      // Per-asset nonce derived from txId + index. Deterministic (idempotent
+      // if the user retries with the same txId) yet still unique on-chain.
+      const nonce = deriveContributionNonce(txId, i);
+
+      const authorization: EvmContributionAuthorization = {
+        cycleId: currentCycleId.toString(),
+        contributor,
+        kind,
+        asset: assetAddress,
+        tokenId: tokenId.toString(),
+        amount: amount.toString(),
+        nonce: nonce.toString(),
+        deadline,
+      };
+
+      const signature = await this.signAuthorization(vaultAddress, authorization);
+
+      calls.push({
+        assetIndex: i,
+        functionName: KIND_TO_FUNCTION[kind],
+        authorization,
+        signature,
+        approval: this.buildApproval(kind, assetAddress, amount, tokenId),
+        value: kind === EvmAssetKind.Native ? amount.toString() : '0',
+      });
+    }
+
+    // Minimum acquire, enforced where the signature is issued (the UI minimum alone is bypassable
+    // through the API or the contract). Without it a 1-wei acquire earns a reward event, and a
+    // contribute→cancel loop farms them for the price of gas.
+    if (transaction.type === TransactionType.acquire) {
+      const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
+      const minWei = evmMinAcquireWei();
+      if (nativeWei < minWei) {
+        throw new BadRequestException(
+          `Minimum acquire is ${formatEther(minWei)} ETH (requested ${formatEther(nativeWei)} ETH)`
+        );
+      }
+    }
+
+    // The signatures are what let assets in, so the asset caps are enforced here, counted from the
+    // chain plus other signatures still usable (see EvmContributionCapsService).
+    if (transaction.type === TransactionType.contribute) {
+      await this.contributionCaps.reserveForTransaction(
+        vault,
+        transaction.id,
+        calls.map(c => ({
+          kind: c.authorization.kind,
+          asset: c.authorization.asset,
+          amount: c.authorization.amount,
+        })),
+        deadline
+      );
+    }
+
+    if (vault.vault_status === VaultStatus.acquire_expansion && transaction.type === TransactionType.acquire) {
+      const nativeWei = calls.reduce((sum, c) => sum + BigInt(c.value), 0n);
+      await this.reserveAcquireExpansionSignature(
+        vault,
+        vaultAddress,
+        currentCycleId,
+        transaction,
+        nativeWei,
+        deadline
+      );
+    }
+
+    return {
+      txId,
+      vaultAddress,
+      chainId: this.chainId,
+      mintingSigner: this.mintingSignerAddress,
+      calls,
+      feePayment: null,
+    };
+  }
+
+  /**
+   * Acquire expansion: the signature is the real gate, so the "Maximum ETH" is enforced here
+   * exactly — ETH already in the cycle on-chain, plus every other still-valid signature, plus this
+   * one, must fit. The signature's deadline and ETH amount are stored on the transaction, so the
+   * lifecycle can close the window as soon as the last outstanding signature expires once the
+   * maximum is reached (instead of waiting a fixed hour).
+   */
+  private async reserveAcquireExpansionSignature(
+    vault: Pick<Vault, 'id' | 'evm_protocol_version' | 'ft_token_decimals'>,
+    vaultAddress: Address,
+    cycleId: bigint,
+    transaction: Transaction,
+    nativeWei: bigint,
+    deadline: number
+  ): Promise<void> {
+    const vaultId = vault.id;
+    const proposal = await this.transactionRepository.manager.findOne(Proposal, {
+      where: { vaultId, proposalType: ProposalType.ACQUIRE_EXPANSION, status: ProposalStatus.EXECUTED },
+      order: { executionDate: 'DESC' },
+    });
+    const cfg = proposal?.metadata?.acquireExpansion;
+    const maxWei =
+      cfg && !cfg.noMax && cfg.maxAda && nativeWei > 0n
+        ? // The form stores the ETH maximum × 1e6 (the lovelace scale), so × 1e12 gives wei.
+          BigInt(Math.round(Number(cfg.maxAda))) * 10n ** 12n
+        : null;
+    // V13 caps the VT an expansion cycle can mint (`vtCap`, `maxExpansionBps` of supply by default);
+    // a root above `vtCap − fixedVtTotal` makes closeCycle revert (AllocationExceedsPool) and the
+    // cycle cannot close. At a fixed price the VT is known up front, so refuse ETH that would
+    // push it over the cap. Market-priced expansions are sized at close and not checked here.
+    const vtPerEth =
+      isV13Version(vault.evm_protocol_version) && cfg?.priceType === 'limit' ? Number(cfg.limitPrice) : 0;
+    const checkVtCap = vtPerEth > 0 && nativeWei > 0n;
+
+    // Check-and-reserve must be atomic: two concurrent requests could each see room and together
+    // overfill the maximum. A transaction-scoped advisory lock per vault serialises them across
+    // every API instance; each one sees the reservation the previous one committed.
+    await this.transactionRepository.manager.transaction(async em => {
+      await em.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`acquire-expansion:${vaultId}`]);
+
+      if (maxWei === null && !checkVtCap) return this.recordAuthDeadline(em, transaction, deadline, nativeWei);
+
+      const { nativeCollected } = await this.contractReader.getCycle(vaultAddress, cycleId);
+      const reservedWei = await sumOutstandingAcquireSignatures(em.getRepository(Transaction), vaultId, transaction.id);
+
+      if (checkVtCap) {
+        const view = toV13CycleView(
+          (await this.contractReader.publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_V13_ABI,
+            functionName: 'cycleV13',
+            args: [cycleId],
+          })) as readonly unknown[]
+        );
+        const vtDecimals = Number(vault.ft_token_decimals ?? 18);
+        const room = view.vtCap > view.fixedVtTotal ? view.vtCap - view.fixedVtTotal : 0n;
+        const projectedVt = acquireExpansionVtForWei(nativeCollected + reservedWei + nativeWei, vtPerEth, vtDecimals);
+        if (projectedVt > room) {
+          const usedVt = acquireExpansionVtForWei(nativeCollected + reservedWei, vtPerEth, vtDecimals);
+          // ETH that still fits: invert the price, rounded down.
+          const leftVt = room > usedVt ? room - usedVt : 0n;
+          const leftWei =
+            (leftVt * 10n ** 18n * 1_000_000n) / (BigInt(Math.round(vtPerEth * 1_000_000)) * 10n ** BigInt(vtDecimals));
+          throw new BadRequestException(
+            leftWei === 0n
+              ? 'This acquire expansion has reached the most vault tokens it can mint. No more ETH can be accepted.'
+              : `This acquire expansion can mint vault tokens for only ${formatEther(leftWei)} more ETH.`
+          );
+        }
+      }
+
+      if (maxWei !== null) {
+        if (nativeCollected + reservedWei + nativeWei > maxWei) {
+          const used = nativeCollected + reservedWei;
+          const left = maxWei > used ? maxWei - used : 0n;
+          throw new BadRequestException(
+            nativeCollected >= maxWei
+              ? 'This acquire expansion has reached its maximum. No more ETH can be accepted.'
+              : left === 0n
+                ? 'The rest of this acquire expansion is reserved by contributions in progress. ' +
+                  'Try again in a few minutes in case some of them are not completed.'
+                : `This acquire expansion can accept only ${formatEther(left)} more ETH right now.`
+          );
+        }
+      }
+
+      await this.recordAuthDeadline(em, transaction, deadline, nativeWei);
+    });
+  }
+
+  /** Stores the signature's deadline and ETH on the transaction (read under the expansion lock). */
+  private async recordAuthDeadline(
+    em: EntityManager,
+    transaction: Transaction,
+    deadline: number,
+    nativeWei: bigint
+  ): Promise<void> {
+    // Re-read under the lock so the reservation is written onto the latest metadata.
+    const current = await em.getRepository(Transaction).findOne({ where: { id: transaction.id } });
+    const meta = (current?.metadata ?? transaction.metadata) as any; // jsonb, as in confirmContribution
+    if (meta && !Array.isArray(meta)) {
+      await em
+        .getRepository(Transaction)
+        .update(
+          { id: transaction.id },
+          { metadata: { ...meta, evmAuthDeadline: deadline, evmAuthWei: nativeWei.toString() } }
+        );
+    }
+  }
+
+  /**
+   * Frontend calls this once, after all N on-chain contributions have been
+   * successfully submitted. Persists the primary tx hash (the last one is
+   * fine — the webhook confirms all events tied to this vault) and creates
+   * the Asset rows from the transaction metadata.
+   */
+  async confirmContribution(
+    txId: string,
+    txHash: string,
+    userId: string,
+    childTxHashes?: string[]
+  ): Promise<{ success: boolean; txHash: string }> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: txId },
+      relations: ['user'],
+    });
+    if (!transaction) throw new NotFoundException('Transaction not found');
+    if (transaction.user_id !== userId) throw new BadRequestException('Transaction does not belong to caller');
+    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+      throw new BadRequestException('Transaction is not a contribution or acquire');
+    }
+    await this.assertConfirmHashes(transaction, txHash, childTxHashes ?? []);
+
+    // createAssets consumes metadata, so preserve child hashes on the row
+    // BEFORE createAssets clears metadata. Support both metadata shapes:
+    // array (contribute) and { assets: [...] } (acquire).
+    if (childTxHashes && childTxHashes.length > 0) {
+      const meta = transaction.metadata as any;
+      const assets = Array.isArray(meta) ? meta : Array.isArray(meta?.assets) ? meta.assets : [];
+      const preservedMeta = Array.isArray(meta) ? {} : { ...(meta || {}) };
+      await this.transactionRepository.update(
+        { id: txId },
+        {
+          metadata: { ...preservedMeta, assets, evmChildTxHashes: childTxHashes },
+        }
+      );
+    }
+
+    try {
+      // The vault event reconciler may already have bound a contribution sent without /confirm.
+      const assetRows = await this.transactionRepository.manager.count(Asset, { where: { transaction: { id: txId } } });
+      if (assetRows === 0) await this.transactionsService.createAssets(txId);
+      await this.transactionsService.updateTransactionHash(txId, txHash);
+      this.logger.log(`EVM contribution confirmed — txId=${txId} txHash=${txHash}`);
+
+      // The Alchemy webhook almost always fires before this endpoint is called
+      // (block confirmed → Alchemy fires → frontend calls /confirm). By the time
+      // we persist the tx_hash above, the webhook has already tried and failed
+      // to find the TX. Immediately check whether the receipt is already
+      // on-chain and apply the confirmation side-effects (lock assets, reward
+      // event) right now instead of waiting for the next health-check cron.
+      this.applyReceiptIfAlreadyMined(txHash).catch(err =>
+        this.logger.warn(`Post-confirm catch-up failed for ${txHash}: ${(err as Error).message}`)
+      );
+
+      return { success: true, txHash };
+    } catch (err) {
+      await this.transactionsService.updateTransactionStatusById(txId, TransactionStatus.failed);
+      this.logger.error(`Failed to confirm EVM contribution ${txId}: ${(err as Error).message}`);
+      void this.alerts.sendAlert('evm_contribution_confirm_failed', {
+        chain: 'robinhood',
+        txId,
+        error: (err as Error).message,
+      });
+      throw err;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Helpers
+  // --------------------------------------------------------------------------
+
+  /**
+   * The hashes sent to /confirm are chosen by the caller and are stored where other code looks
+   * transactions up by hash. Refuse a hash another transaction already holds, and a mined primary
+   * hash whose receipt has no ContributionMade from this vault for this caller. A receipt that is
+   * not visible yet is accepted: nothing is confirmed from the hash anyway — the vault event
+   * reconciler confirms the transaction only from a contribution signed for it.
+   */
+  private async assertConfirmHashes(transaction: Transaction, txHash: string, childTxHashes: string[]): Promise<void> {
+    const hashes = Array.from(new Set([txHash, ...childTxHashes]));
+    for (const h of hashes) {
+      if (!/^0x[0-9a-fA-F]{64}$/.test(h)) throw new BadRequestException(`Invalid transaction hash ${h}`);
+    }
+    const lower = hashes.map(h => h.toLowerCase());
+
+    const clash = await this.transactionRepository
+      .createQueryBuilder('t')
+      .where('t.id != :id', { id: transaction.id })
+      .andWhere(
+        new Brackets(qb =>
+          qb
+            .where('LOWER(t.tx_hash) IN (:...lower)', { lower })
+            .orWhere(`jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...hashes]::text[])`, { hashes })
+            .orWhere(`jsonb_exists_any(t.metadata -> 'evmChildTxHashes', ARRAY[:...lower]::text[])`, { lower })
+        )
+      )
+      .getExists();
+    if (clash) throw new BadRequestException('This transaction hash is already recorded for another transaction');
+
+    let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>> | null = null;
+    try {
+      receipt = await this.contractReader.getTransactionReceipt(txHash as Hex);
+    } catch {
+      receipt = null; // not mined or not visible yet
+    }
+    if (!receipt || receipt.status !== 'success') return;
+
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: transaction.vault_id },
+      select: ['id', 'contract_address'],
+    });
+    const vaultAddress = vault?.contract_address?.toLowerCase();
+    const contributor = transaction.user?.address?.toLowerCase();
+    const hasOwnContribution = (receipt.logs ?? []).some(log => {
+      if (!vaultAddress || !contributor || String(log.address).toLowerCase() !== vaultAddress) return false;
+      try {
+        const decoded = decodeEventLog({
+          abi: VAULT_ABI,
+          data: log.data,
+          topics: log.topics,
+        }) as {
+          eventName?: string;
+          args?: { contributor?: string };
+        };
+        return (
+          decoded.eventName === 'ContributionMade' && String(decoded.args?.contributor).toLowerCase() === contributor
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (!hasOwnContribution) {
+      throw new BadRequestException('This transaction is not a contribution of yours to this vault');
+    }
+  }
+
+  /** Per asset entry for contribute (NFT or FT type, quantity ignored), flat for acquire. */
+  private quoteProtocolFeeWei(type: TransactionType, assetCount: number): bigint {
+    if (type === TransactionType.acquire) {
+      return BigInt(this.systemSettingsService.protocolAcquiresFeeEvm);
+    }
+    return BigInt(assetCount) * BigInt(this.systemSettingsService.protocolFeePerAssetEvm);
+  }
+
+  /**
+   * Returns the payment the wallet still owes, or null once nothing is owed.
+   * A supplied `feeTxHash` is verified (sender, recipient, amount, replay) and
+   * recorded as a `payment` row whose tx_hash the replay guard checks, the
+   * same way governance fees are recorded.
+   */
+  private async resolveFeePayment(
+    transaction: Transaction,
+    assetCount: number,
+    contributor: Address,
+    feeTxHash?: string
+  ): Promise<EvmGovernanceFeePayment | null> {
+    const alreadyPaid = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .where('tx.type = :type', { type: TransactionType.payment })
+      .andWhere("tx.metadata->>'purpose' = :purpose", { purpose: CONTRIBUTION_FEE_PURPOSE })
+      .andWhere("tx.metadata->>'contributionTxId' = :txId", { txId: transaction.id })
+      .getExists();
+    if (alreadyPaid) return null;
+
+    const feeWei = this.quoteProtocolFeeWei(transaction.type, assetCount);
+    if (feeWei <= 0n) return null;
+
+    const recipient = this.evmFeeService.feeRecipient;
+    if (!feeTxHash) {
+      return { to: recipient, value: feeWei.toString(), chainId: this.chainId, feeAmount: feeWei.toString() };
+    }
+
+    let verified: Awaited<ReturnType<EvmGovernanceFeeService['verifyFeePayment']>>;
+    try {
+      verified = await this.evmFeeService.verifyFeePayment({
+        txHash: feeTxHash,
+        expectedFrom: contributor,
+        expectedValue: feeWei,
+        expectedTo: recipient,
+      });
+    } catch (error) {
+      if (error instanceof FeePaymentNotVisibleError) {
+        throw new BadRequestException(`${error.message}. Please retry once the transaction is confirmed.`);
+      }
+      throw error;
+    }
+
+    await this.transactionRepository.save({
+      vault_id: transaction.vault_id,
+      type: TransactionType.payment,
+      status: TransactionStatus.confirmed,
+      user_id: transaction.user_id,
+      amount: verified.value.toString() as unknown as number,
+      tx_hash: verified.txHash,
+      assets: [],
+      metadata: {
+        purpose: CONTRIBUTION_FEE_PURPOSE,
+        contributionTxId: transaction.id,
+        contributionType: transaction.type,
+        feeWei: verified.value.toString(),
+        feeRecipient: verified.to,
+      },
+    });
+    this.logger.log(
+      `Protocol fee ${verified.txHash} (${verified.value} wei) recorded for EVM ${transaction.type} ${transaction.id}`
+    );
+    return null;
+  }
+
+  /**
+   * Fire-and-forget: if the tx is already mined (receipt available), apply
+   * the confirmation side-effects immediately rather than waiting for the
+   * 5-minute health-check cron. This closes the race where the Alchemy
+   * webhook arrives before the frontend calls /confirm.
+   */
+  private async applyReceiptIfAlreadyMined(txHash: string): Promise<void> {
+    let receipt: Awaited<ReturnType<EvmContractReader['getTransactionReceipt']>>;
+    try {
+      receipt = await this.contractReader.getTransactionReceipt(txHash as `0x${string}`);
+    } catch {
+      // Receipt not found or RPC error — health-check cron will retry.
+      return;
+    }
+    if (!receipt) return;
+
+    const status = receipt.status === 'success' ? 1 : receipt.status === 'reverted' ? 0 : null;
+    if (status === null) return;
+
+    const logs: { topics: string[]; data: string }[] = (receipt.logs ?? []).map((l: any) => ({
+      topics: (l.topics ?? []) as string[],
+      data: String(l.data ?? '0x'),
+    }));
+
+    this.logger.debug(`Post-confirm catch-up: applying receipt for ${txHash} (status=${receipt.status})`);
+    await this.blockchainWebhookService.applyEvmTransactionStatus(
+      txHash,
+      typeof receipt.transactionIndex === 'number' ? receipt.transactionIndex : 0,
+      status === 1 ? TransactionStatus.confirmed : TransactionStatus.failed,
+      logs
+    );
+
+    // Also reconcile vault events (ContributionMade, etc.) so the
+    // evm_contribution row is created immediately — no backfill or
+    // health-check cron needed for the happy path.
+    if (status === 1) {
+      const vaultLogs = (receipt.logs ?? []).map((l: any) => ({
+        address: String(l.address ?? ''),
+        data: String(l.data ?? '0x'),
+        topics: (l.topics ?? []) as string[],
+        txHash,
+        blockNumber: receipt.blockNumber != null ? String(receipt.blockNumber) : null,
+        logIndex: typeof l.logIndex === 'number' ? l.logIndex : null,
+      }));
+      try {
+        const stats = await this.vaultEventReconciler.reconcileLogs(vaultLogs);
+        this.logger.debug(
+          `Post-confirm reconciler: processed=${stats.processed} skipped=${stats.skipped} errors=${stats.errors}`
+        );
+      } catch (err) {
+        // Non-fatal — backfill cron is the safety net.
+        this.logger.warn(`Post-confirm reconciler failed for ${txHash}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private async signAuthorization(vaultAddress: Address, auth: EvmContributionAuthorization): Promise<Hex> {
+    const account = await this.signers.minting();
+    return account.signTypedData({
+      domain: {
+        name: DOMAIN_NAME,
+        version: DOMAIN_VERSION,
+        chainId: this.chainId,
+        verifyingContract: vaultAddress,
+      },
+      types: CONTRIBUTION_TYPES,
+      primaryType: 'ContributionAuthorization',
+      message: {
+        cycleId: BigInt(auth.cycleId),
+        contributor: auth.contributor,
+        kind: auth.kind,
+        asset: auth.asset,
+        tokenId: BigInt(auth.tokenId),
+        amount: BigInt(auth.amount),
+        nonce: BigInt(auth.nonce),
+        deadline: BigInt(auth.deadline),
+      },
+    });
+  }
+
+  private resolveAssetKind(asset: any): EvmAssetKind {
+    // Explicit override wins.
+    const explicit = (asset.standard || asset.metadata?.standard || asset.metadata?.onchainMetadata?.tokenType) as
+      | string
+      | undefined;
+    if (explicit) {
+      const upper = String(explicit).toUpperCase();
+      if (upper === 'ERC20') return EvmAssetKind.ERC20;
+      if (upper === 'ERC721') return EvmAssetKind.ERC721;
+      if (upper === 'ERC1155') return EvmAssetKind.ERC1155;
+      if (upper === 'NATIVE' || upper === 'ETH') return EvmAssetKind.Native;
+    }
+
+    // Fall back to legacy AssetType.
+    if (asset.type === AssetType.ADA || asset.type === 'ada') return EvmAssetKind.Native;
+    // AcquireModal (EVM branch) sends { type: 'ETH', ... } — treat as Native.
+    if (asset.type === 'ETH' || asset.type === 'eth') return EvmAssetKind.Native;
+    if (asset.type === AssetType.FT || asset.type === 'ft') return EvmAssetKind.ERC20;
+    if (asset.type === AssetType.NFT || asset.type === 'nft') return EvmAssetKind.ERC721;
+
+    throw new BadRequestException(`Cannot resolve EVM AssetKind for asset: ${JSON.stringify(asset)}`);
+  }
+
+  private resolveAssetAddress(kind: EvmAssetKind, asset: any): Address {
+    if (kind === EvmAssetKind.Native) return '0x0000000000000000000000000000000000000000';
+    const raw = (asset.policyId || asset.metadata?.policyId || '') as string;
+    if (!raw || !/^0x[0-9a-fA-F]{40}$/.test(raw)) {
+      throw new BadRequestException(`Invalid EVM asset address for kind=${EvmAssetKind[kind]}: ${raw}`);
+    }
+    return raw.toLowerCase() as Address;
+  }
+
+  private resolveTokenId(kind: EvmAssetKind, asset: any): bigint {
+    if (kind === EvmAssetKind.Native || kind === EvmAssetKind.ERC20) return 0n;
+    // ERC721 / ERC1155: tokenId is in `assetName` (numeric string) or
+    // `metadata.onchainMetadata.tokenId`.
+    const raw = asset.assetName ?? asset.metadata?.onchainMetadata?.tokenId ?? asset.tokenId;
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+      throw new BadRequestException(`Missing tokenId for ${EvmAssetKind[kind]} contribution`);
+    }
+    try {
+      return BigInt(raw);
+    } catch {
+      throw new BadRequestException(`Invalid tokenId for ${EvmAssetKind[kind]} contribution: ${raw}`);
+    }
+  }
+
+  private resolveAmount(kind: EvmAssetKind, asset: any): bigint {
+    if (kind === EvmAssetKind.ERC721) return 1n;
+
+    const raw = asset.quantity ?? asset.amount ?? 0;
+    const rawText = typeof raw === 'string' ? raw.trim() : String(raw);
+    const isIntegerString = /^[0-9]+$/.test(rawText);
+    // Backward-compatible heuristic: old acquire rows may already store wei as
+    // a large integer string but miss metadata.rawWei=true.
+    const isLikelyRawWei = isIntegerString && rawText.length >= 10;
+
+    // Native ETH: AcquireModal sends display units (e.g. 0.05 ETH). Convert to
+    // wei via parseEther. Callers who already have wei can pass a string like
+    // "50000000000000000" and set asset.metadata.rawWei = true to bypass.
+    if (kind === EvmAssetKind.Native && asset.metadata?.rawWei !== true && !isLikelyRawWei) {
+      try {
+        const value = parseEther(String(raw));
+        if (value <= 0n) throw new BadRequestException('Native amount must be > 0');
+        return value;
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        throw new BadRequestException(`Invalid Native amount: ${raw}`);
+      }
+    }
+
+    // ERC20 / (raw-wei Native): frontend sends raw blockchain quantities
+    // (decimal-scaled for FTs, wei for native when rawWei=true).
+    let value: bigint;
+    try {
+      value = BigInt(typeof raw === 'number' ? Math.trunc(raw) : String(raw));
+    } catch {
+      throw new BadRequestException(`Invalid amount for ${EvmAssetKind[kind]} contribution: ${raw}`);
+    }
+    if (value <= 0n) throw new BadRequestException(`Amount must be > 0 for ${EvmAssetKind[kind]} contribution`);
+    return value;
+  }
+
+  private buildApproval(
+    kind: EvmAssetKind,
+    asset: Address,
+    amount: bigint,
+    tokenId: bigint
+  ): EvmContributionCall['approval'] {
+    switch (kind) {
+      case EvmAssetKind.ERC20:
+        return { required: true, standard: 'ERC20', token: asset, amountOrTokenId: amount.toString() };
+      case EvmAssetKind.ERC721:
+        return { required: true, standard: 'ERC721', token: asset, amountOrTokenId: tokenId.toString() };
+      case EvmAssetKind.ERC1155:
+        return { required: true, standard: 'ERC1155', token: asset, amountOrTokenId: '0' };
+      case EvmAssetKind.Native:
+      default:
+        return { required: false };
+    }
+  }
+}

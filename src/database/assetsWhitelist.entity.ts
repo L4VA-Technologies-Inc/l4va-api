@@ -11,6 +11,7 @@ import {
   Unique,
 } from 'typeorm';
 
+import { ColumnBigintStringTransformer } from './column-bigint-string.transformer';
 import { Vault } from './vault.entity';
 
 @Entity({ name: 'assets_whitelist' })
@@ -21,8 +22,8 @@ export class AssetsWhitelistEntity {
 
   @Expose({ name: 'policyId' })
   @Column({ type: 'varchar', length: 56, nullable: false })
-  @Matches(/^[0-9a-fA-F]{56}$/, {
-    message: 'Policy ID must be a 56-character hexadecimal string',
+  @Matches(/^(?:[0-9a-fA-F]{56}|0x[0-9a-fA-F]{40})$/, {
+    message: 'Asset identifier must be a Cardano policy ID (56 hex chars) or EVM contract address (0x + 40 hex chars)',
   })
   policy_id: string;
 
@@ -67,6 +68,24 @@ export class AssetsWhitelistEntity {
     nullable: true,
   })
   custom_price_ada?: number;
+
+  /**
+   * EVM: per-collection manual/floor price in wei per whole unit.
+   * ERC-20 → wei per whole token (10^decimals base units).
+   * ERC-721 / ERC-1155 → wei per NFT.
+   * When set, this overrides Chainlink lookups for this vault.
+   * Stored as bigint via ColumnBigintStringTransformer — never JS number.
+   */
+  @Expose({ name: 'customPriceNativeWei' })
+  @Column({
+    name: 'custom_price_native_wei',
+    type: 'decimal',
+    precision: 78,
+    scale: 0,
+    nullable: true,
+    transformer: new ColumnBigintStringTransformer(),
+  })
+  custom_price_native_wei?: string;
 
   @Expose({ name: 'lpPoolOnchainId' })
   @Column({ name: 'lp_pool_onchain_id', nullable: true, type: 'text' })

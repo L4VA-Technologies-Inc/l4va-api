@@ -11,6 +11,7 @@ export enum VaultActivityFilter {
   CONTRIBUTE = 'contribute',
   ACQUIRE = 'acquire',
   GOVERNANCE = 'governance',
+  REBALANCE = 'rebalance',
 }
 
 export class GetVaultActivityDto extends PaginationDto {
@@ -32,7 +33,7 @@ export class GetVaultActivityDto extends PaginationDto {
     required: false,
     default: VaultActivityFilter.ALL,
     description:
-      'Filter by activity type: all (transactions + proposals), contribute, acquire, or governance (proposals only)',
+      'Filter by activity type: all (transactions + proposals + rebalances), contribute, acquire, governance (proposals only), or rebalance (index vault basket trades)',
   })
   @Expose()
   filter?: VaultActivityFilter = VaultActivityFilter.ALL;

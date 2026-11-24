@@ -3,12 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
-import { RewardActivityType } from '@/types/rewards.types';
+import { RewardActivityType, RewardReversalType } from '@/types/rewards.types';
 
 interface IndexEventInput {
   walletAddress: string;
   vaultId: string;
-  eventType: RewardActivityType;
+  eventType: RewardActivityType | RewardReversalType;
   txHash?: string;
   units?: number;
   metadata?: Record<string, any>;
@@ -56,6 +56,11 @@ export class RewardEventProducer {
       this.logger.debug(`Outbox: ${input.eventType} event for ${input.walletAddress}`);
       return saved;
     } catch (error) {
+      // Unique violation on idempotency_key = event already recorded; that's the point of the key.
+      if (error?.code === '23505' || error?.driverError?.code === '23505') {
+        this.logger.debug(`Outbox: duplicate ${input.eventType} event skipped (${error.detail ?? 'idempotency key'})`);
+        return null;
+      }
       this.logger.error(`Failed to write outbox event: ${error.message}`, error.stack);
       return null;
     }

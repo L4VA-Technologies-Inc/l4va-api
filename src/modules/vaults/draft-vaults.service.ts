@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { VaultStatus } from '../../types/vault.types';
@@ -18,9 +18,12 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { TokenVerification } from '@/database/token-verification.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetValuationMethod } from '@/types/asset.types';
+import { VaultArchetype } from '@/types/index-vault.types';
+import { TransactionStatus } from '@/types/transaction.types';
 
 @Injectable()
 export class DraftVaultsService {
@@ -123,6 +126,10 @@ export class DraftVaultsService {
     plain.isExpandableAssetWhitelist = vault.is_expandable_asset_whitelist;
     delete plain.is_expandable_asset_whitelist;
     plain.tags = vault.tags?.map(t => t.name) ?? [];
+    plain.vaultArchetype = vault.vault_archetype;
+    plain.indexBasket = vault.index_config
+      ? { targets: vault.index_config.targets, reserveBps: vault.index_config.reserveBps }
+      : null;
 
     // todo need to create additional model for remove owner, and transform image to link
     return plain;
@@ -234,6 +241,25 @@ export class DraftVaultsService {
       if (data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation;
       if (data.isExpandableAssetWhitelist !== undefined)
         vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist;
+      // An explicit null clears the archetype back to standard; leaving it set
+      // while `indexBasket: null` wipes index_config below would save a draft
+      // that claims to be an index vault with no basket.
+      if (data.vaultArchetype !== undefined) {
+        vaultData.vault_archetype = data.vaultArchetype ?? VaultArchetype.standard;
+      }
+      if (data.indexBasket !== undefined) {
+        // Unvalidated draft basket (version 0); launch re-resolves it from scratch.
+        vaultData.index_config = data.indexBasket
+          ? {
+              targets: data.indexBasket.targets ?? [],
+              reserveBps: data.indexBasket.reserveBps ?? 0,
+              driftToleranceBps: 0,
+              slippageBps: 0,
+              version: 0,
+              updatedAt: new Date().toISOString(),
+            }
+          : null;
+      }
 
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
@@ -366,6 +392,7 @@ export class DraftVaultsService {
               asset_count_cap_max: whitelistItem?.countCapMax,
               valuation_method: whitelistItem?.valuationMethod || 'market',
               custom_price_ada: whitelistItem?.customPriceAda || null,
+              custom_price_native_wei: whitelistItem?.customPriceNativeWei ?? null,
               lp_pool_onchain_id: lpData?.onchainId || null,
             });
           })
@@ -412,7 +439,25 @@ export class DraftVaultsService {
     });
 
     if (canDelete) {
+      // A draft can still own transactions: a failed publish reverts the vault to draft but keeps
+      // its create-vault tx row (usually status 'created', no tx_hash: built but never signed).
+      // Refuse while one could still land on-chain; otherwise drop never-signed rows and detach the
+      // rest (history is kept) so the transactions.vault_id FK doesn't block the delete.
+      const inFlight = await this.vaultsRepository.manager.exists(Transaction, {
+        where: { vault_id: vaultId, status: In([TransactionStatus.pending, TransactionStatus.submitted]) },
+      });
+      if (inFlight) {
+        throw new BadRequestException('Vault has a transaction in progress; try again once it settles');
+      }
+
       await this.vaultsRepository.manager.transaction(async manager => {
+        await manager.delete(Transaction, {
+          vault_id: vaultId,
+          status: TransactionStatus.created,
+          tx_hash: IsNull(),
+        });
+        await manager.update(Transaction, { vault_id: vaultId }, { vault_id: null });
+
         await manager
           .createQueryBuilder()
           .delete()

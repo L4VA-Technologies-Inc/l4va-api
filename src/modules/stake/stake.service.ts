@@ -36,6 +36,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 /** Transaction types built from the admin wallet and requiring admin co-sign on submit. */
 const ADMIN_SIGNED_TYPES = [TransactionType.unstake, TransactionType.harvest, TransactionType.compound];
+const STAKE_TX_TYPES = [TransactionType.stake, ...ADMIN_SIGNED_TYPES];
 const TX_VALIDITY_WINDOW_MS = 30 * 60 * 1000;
 const MIN_STAKE_AMOUNT = 100;
 const MAX_UNSTAKE_BOXES = 25;
@@ -1085,7 +1086,10 @@ export class StakeService {
     const { txCbor, signature, transactionId } = dto;
 
     const transaction = await this.transactionRepository.findOne({ where: { id: transactionId, user_id: userId } });
-    if (!transaction) return { success: false, message: 'Transaction not found.' };
+    // Only staking records: any other record (e.g. an unpaid acquire) would be marked confirmed here
+    if (!transaction || !STAKE_TX_TYPES.includes(transaction.type as TransactionType)) {
+      return { success: false, message: 'Transaction not found.' };
+    }
 
     try {
       const isAdminSigned = ADMIN_SIGNED_TYPES.includes(transaction.type as TransactionType);

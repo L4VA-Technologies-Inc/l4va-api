@@ -1,12 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import NodeCache from 'node-cache';
 
 export interface SlackAlertData {
   [key: string]: any;
 }
 
 export type SlackAlertType =
+  | 'proposal_execution_gave_up'
+  | 'proposal_waiting_too_long'
   | 'asset_price_fetch_failed'
   | 'asset_price_deviation_batch_exceeded'
   | 'wallet_fetch_failed'
@@ -15,7 +18,26 @@ export type SlackAlertType =
   | 'expansion_invalid_vtprice'
   | 'multiplier_underflow_detected'
   | 'stake_reward_insufficient_funds'
+  | 'redis_unavailable'
+  | 'redis_recovered'
   | string;
+
+/** RPC rate-limit failures within this window count towards one alert. */
+const RATE_LIMIT_WINDOW_S = 60 * 60;
+/** Rate-limited failures of the same alert type within the window before Slack hears about it. */
+const RATE_LIMIT_ALERT_AFTER = 3;
+const RATE_LIMIT_PATTERN =
+  /too many (concurrent )?requests|rate limit|request exceeds defined limit|\bHTTP 429\b|\b429\b/i;
+
+/** True when the alert is about an RPC rate limit: any string value (e.g. `error`) says so. */
+function looksRateLimited(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  return Object.values(data as Record<string, unknown>).some(v =>
+    typeof v === 'string'
+      ? RATE_LIMIT_PATTERN.test(v)
+      : Array.isArray(v) && v.some(x => typeof x === 'string' && RATE_LIMIT_PATTERN.test(x))
+  );
+}
 
 @Injectable()
 export class AlertsService {
@@ -26,6 +48,7 @@ export class AlertsService {
 
   private readonly SLACK_ALERT_COOLDOWN = 60 * 60 * 1000; // 1 hour in milliseconds
   private lastSlackAlert = new Map<string, number>();
+  private readonly rateLimitedCounts = new NodeCache({ checkperiod: 120 });
 
   constructor(private readonly configService: ConfigService) {
     this.slackToken = this.configService.get<string>('SLACK_BOT_TOKEN');
@@ -38,6 +61,11 @@ export class AlertsService {
    * @param alertType Type of alert (used for cooldown tracking)
    * @param data Alert data to include in the message
    */
+  private remainingTtl(key: string): number {
+    const expires = this.rateLimitedCounts.getTtl(key);
+    return expires ? Math.max(1, Math.ceil((expires - Date.now()) / 1000)) : RATE_LIMIT_WINDOW_S;
+  }
+
   async sendAlert(alertType: SlackAlertType, data: SlackAlertData): Promise<void> {
     try {
       if (!this.slackToken) {
@@ -48,6 +76,23 @@ export class AlertsService {
       if (this.nodeEnv === 'development' || this.nodeEnv === 'dev') {
         this.logger.debug(`Development environment detected, skipping Slack alert for ${alertType}`);
         return;
+      }
+
+      // A single RPC rate limit (HTTP 429 / "too many requests") clears on its own and is not
+      // worth a Slack message: log it, and alert only when the same alert keeps hitting it.
+      if (looksRateLimited(data)) {
+        const key = `rate-limited:${alertType}`;
+        const count = (this.rateLimitedCounts.get<number>(key) ?? 0) + 1;
+        // The window starts at the first hit; later hits keep its remaining TTL.
+        this.rateLimitedCounts.set(key, count, count === 1 ? RATE_LIMIT_WINDOW_S : this.remainingTtl(key));
+        if (count < RATE_LIMIT_ALERT_AFTER) {
+          this.logger.warn(
+            `Alert ${alertType} not sent: RPC rate limit (${count}/${RATE_LIMIT_ALERT_AFTER} this hour)`
+          );
+          return;
+        }
+        this.rateLimitedCounts.del(key);
+        data = { ...data, note: `RPC rate-limited ${count} times within the last hour` };
       }
 
       // Check cooldown
@@ -672,6 +717,50 @@ export class AlertsService {
           ],
         };
       }
+
+      case 'redis_unavailable':
+        return {
+          text: `🚨 Redis unavailable (${this.nodeEnv}): ${data.error}`,
+          blocks: [
+            { type: 'header', text: { type: 'plain_text', text: '🚨 Redis unavailable', emoji: true } },
+            {
+              type: 'section',
+              fields: [
+                { type: 'mrkdwn', text: `*Environment:*\n${this.nodeEnv}` },
+                { type: 'mrkdwn', text: `*Target:*\n\`${data.target}\`` },
+                { type: 'mrkdwn', text: `*Down since:*\n${data.downSince}` },
+                { type: 'mrkdwn', text: `*Error:*\n\`${data.error}\`` },
+              ],
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `Queues, cache and sessions are affected. Repeats at most hourly while down. *Timestamp:* ${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'redis_recovered':
+        return {
+          text: `✅ Redis recovered (${this.nodeEnv}) after ${data.downForSec}s`,
+          blocks: [
+            { type: 'header', text: { type: 'plain_text', text: '✅ Redis recovered', emoji: true } },
+            {
+              type: 'section',
+              fields: [
+                { type: 'mrkdwn', text: `*Environment:*\n${this.nodeEnv}` },
+                { type: 'mrkdwn', text: `*Target:*\n\`${data.target}\`` },
+                { type: 'mrkdwn', text: `*Downtime:*\n${data.downForSec}s` },
+                { type: 'mrkdwn', text: `*Last error:*\n\`${data.lastError ?? 'n/a'}\`` },
+              ],
+            },
+            { type: 'context', elements: [{ type: 'mrkdwn', text: `*Timestamp:* ${timestamp}` }] },
+          ],
+        };
 
       default:
         return {

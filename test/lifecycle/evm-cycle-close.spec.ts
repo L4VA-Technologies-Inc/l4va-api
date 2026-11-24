@@ -1,0 +1,278 @@
+import { parseEther, type Address } from 'viem';
+
+import { createTestApp, type TestApp } from './helpers/app';
+import { ACCOUNTS } from './helpers/chain';
+import {
+  MINUTE,
+  OnChainVaultStatus,
+  acquireNative,
+  adminNonce,
+  createAcquireOnlyVault,
+  contributeErc20,
+  createUser,
+  deployToken,
+  onChainCycle,
+  openAcquireExpansion,
+  openExpansion,
+  getVault,
+  onChainStatus,
+  resetSettings,
+  resetState,
+  snapshotRow,
+  syncClock,
+  useChainClock,
+  waitForContributions,
+  warp,
+} from './helpers/scenario';
+
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionHealthService } from '@/modules/vaults/processing-tx/offchain-tx/transaction-health.service';
+import { EvmAdminSigner } from '@/modules/vaults/processing-tx/onchain/evm-admin-signer.service';
+import { EMPTY_CYCLE_ROOT } from '@/modules/vaults/processing-tx/onchain/evm-allocation.service';
+import { VaultStatus } from '@/types/vault.types';
+
+describe('EVM cycle close', () => {
+  let t: TestApp;
+  let creator: User;
+  let alice: User;
+  let bob: User;
+
+  beforeAll(async () => {
+    t = await createTestApp();
+    useChainClock();
+  });
+
+  afterAll(async () => {
+    jest.useRealTimers();
+    await t?.close();
+  });
+
+  beforeEach(async () => {
+    await syncClock();
+    await resetState(t);
+    creator = await createUser(t, 'creator');
+    alice = await createUser(t, 'alice');
+    bob = await createUser(t, 'bob');
+  });
+
+  it('locks an acquire-only vault whose raise met the threshold', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', {
+      acquireWindowMinutes: 10,
+      minAcquireThreshold: 0.5,
+    });
+    await t.tick();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.acquire);
+
+    await acquireNative(t, vault, alice, 'alice', '0.4');
+    await acquireNative(t, vault, bob, 'bob', '0.3');
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    const snapshot = await snapshotRow(t, vault.id, 1);
+    expect(snapshot?.status).toBe('confirmed');
+    expect(BigInt(snapshot!.total_vt_allocation)).toBeGreaterThan(0n);
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+
+    // Every on-chain contribution is indexed and gets an allocation.
+    const contributions = await t.dataSource.query(
+      'SELECT lower(contributor) AS contributor, amount::text FROM evm_contributions WHERE vault_id = $1 ORDER BY amount DESC',
+      [vault.id]
+    );
+    expect(contributions).toEqual([
+      { contributor: ACCOUNTS.alice.address.toLowerCase(), amount: parseEther('0.4').toString() },
+      { contributor: ACCOUNTS.bob.address.toLowerCase(), amount: parseEther('0.3').toString() },
+    ]);
+    const allocated = await t.dataSource.query(
+      'SELECT lower(contributor) AS contributor FROM evm_allocations WHERE vault_id = $1 ORDER BY 1',
+      [vault.id]
+    );
+    expect(allocated.map((r: { contributor: string }) => r.contributor).sort()).toEqual(
+      [ACCOUNTS.alice.address, ACCOUNTS.bob.address].map(a => a.toLowerCase()).sort()
+    );
+  });
+
+  it('does not send another transaction on later ticks', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+    await t.tick();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+
+    const nonce = await adminNonce();
+    await t.tick(3);
+    expect(await adminNonce()).toBe(nonce);
+  });
+
+  it('cancels a raise that missed the threshold and refunds the acquirers', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', {
+      acquireWindowMinutes: 10,
+      minAcquireThreshold: 1,
+    });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+
+    await warp(11 * MINUTE);
+    await t.tick(3);
+
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.failed);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Cancelled);
+    expect(await snapshotRow(t, vault.id, 1)).toBeNull();
+    const [contribution] = await t.dataSource.query('SELECT status FROM evm_contributions WHERE vault_id = $1', [
+      vault.id,
+    ]);
+    expect(contribution.status).toBe('refunded');
+  });
+
+  it('closes an expansion cycle nobody contributed to and keeps the vault locked', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+    await t.tick();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+
+    await openExpansion(t, vault, creator, 10);
+    expect(await onChainCycle(vault)).toBe(2n);
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.expansion);
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    const snapshot = await snapshotRow(t, vault.id, 2);
+    expect(snapshot).toMatchObject({
+      status: 'confirmed',
+      merkle_root: EMPTY_CYCLE_ROOT,
+      total_vt_allocation: '0',
+      total_native_allocation: '0',
+    });
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+    expect(t.alerts).not.toHaveBeenCalled();
+  });
+
+  it('closes an acquire-expansion cycle when its governance duration ends', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+    await t.tick();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+
+    await openAcquireExpansion(t, vault, creator, 10, 1000);
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.acquire_expansion);
+    await acquireNative(t, vault, bob, 'bob', '0.1');
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    const snapshot = await snapshotRow(t, vault.id, 2);
+    expect(snapshot?.status).toBe('confirmed');
+    // limit price: 1000 VT per 1 ETH → 0.1 ETH buys 100 VT
+    expect(BigInt(snapshot!.total_vt_allocation)).toBe(100n * 10n ** 18n);
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+  });
+
+  it('still finishes running cycles when evm_enabled is off', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+
+    await resetSettings(t, { evm_enabled: false });
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+  });
+
+  it('recovers a closeCycle whose receipt was lost after broadcast', async () => {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+
+    // The transaction reaches the chain, but the backend never sees its receipt
+    // (RPC drop or process restart between broadcast and confirmation).
+    const signerClient = (
+      t.app.get(EvmAdminSigner) as unknown as { publicClient: { waitForTransactionReceipt: unknown } }
+    ).publicClient;
+    const lostReceipt = jest
+      .spyOn(signerClient as { waitForTransactionReceipt: () => Promise<unknown> }, 'waitForTransactionReceipt')
+      .mockRejectedValueOnce(new Error('simulated: receipt wait timed out'));
+    await t.tick();
+    lostReceipt.mockRestore();
+
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Locked);
+    expect((await snapshotRow(t, vault.id, 1))?.status).toBe('reconciliation_required');
+
+    // The stuck-transaction cron is the durable recovery path.
+    await warp(15 * MINUTE);
+    await t.app.get(TransactionHealthService).checkStuckTransactions();
+    await t.tick();
+
+    expect((await snapshotRow(t, vault.id, 1))?.status).toBe('confirmed');
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+  });
+
+  it('does not close an expansion empty while an asset contribution is not indexed yet', async () => {
+    const vault = await lockedVaultWithTokenExpansion();
+    await contributeErc20(t, vault, bob, 'bob', token, '10');
+
+    // Indexer lag: the contribution is on-chain but its row is not in the database yet.
+    await waitForContributions(t, vault.id, 2, 1);
+    await t.dataSource.query('DELETE FROM evm_contributions WHERE vault_id = $1 AND cycle_id = 2', [vault.id]);
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    expect(await closeOrCancelCount(vault.id)).toBe(1); // only cycle 1's close
+    expect(await snapshotRow(t, vault.id, 2)).toBeNull();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.expansion);
+    expect(await onChainStatus(vault)).toBe(OnChainVaultStatus.Active);
+  });
+
+  // KNOWN BUG — remove `.failing` once fixed. An asset expansion on a vault that gives
+  // contributors 0% (here acquire-only, 100% to acquirers) allocates nothing, and the
+  // EmptyAllocationError path calls cancelAndFailEvmVault: the whole vault is cancelled
+  // on-chain and marked failed, although cycle 1 already locked with VT holders.
+  it.failing('keeps an already locked vault when an asset expansion allocates nothing', async () => {
+    const vault = await lockedVaultWithTokenExpansion();
+    await contributeErc20(t, vault, bob, 'bob', token, '10');
+    await waitForContributions(t, vault.id, 2, 1);
+
+    await warp(11 * MINUTE);
+    await t.tick();
+
+    expect(await onChainStatus(vault)).not.toBe(OnChainVaultStatus.Cancelled);
+    expect((await getVault(t, vault.id)).vault_status).not.toBe(VaultStatus.failed);
+  });
+
+  let token: Address;
+
+  /** A vault whose first raise is closed, with an expansion cycle open for a fresh ERC20. */
+  async function lockedVaultWithTokenExpansion(): Promise<Vault> {
+    const vault = await createAcquireOnlyVault(t, creator, 'creator', { acquireWindowMinutes: 10 });
+    await t.tick();
+    await acquireNative(t, vault, alice, 'alice', '0.2');
+    await warp(11 * MINUTE);
+    await t.tick();
+    expect((await getVault(t, vault.id)).vault_status).toBe(VaultStatus.locked);
+
+    token = await deployToken(['bob']);
+    await openExpansion(t, vault, creator, 10, [token]);
+    return vault;
+  }
+
+  async function closeOrCancelCount(vaultId: string): Promise<number> {
+    const [{ n }] = await t.dataSource.query(
+      `SELECT count(*)::int AS n FROM transactions WHERE vault_id = $1 AND type IN ('evm-close-cycle', 'evm-cancel-cycle')`,
+      [vaultId]
+    );
+    return n;
+  }
+});

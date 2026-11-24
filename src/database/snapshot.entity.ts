@@ -19,9 +19,42 @@ export class Snapshot {
   @Column({ name: 'address_balances', type: 'jsonb' })
   addressBalances: Record<string, string>;
 
+  /**
+   * EVM only: VT that holders keep in Uniswap v4 positions, attributed to the position
+   * owner. Counts toward voting weight only; distributions follow `addressBalances`
+   * (the VaultToken's own `balanceOfAt`). Null on Cardano, where LP holders are folded
+   * into `addressBalances` directly.
+   */
+  @Expose({ name: 'lpBalances' })
+  @Column({ name: 'lp_balances', type: 'jsonb', nullable: true })
+  lpBalances: Record<string, string> | null;
+
   @Expose({ name: 'createdAt' })
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+
+  /**
+   * EVM only: the chain block this snapshot's balances correspond to.
+   *
+   * `created_at` is a database write time and says nothing about chain state.
+   * A pro-rata distribution pays against `VaultToken.balanceOfAt(timepoint)`,
+   * so without a chain timepoint recorded here the weights the vote was
+   * counted on and the weights the money follows can silently diverge.
+   *
+   * Null on Cardano snapshots, which have no EVM timepoint.
+   */
+  @Expose({ name: 'snapshotBlock' })
+  @Column({ name: 'snapshot_block', type: 'bigint', nullable: true })
+  snapshotBlock: string | null;
+
+  /**
+   * EVM only: `block.timestamp` of `snapshot_block`. This is the value passed
+   * to `openDistribution` as the timepoint, because VaultToken's clock is
+   * timestamp-based (ERC-6372 `mode=timestamp`), not block-based.
+   */
+  @Expose({ name: 'snapshotTimepoint' })
+  @Column({ name: 'snapshot_timepoint', type: 'bigint', nullable: true })
+  snapshotTimepoint: string | null;
 
   @Expose({ name: 'vault' })
   @ManyToOne(() => Vault, vault => vault.snapshots, { nullable: false, onDelete: 'CASCADE' })

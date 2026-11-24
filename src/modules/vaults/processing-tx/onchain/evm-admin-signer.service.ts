@@ -1,0 +1,441 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
+import {
+  createWalletClient,
+  decodeEventLog,
+  encodeFunctionData,
+  keccak256,
+  type Abi,
+  type Address,
+  type Hex,
+  type Log,
+  type TransactionReceipt,
+  BaseError,
+  ContractFunctionRevertedError,
+  HttpRequestError,
+  TimeoutError,
+  toFunctionSelector,
+} from 'viem';
+import { prepareTransactionRequest } from 'viem/actions';
+
+import { EvmContractReader } from './evm-contract-reader.service';
+import { EvmKmsSigners } from './evm-kms-signers.service';
+
+import { buildEvmWriteTransport } from '@/common/evm/evm-transport';
+
+export interface AdminTxOptions<TAbi extends Abi, TFunctionName extends string> {
+  address: Address;
+  abi: TAbi;
+  functionName: TFunctionName;
+  args: unknown[];
+  value?: bigint;
+  /** Optional receipt-poll timeout (ms). Defaults to 120s. */
+  timeoutMs?: number;
+}
+
+/**
+ * Thrown when the receipt reports on-chain revert. Carries the hash so the
+ * caller can persist it against the operation record for post-mortem.
+ */
+export class TxRevertedError extends Error {
+  constructor(
+    public readonly hash: Hex,
+    public readonly receipt: TransactionReceipt
+  ) {
+    super(`Transaction ${hash} reverted on-chain (status=${receipt.status})`);
+    this.name = 'TxRevertedError';
+  }
+}
+
+/**
+ * The vault's factory guardian froze it (V11+), so the vault rejects every
+ * authority call. Thrown from simulation — nothing was broadcast and no gas
+ * was spent. Not a failure of the operation itself: callers should leave their
+ * work retryable and pick it up once the guardian unfreezes the vault.
+ */
+export class VaultFrozenError extends Error {
+  constructor(
+    public readonly address: Address,
+    public readonly functionName: string
+  ) {
+    super(`Vault ${address} is frozen by the protocol guardian; ${functionName} was not sent`);
+    this.name = 'VaultFrozenError';
+  }
+}
+
+/**
+ * `eth_sendRawTransaction` failed and the transaction was not found on any node afterwards.
+ * Carries the hash the transaction would have had, so it can still be looked up later: a node
+ * that accepted it silently may yet broadcast it.
+ */
+export class TxBroadcastError extends Error {
+  constructor(
+    public readonly hash: Hex,
+    public readonly cause: unknown
+  ) {
+    super(
+      `Broadcast of tx ${hash} failed and the tx is not on the node: ${(cause as Error)?.message ?? String(cause)}`
+    );
+    this.name = 'TxBroadcastError';
+  }
+}
+
+/** How long to look for a transaction whose broadcast timed out or lost its connection. */
+const BROADCAST_RECHECK_MS = 30_000;
+const BROADCAST_RECHECK_INTERVAL_MS = 3_000;
+
+/** Timeouts and HTTP / network failures: the node may have accepted the tx before the call failed. */
+function isTransportFailure(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  return !!err.walk(e => e instanceof TimeoutError || e instanceof HttpRequestError);
+}
+
+const VAULT_FROZEN_SELECTOR = toFunctionSelector('VaultFrozen()');
+
+/** True when a viem error is the vault's `VaultFrozen()` revert, decoded by name or by selector. */
+export function isVaultFrozenRevert(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  const reverted = err.walk(e => e instanceof ContractFunctionRevertedError);
+  if (!(reverted instanceof ContractFunctionRevertedError)) return false;
+  return reverted.data?.errorName === 'VaultFrozen' || reverted.signature === VAULT_FROZEN_SELECTOR;
+}
+
+export interface AdminTxResult {
+  hash: Hex;
+  receipt: TransactionReceipt;
+  /**
+   * Decoded logs matching the caller-provided event names, in emission order.
+   * Each entry includes the emitting contract `address` — CALLERS MUST validate
+   * both `address === expectedVaultAddress` AND every `args.*` value against
+   * the payload they broadcast before writing to the database. This service
+   * deliberately does not enforce those checks; it decodes generically so
+   * multiple operation services can reuse the pipeline without leaking
+   * their per-flow invariants down here.
+   */
+  decodedEvents: Array<{ address: Address; eventName: string; args: Record<string, unknown> }>;
+}
+
+/**
+ * Admin-signed on-chain tx pipeline. Every EVM state change signed by the
+ * backend goes through this: closeCycle, cancelCurrentCycle, claimAllocations,
+ * refundContributions.
+ *
+ * Enforces the pattern from the plan:
+ *   simulate → sign → broadcast → wait for receipt → require success →
+ *     decode expected events → return {hash, receipt, decodedEvents}.
+ *
+ * The transaction is signed locally (KMS) and its hash is known before it is sent. A
+ * broadcast that times out or loses its connection is therefore not treated as a failure
+ * outright: the hash is looked up on chain first, and if the node took the transaction the
+ * flow carries on as if the call had returned.
+ *
+ * DB mutations happen in the caller inside a single transaction using the
+ * returned decoded events. The webhook path may later re-process the same
+ * events; caller must use unique keys so both paths converge idempotently.
+ */
+@Injectable()
+export class EvmAdminSigner {
+  private readonly logger = new Logger(EvmAdminSigner.name);
+  /**
+   * Admin sends run from many places at once (proposal executions, lifecycle crons, the airdrop
+   * orchestrator). Each one read the "pending" nonce from the RPC independently, so concurrent
+   * sends signed the same nonce and all but one were rejected. Sends are serialised (prepare →
+   * sign → broadcast only; receipt waits stay concurrent):
+   *  - in-process through this promise chain;
+   *  - across processes through a Postgres advisory lock — during a blue/green deploy the old and
+   *    new containers both run the crons and both sign with this key for a few minutes.
+   * The next nonce is also tracked locally in case the RPC's pending count lags behind a
+   * just-accepted tx (the lock makes the RPC count authoritative across processes).
+   */
+  private sendChain: Promise<unknown> = Promise.resolve();
+  private nextLocalNonce: number | null = null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private readonly walletClient: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private readonly publicClient: any;
+  readonly address: Address;
+  readonly chainId: number;
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly contractReader: EvmContractReader,
+    private readonly signers: EvmKmsSigners,
+    private readonly dataSource: DataSource
+  ) {
+    const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
+    if (!rpcUrl) throw new Error('EVM_RPC_URL is not configured.');
+    if (!this.signers.adminAddress) {
+      throw new Error(
+        'EVM_ADMIN_ADDRESS is not configured. Required for closeCycle / cancelCurrentCycle / claim / refund flows.'
+      );
+    }
+
+    // The key is in KMS; the KMS signer checks it resolves to this address before signing anything.
+    this.address = this.signers.adminAddress;
+    this.chainId = this.contractReader.chainId;
+    this.publicClient = this.contractReader.publicClient;
+    this.walletClient = createWalletClient({ transport: buildEvmWriteTransport(rpcUrl) });
+  }
+
+  /**
+   * simulate → broadcast → wait receipt → require success → decode events.
+   *
+   * @param expectedEventNames Event names (from `opts.abi`) whose logs the caller
+   *   wants back, decoded. Non-matching logs are ignored. If a required event is
+   *   missing from a successful receipt, caller can detect via `decodedEvents.length`.
+   * @param onBroadcast Optional callback fired the moment writeContract returns
+   *   the hash (BEFORE waiting for the receipt). The caller MUST use it to
+   *   persist the hash so a crash-in-flight can be reconciled from-chain later.
+   */
+  async sendAndConfirm<TAbi extends Abi, TFunctionName extends string>(
+    opts: AdminTxOptions<TAbi, TFunctionName>,
+    expectedEventNames: string[] = [],
+    onBroadcast?: (hash: Hex) => Promise<void>
+  ): Promise<AdminTxResult> {
+    const { address, abi, functionName, args, value, timeoutMs = 120_000 } = opts;
+    const account = await this.signers.admin();
+
+    // 1. Simulate — catches revert before we pay gas.
+    try {
+      await this.publicClient.simulateContract({
+        account,
+        address,
+        abi,
+        functionName,
+        args,
+        value,
+      });
+    } catch (err) {
+      if (isVaultFrozenRevert(err)) {
+        this.logger.warn(`simulateContract(${functionName}) skipped: vault ${address} is frozen by the guardian`);
+        throw new VaultFrozenError(address, functionName);
+      }
+      const message = (err as Error).message || String(err);
+      this.logger.error(`simulateContract(${functionName}) reverted: ${message}`);
+      throw err;
+    }
+
+    // 2. Sign and broadcast.
+    const data = encodeFunctionData({ abi, functionName, args } as Parameters<typeof encodeFunctionData>[0]);
+    const hash = await this.signAndBroadcast(account, { to: address, data, value }, functionName);
+
+    this.logger.log(`Broadcast ${functionName} tx=${hash}`);
+
+    // 2a. Persist the hash before waiting. If this throws, we still return
+    // the receipt-wait error so the caller knows both things happened.
+    if (onBroadcast) {
+      try {
+        await onBroadcast(hash);
+      } catch (persistErr) {
+        this.logger.error(
+          `onBroadcast(${hash}) failed: ${(persistErr as Error).message}. Continuing to wait for receipt.`
+        );
+      }
+    }
+
+    // 3. Wait for receipt.
+    const receipt = await this.publicClient.waitForTransactionReceipt({
+      hash,
+      timeout: timeoutMs,
+    });
+
+    // 4. Require success.
+    if (receipt.status !== 'success') {
+      throw new TxRevertedError(hash, receipt);
+    }
+
+    // 5. Decode expected events.
+    const decodedEvents = expectedEventNames.length > 0 ? this.decodeEvents(abi, receipt.logs, expectedEventNames) : [];
+
+    return { hash, receipt, decodedEvents };
+  }
+
+  /**
+   * Send a plain native-value transfer from the admin wallet and wait for the
+   * receipt. Used for governance fee refunds, which pay a user back directly
+   * rather than calling a contract — hence no ABI, no simulation and no event
+   * decoding.
+   *
+   * @param onBroadcast Fired with the hash the moment it is broadcast, BEFORE
+   *   the receipt wait, so the caller can persist it and reconcile a
+   *   crash-in-flight from chain.
+   */
+  async sendNativeAndConfirm(
+    to: Address,
+    value: bigint,
+    opts?: { timeoutMs?: number; onBroadcast?: (hash: Hex) => Promise<void> }
+  ): Promise<{ hash: Hex; receipt: TransactionReceipt }> {
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+
+    const hash = await this.signAndBroadcast(await this.signers.admin(), { to, value }, 'native transfer');
+
+    this.logger.log(`Broadcast native transfer ${value} wei to ${to} tx=${hash}`);
+
+    if (opts?.onBroadcast) {
+      try {
+        await opts.onBroadcast(hash);
+      } catch (persistErr) {
+        this.logger.error(
+          `onBroadcast(${hash}) failed: ${(persistErr as Error).message}. Continuing to wait for receipt.`
+        );
+      }
+    }
+
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: timeoutMs });
+    if (receipt.status !== 'success') {
+      throw new TxRevertedError(hash, receipt);
+    }
+
+    return { hash, receipt };
+  }
+
+  /**
+   * Prepare (nonce, gas, fees from the read RPCs), sign locally and send to the primary RPC. The hash is the
+   * keccak of the signed bytes, so it is known whatever happens to the send call.
+   *
+   * If `eth_sendRawTransaction` fails, the hash is looked up before giving up: a timeout or a
+   * dropped connection is retried as a lookup for up to {@link BROADCAST_RECHECK_MS}, any other
+   * error once (an "already known" / "nonce too low" can mean these very bytes already landed).
+   * Found → returned as broadcast. Not found → {@link TxBroadcastError}.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private signAndBroadcast(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    account: any,
+    request: { to: Address; data?: Hex; value?: bigint },
+    label: string
+  ): Promise<Hex> {
+    const run = this.sendChain.then(() =>
+      this.withClusterSendLock(() => this.signAndBroadcastExclusive(account, request, label))
+    );
+    // Keep the chain alive whatever this send does.
+    this.sendChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Holds a cluster-wide advisory lock (per admin address) for the duration of `fn`. */
+  private async withClusterSendLock<T>(fn: () => Promise<T>): Promise<T> {
+    const key = `evm-admin-send:${this.chainId}:${String(this.address).toLowerCase()}`;
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+      try {
+        return await fn();
+      } finally {
+        await runner.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]).catch(() => undefined);
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async signAndBroadcastExclusive(
+    account: any,
+    request: { to: Address; data?: Hex; value?: bigint },
+    label: string
+  ): Promise<Hex> {
+    const rpcNonce: number = await this.publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    });
+    const nonce = Math.max(rpcNonce, this.nextLocalNonce ?? 0);
+    // Gas, fees and chain id are reads: take them from the read transport (with its fallbacks), so
+    // a rate-limited primary does not stop the send before anything is signed. Only the broadcast
+    // below goes to the single write node (see buildEvmWriteTransport).
+    // The clients here are untyped (`any`), so viem cannot infer the chain/account generics and
+    // its parameter type collapses to one demanding `kzg`; the request itself is a plain call.
+    const prepared = await prepareTransactionRequest(this.publicClient, {
+      account,
+      nonce,
+      ...request,
+    } as unknown as Parameters<typeof prepareTransactionRequest>[1]);
+    const serializedTransaction = (await account.signTransaction(prepared)) as Hex;
+    const hash = keccak256(serializedTransaction);
+
+    try {
+      await this.walletClient.sendRawTransaction({ serializedTransaction });
+      this.nextLocalNonce = nonce + 1;
+      return hash;
+    } catch (err) {
+      const transport = isTransportFailure(err);
+      this.logger.warn(
+        `Broadcast of ${label} tx=${hash} nonce=${prepared.nonce} failed (${(err as Error).message.split('\n')[0]}); ` +
+          (transport ? `looking it up for ${BROADCAST_RECHECK_MS / 1000}s` : 'checking whether it landed')
+      );
+      if (await this.isTxKnown(hash, transport ? BROADCAST_RECHECK_MS : 0)) {
+        this.logger.warn(`Tx ${hash} (${label}) reached the node despite the failed broadcast call; continuing`);
+        this.nextLocalNonce = nonce + 1;
+        return hash;
+      }
+      // Not sent: forget the local guess so the next send re-reads the chain.
+      this.nextLocalNonce = null;
+      throw new TxBroadcastError(hash, err);
+    }
+  }
+
+  /** True once any configured node knows `hash` (pending or mined); polls until `waitMs` is spent. */
+  private async isTxKnown(hash: Hex, waitMs: number): Promise<boolean> {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      try {
+        if (await this.publicClient.getTransaction({ hash })) return true;
+      } catch {
+        // not found (or the read failed): keep looking until the deadline
+      }
+      if (Date.now() >= deadline) return false;
+      await new Promise(resolve => setTimeout(resolve, BROADCAST_RECHECK_INTERVAL_MS));
+    }
+  }
+
+  /** Public helper for reconciliation paths that only have a hash. */
+  async fetchReceiptAndDecode<TAbi extends Abi>(
+    hash: Hex,
+    abi: TAbi,
+    expectedEventNames: string[]
+  ): Promise<AdminTxResult> {
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
+    if (receipt.status !== 'success') {
+      throw new TxRevertedError(hash, receipt);
+    }
+    return {
+      hash,
+      receipt,
+      decodedEvents: this.decodeEvents(abi, receipt.logs, expectedEventNames),
+    };
+  }
+
+  private decodeEvents(
+    abi: Abi,
+    logs: readonly Log[],
+    expectedEventNames: string[]
+  ): Array<{ address: Address; eventName: string; args: Record<string, unknown> }> {
+    const set = new Set(expectedEventNames);
+    const out: Array<{ address: Address; eventName: string; args: Record<string, unknown> }> = [];
+    for (const log of logs) {
+      // viem's Log type has `topics` at runtime but the union in
+      // TransactionReceipt.logs narrows it away in some versions — access via cast.
+      const raw = log as unknown as { address: Address; data: Hex; topics: [Hex, ...Hex[]] | [] };
+      try {
+        const decoded = decodeEventLog({
+          abi,
+          data: raw.data,
+          topics: raw.topics,
+        });
+        if (set.has(decoded.eventName)) {
+          out.push({
+            address: raw.address,
+            eventName: decoded.eventName,
+            args: decoded.args as unknown as Record<string, unknown>,
+          });
+        }
+      } catch {
+        // log came from another contract or a different ABI — ignore.
+      }
+    }
+    return out;
+  }
+}

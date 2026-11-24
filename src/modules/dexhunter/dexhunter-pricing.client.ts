@@ -190,9 +190,10 @@ export class DexHunterPricingClient {
    * @param tokenIds - Array of token identifiers (policyId + assetName in hex)
    * @returns Map of tokenId to price in ADA (null if not found)
    */
-  async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
+  async getTokenPrices(tokenIds: string[], options?: { forceMainnet?: boolean }): Promise<Map<string, number | null>> {
     // Skip API calls for testnet/preprod - DexHunter doesn't support preprod
-    if (!this.isMainnet) {
+    // forceMainnet: Tokens dashboard uses mainnet Cardano market data even on preprod apps
+    if (!this.isMainnet && !options?.forceMainnet) {
       this.logger.debug(`Skipping DexHunter API call for non-mainnet environment (${tokenIds.length} tokens)`);
       // Return null for all tokens
       const resultMap = new Map<string, number | null>();
@@ -398,10 +399,11 @@ export class DexHunterPricingClient {
     scriptHash: string,
     assetName: string,
     interval: string,
-    numIntervals?: number
+    numIntervals?: number,
+    options?: { forceMainnet?: boolean }
   ): Promise<MarketOhlcvSeries | null> {
     // Skip API calls for testnet/preprod - DexHunter doesn't support preprod
-    if (!this.isMainnet) {
+    if (!this.isMainnet && !options?.forceMainnet) {
       this.logger.debug(`Skipping DexHunter OHLCV call for non-mainnet environment`);
       return null;
     }
@@ -605,4 +607,82 @@ export class DexHunterPricingClient {
       };
     }
   }
+
+  /**
+   * Completed ADA <-> token swaps for a Cardano token across DEXes (DexHunter global orders),
+   * newest first. Amounts are already decimal-adjusted. Mainnet only: testnet has no DexHunter data.
+   */
+  async getTokenTrades(tokenUnit: string, limit = 40): Promise<DexHunterTokenTrade[]> {
+    if (!this.isMainnet || !tokenUnit) return [];
+
+    const cacheKey = `trades_${tokenUnit}_${limit}`;
+    const cached = this.ohlcvCache.get<DexHunterTokenTrade[]>(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const response = await fetch(`${this.dexHunterBaseUrl}/swap/globalOrders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Partner-Id': this.dexHunterApiKey },
+      body: JSON.stringify({
+        filters: [
+          { filterType: 'TOKENID', values: [tokenUnit] },
+          { filterType: 'STATUS', values: ['COMPLETE'] },
+        ],
+        orderSorts: 'STARTTIME',
+        sortDirection: 'DESC',
+        page: 0,
+        perPage: limit,
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `DexHunter globalOrders ${response.status}: ${this.sanitizeErrorText(errorText, response.status)}`
+      );
+    }
+
+    const data = (await response.json()) as { orders?: Array<Record<string, any>> };
+    const unit = tokenUnit.toLowerCase();
+    const trades: DexHunterTokenTrade[] = [];
+    for (const order of data.orders || []) {
+      const tokenIn = String(order.token_id_in || '').toLowerCase();
+      const tokenOut = String(order.token_id_out || '').toLowerCase();
+      const isBuy = tokenOut === unit && tokenIn !== unit;
+      const isSell = tokenIn === unit && tokenOut !== unit;
+      if (!isBuy && !isSell) continue;
+      // Only ADA pairs, so the price is directly in ADA.
+      const other = isBuy ? tokenIn : tokenOut;
+      if (!other.endsWith(LOVELACE_HEX) && other !== '' && other !== 'lovelace') continue;
+
+      const amountIn = Number(order.amount_in);
+      const amountOut = Number(order.actual_out_amount ?? order.expected_out_amount);
+      const amountToken = isBuy ? amountOut : amountIn;
+      const amountAda = isBuy ? amountIn : amountOut;
+      if (!(amountToken > 0) || !(amountAda > 0)) continue;
+
+      trades.push({
+        kind: isBuy ? 'buy' : 'sell',
+        amount_token: amountToken,
+        amount_ada: amountAda,
+        price_ada: amountAda / amountToken,
+        dex: order.dex ?? null,
+        timestamp: order.last_update || order.submission_time || null,
+        tx_hash: order.update_tx_hash || order.tx_hash || null,
+      });
+    }
+
+    this.ohlcvCache.set(cacheKey, trades, 60);
+    return trades;
+  }
+}
+
+const LOVELACE_HEX = '6c6f76656c616365';
+
+export interface DexHunterTokenTrade {
+  kind: 'buy' | 'sell';
+  amount_token: number;
+  amount_ada: number;
+  price_ada: number;
+  dex: string | null;
+  timestamp: string | null;
+  tx_hash: string | null;
 }

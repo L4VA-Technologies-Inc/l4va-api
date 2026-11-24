@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { TransactionHealthService } from './transaction-health.service';
 import { TransactionsController } from './transactions.controller';
 import { TransactionsService } from './transactions.service';
 
@@ -18,9 +18,10 @@ import { TaptoolsModule } from '@/modules/taptools/taptools.module';
     TypeOrmModule.forFeature([Transaction, Asset, Vault, User, Proposal]),
     TaptoolsModule,
     GoogleCloudStorageModule,
+    EventEmitterModule,
   ],
-  providers: [TransactionsService, TransactionHealthService],
+  providers: [TransactionsService],
   controllers: [TransactionsController],
-  exports: [TransactionsService, TransactionHealthService],
+  exports: [TransactionsService],
 })
 export class TransactionsModule {}

@@ -8,11 +8,12 @@ import { AcquireService } from './acquire.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, User, Asset, Proposal]), TransactionsModule],
+  imports: [TypeOrmModule.forFeature([Vault, User, Asset, Proposal, Transaction]), TransactionsModule],
   controllers: [AcquireController],
   providers: [AcquireService],
   exports: [AcquireService],

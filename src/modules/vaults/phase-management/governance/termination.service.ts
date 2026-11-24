@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -19,6 +19,7 @@ import { VaultManagingService } from '../../processing-tx/onchain/vault-managing
 import { TreasuryWalletService } from '../../treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '../../treasure/treasury-extraction.service';
 
+import { getBurnWallet } from '@/common/cardano/burn-wallet';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -30,7 +31,7 @@ import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import type { TerminationClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 /**
  * Termination flow status tracking
@@ -88,11 +89,6 @@ export class TerminationService {
   private readonly adminAddress: string;
   private readonly adminSKey: string;
   private readonly adminHash: string;
-
-  private readonly BURN_WALLET_TESTNET =
-    'addr_test1qzdv6pn0ltar7q3hhgrgts2yqvphxtptr4m3t4xf5lfyx7hc3v9amrnu0cp6zt3vkry03838n2mv9e69g8e70aqktgcsnvkule';
-  private readonly BURN_WALLET_MAINNET =
-    'addr1qxnk9w6e3azattu87ythnnjt2vmtlskzcld0ptwa924j0znz7v4zyqfqapmueh24l2r8v848mya68nndvjy783m656kq0cxjsn';
 
   // Minimum ADA for distribution (2 ADA per user minimum to cover tx costs)
   private readonly MIN_ADA_PER_CLAIM = 2_000_000;
@@ -156,7 +152,7 @@ export class TerminationService {
    * Get burn wallet address based on network
    */
   private get burnWallet(): string {
-    return this.isMainnet ? this.BURN_WALLET_MAINNET : this.BURN_WALLET_TESTNET;
+    return getBurnWallet(this.isMainnet);
   }
 
   /**
@@ -169,7 +165,7 @@ export class TerminationService {
       // Returns 'OK' if lock acquired, null if already exists
       const result = await this.redis.set(lockKey, '1', 'EX', ttlSeconds, 'NX');
       return result === 'OK';
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to acquire lock ${lockKey}: ${error.message}`);
       return false;
     }
@@ -181,7 +177,7 @@ export class TerminationService {
   private async releaseLock(lockKey: string): Promise<void> {
     try {
       await this.redis.del(lockKey);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Failed to release lock ${lockKey}: ${error.message}`);
     }
   }
@@ -204,7 +200,7 @@ export class TerminationService {
     try {
       // Find vaults in terminating status
       const terminatingVaults = await this.vaultRepository.find({
-        where: { vault_status: VaultStatus.terminating }, // Will add to enum
+        where: { vault_status: VaultStatus.terminating },
         relations: ['treasury_wallet'],
       });
 
@@ -212,16 +208,16 @@ export class TerminationService {
         return;
       }
 
-      this.logger.log(`Monitoring ${terminatingVaults.length} terminating vault(s)`);
-
       for (const vault of terminatingVaults) {
+        // EVM vaults keep their own state under termination_metadata.evm and are driven by the EVM termination flow.
+        if (vault.chain_type === ChainType.robinhood) continue;
         try {
           await this.processTerminationStep(vault);
-        } catch (error) {
+        } catch (error: any) {
           this.logger.error(`Error processing termination for vault ${vault.id}: ${error.message}`, error.stack);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error in termination monitor: ${error.message}`, error.stack);
     } finally {
       await this.releaseLock(lockKey);
@@ -429,7 +425,7 @@ export class TerminationService {
         nftsBurned: nftsToburn.length,
         ftsExtracted: ftsToDistribute.length,
       });
-    } catch (error) {
+    } catch (error: any) {
       // If extraction fails (e.g., non-mainnet, no assets in UTXOs), log and continue
       if (error.message?.includes('non-mainnet') || error.message?.includes('only available on mainnet')) {
         this.logger.warn(`[TESTNET] Skipping on-chain asset extraction for vault ${vault.id}`);
@@ -562,7 +558,7 @@ export class TerminationService {
         expectedVtReturn: expectedVt,
         expectedAdaReturn: expectedAda,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to remove liquidity for vault ${vault.id}: ${error.message}`, error.stack);
 
       // If pool not found, skip to claims creation (vault might not have LP)
@@ -798,7 +794,7 @@ export class TerminationService {
             `Will continue monitoring.`
         );
       }
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
 
@@ -1084,8 +1080,8 @@ export class TerminationService {
         vault: vault,
         type: ClaimType.TERMINATION,
         status: ClaimStatus.AVAILABLE,
-        amount: Number(vtBalance), // VT amount user needs to send
-        lovelace_amount: Number(adaShare), // ADA amount user will receive (0 if no distribution)
+        amount: String(vtBalance), // VT amount user needs to send
+        lovelace_amount: String(adaShare), // ADA amount user will receive (0 if no distribution)
         description: claimDescription,
         metadata: {
           address,
@@ -1138,20 +1134,20 @@ export class TerminationService {
         );
         await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_COMPLETE);
       } else {
-        // Count claims that haven't been processed yet
-        const pendingClaims = await this.claimRepository.count({
-          where: {
-            vault: { id: vault.id },
-            type: ClaimType.TERMINATION,
-            status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
-          },
-        });
+        // // Count claims that haven't been processed yet
+        // const pendingClaims = await this.claimRepository.count({
+        //   where: {
+        //     vault: { id: vault.id },
+        //     type: ClaimType.TERMINATION,
+        //     status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
+        //   },
+        // });
 
-        this.logger.debug(
-          `Termination in progress for vault ${vault.id}: ` +
-            `${pendingClaims} pending claims, ` +
-            `${circulatingSupplyNum / 1_000_000} VT still circulating`
-        );
+        // this.logger.debug(
+        //   `Termination in progress for vault ${vault.id}: ` +
+        //     `${pendingClaims} pending claims, ` +
+        //     `${circulatingSupplyNum / 1_000_000} VT still circulating`
+        // );
 
         // Ensure status is CLAIMS_PROCESSING
         const termination = vault.termination_metadata as TerminationMetadata;
@@ -1159,7 +1155,7 @@ export class TerminationService {
           await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_PROCESSING);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error checking claims completion for vault ${vault.id}: ${error.message}`, error.stack);
     }
   }
@@ -1207,7 +1203,7 @@ export class TerminationService {
       this.logger.log(`Vault ${vault.id} burned successfully - proceeding to treasury cleanup`);
 
       await this.stepCleanupTreasuryWallet(vault);
-    } catch (error) {
+    } catch (error: any) {
       // Handle case where vault UTXO is not found (already burned)
       if (error.message?.includes('not found') || error.status === 404) {
         this.logger.warn(`Vault UTXO not found for ${vault.asset_vault_name} - may already be burned`);
@@ -1296,7 +1292,7 @@ export class TerminationService {
       }
 
       this.logger.log(`Treasury wallet cleanup complete for vault ${vault.id}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to cleanup treasury wallet for vault ${vault.id}: ${error.message}`, error.stack);
       await this.updateTerminationMetadata(vault.id, {
         error: `Treasury cleanup failed: ${error.message}`,
@@ -1373,7 +1369,7 @@ export class TerminationService {
       }, BigInt(0));
 
       return totalVt;
-    } catch (error) {
+    } catch (error: any) {
       // If address has no UTXOs with this asset, Blockfrost returns 404
       if (error.status_code === 404) {
         return BigInt(0);
@@ -1407,7 +1403,7 @@ export class TerminationService {
         // No VT at burn wallet
         return totalMinted;
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to get VT supply for vault ${vault.id}: ${error.message}`);
       throw error;
     }
@@ -1445,7 +1441,7 @@ export class TerminationService {
       this.treasuryBalanceCache.set(cacheKey, balance.toString());
 
       return balance;
-    } catch (error) {
+    } catch (error: any) {
       // If treasury wallet has never received transactions, Blockfrost returns 404
       if (error.status_code === 404 || error.message?.includes('not been found')) {
         this.logger.log(`Treasury wallet for vault ${vault.id} is empty (no transactions yet)`);
@@ -1659,8 +1655,8 @@ export class TerminationService {
         await this.claimRepository.update(
           { id: existingClaim.id },
           {
-            amount: Number(dynamicShare.userVtBalance),
-            lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
+            amount: String(dynamicShare.userVtBalance),
+            lovelace_amount: noAdaDistribution ? '0' : String(dynamicShare.adaShare),
             metadata: {
               address: userAddress,
               vtAmount: dynamicShare.userVtBalance.toString(),
@@ -1727,12 +1723,12 @@ export class TerminationService {
 
     // Step 7: Create new claim
     const newClaim = this.claimRepository.create({
-      user: user || undefined,
+      ...(user ? { user } : {}),
       vault,
       type: ClaimType.TERMINATION,
       status: ClaimStatus.AVAILABLE,
-      amount: Number(dynamicShare.userVtBalance),
-      lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
+      amount: String(dynamicShare.userVtBalance),
+      lovelace_amount: noAdaDistribution ? '0' : String(dynamicShare.adaShare),
       description: user
         ? `Termination claim for ${dynamicShare.userVtBalance} VT`
         : `Termination claim for unregistered address ${userAddress}`,
@@ -1745,7 +1741,8 @@ export class TerminationService {
       },
     });
 
-    const savedClaim = await this.claimRepository.save(newClaim);
+    const savedClaimArray = await this.claimRepository.save(newClaim);
+    const savedClaim = Array.isArray(savedClaimArray) ? savedClaimArray[0] : savedClaimArray;
 
     // Cache the claim ID to prevent duplicates within 5 minutes
     this.claimCreationCache.set(cacheKey, savedClaim.id);
@@ -2166,6 +2163,8 @@ export class TerminationService {
         adaAmount: hasAda ? dynamicShare.adaShare.toString() : '0',
         ftShares: hasFtDistribution ? ftShares : [],
         treasuryAddress: treasuryWallet.treasury_address,
+        // C-2: submit only treasury-signs a tx whose body is exactly the one built here
+        txBodyHash: FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex')).transaction_hash().to_hex(),
         burnOnly: false,
       },
       assets: [],
@@ -2195,7 +2194,10 @@ export class TerminationService {
    * The user has already signed their part (VT inputs)
    * Now we add the treasury KMS signature and submit
    */
-  async submitTerminationClaimTransaction(params: SubmitTransactionDto): Promise<{
+  async submitTerminationClaimTransaction(
+    params: SubmitTransactionDto,
+    userId: string
+  ): Promise<{
     success: boolean;
     vtTxHash: string;
     distributionTxHash: string;
@@ -2214,6 +2216,9 @@ export class TerminationService {
 
     if (!claim) {
       throw new NotFoundException('Termination claim transaction not found');
+    }
+    if (claim.user_id !== userId) {
+      throw new ForbiddenException('Claim does not belong to the current user');
     }
 
     const vault = claim.vault;
@@ -2247,6 +2252,13 @@ export class TerminationService {
         // Parse the user-signed transaction
         const txToSubmit = FixedTransaction.from_bytes(Buffer.from(params.transaction, 'hex'));
 
+        // C-2: never sign a body other than the one the server built for this claim. The user
+        // may only add witnesses; any change to inputs/outputs changes the body hash.
+        const expectedBodyHash = txMetadata?.txBodyHash;
+        if (!expectedBodyHash || txToSubmit.transaction_hash().to_hex() !== expectedBodyHash) {
+          throw new BadRequestException('Transaction does not match the built termination claim');
+        }
+
         // Add treasury wallet signatures
         txToSubmit.sign_and_add_vkey_signature(privateKey);
         txToSubmit.sign_and_add_vkey_signature(stakePrivateKey);
@@ -2277,8 +2289,8 @@ export class TerminationService {
         { id: claim.id },
         {
           status: ClaimStatus.CLAIMED,
-          amount: Number(txMetadata?.vtAmount || 0),
-          lovelace_amount: Number(adaReceived),
+          amount: String(txMetadata?.vtAmount || '0'),
+          lovelace_amount: String(adaReceived),
           metadata: {
             ...claim.metadata,
             completedAt: new Date().toISOString(),
@@ -2293,7 +2305,7 @@ export class TerminationService {
         adaReceived,
         ftsReceived: ftsReceived.length > 0 ? ftsReceived : undefined,
       };
-    } catch (error) {
+    } catch (error: any) {
       // Mark transaction and claim as failed
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
       this.logger.error(`Failed to submit termination claim transaction: ${error.message}`, error.stack);

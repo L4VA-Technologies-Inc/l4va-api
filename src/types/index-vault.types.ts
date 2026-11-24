@@ -1,0 +1,136 @@
+/**
+ * Index-weighted vault (Robinhood / EVM).
+ *
+ * On `vault-contract-solidity` main there is no on-chain weight concept: the
+ * vault only exposes position-less `Vault.swap`. Target weights, the cash / LP
+ * reserve and rebalance cadence are backend-enforced (see
+ * docs/HOW_THE_VAULT_WORKS.md §13c). Everything below is that backend model.
+ */
+
+/** Product-level vault archetype. Independent of the on-chain deployer archetype. */
+export enum VaultArchetype {
+  standard = 'standard',
+  index_weighted = 'index_weighted',
+}
+
+export const BPS = 10_000;
+
+// Basket size cap: `basketAssetCapFor(vault)` in evm-protocol-versions. It follows the vault's
+// `MAX_TERMINATION_ASSETS` (16 up to V13, raised later) minus one slot kept for native ETH.
+// Assets fully sold during a re-weight free their slot.
+
+/** Smallest weight a basket asset may carry (1%). */
+export const INDEX_MIN_WEIGHT_BPS = 100;
+
+export const INDEX_DEFAULT_DRIFT_TOLERANCE_BPS = 200;
+export const INDEX_DEFAULT_SLIPPAGE_BPS = 100;
+export const INDEX_MAX_SLIPPAGE_BPS = 500;
+
+export interface IndexTarget {
+  /** Lowercase ERC-20 address. Native is never a basket target — it is the reserve. */
+  assetAddress: string;
+  symbol: string;
+  name?: string | null;
+  decimals: number;
+  image?: string | null;
+  weightBps: number;
+}
+
+export interface IndexConfig {
+  /** Basket weights; sum to `BPS`. They apply to NAV after the reserve. */
+  targets: IndexTarget[];
+  /** Share of NAV kept in native (cash / future LP). */
+  reserveBps: number;
+  /** A leg is only traded when its value is off target by more than this share of NAV. */
+  driftToleranceBps: number;
+  slippageBps: number;
+  /** Incremented on every governance re-weight. */
+  version: number;
+  updatedAt: string;
+  updatedByProposalId?: string | null;
+  /** Backend keeper trades the basket back to target weights every `rebalanceCadenceDays`. */
+  autoRebalance?: boolean;
+  rebalanceCadenceDays?: number | null;
+  /** ISO time of the next scheduled run (cadence + random jitter). null until the first buy completes. */
+  nextRebalanceAt?: string | null;
+}
+
+/** Auto-rebalance fields a creator or a re-weight proposal may set. Omitted fields keep their value. */
+export interface IndexScheduleInput {
+  autoRebalance?: boolean;
+  rebalanceCadenceDays?: number | null;
+}
+
+export enum IndexRebalanceTrigger {
+  initial_buy = 'initial_buy',
+  governance_reweight = 'governance_reweight',
+  scheduled = 'scheduled',
+}
+
+export enum IndexRebalanceStatus {
+  pending = 'pending',
+  executing = 'executing',
+  completed = 'completed',
+  failed = 'failed',
+}
+
+export enum IndexLegStatus {
+  pending = 'pending',
+  confirmed = 'confirmed',
+  failed = 'failed',
+  skipped = 'skipped',
+}
+
+export enum IndexLegSide {
+  sell = 'sell',
+  buy = 'buy',
+}
+
+export interface IndexRebalanceLeg {
+  index: number;
+  side: IndexLegSide;
+  operationId: string;
+  /** address(0) = native. */
+  assetIn: string;
+  assetOut: string;
+  amountIn: string;
+  quotedOut?: string | null;
+  minAmountOut?: string | null;
+  /** Unix seconds; persisted before broadcast. Past it the vault rejects the leg's tx. */
+  deadline?: string | null;
+  grossOut?: string | null;
+  fee?: string | null;
+  txHash?: string | null;
+  /**
+   * False once the leg is known never to have reached the chain (it failed in
+   * simulation), so it can be re-planned before its deadline. Unset on legs
+   * from before this field existed: those are treated as possibly broadcast.
+   */
+  broadcast?: boolean | null;
+  /** Human-readable route the leg was sent with. */
+  route?: string | null;
+  status: IndexLegStatus;
+  error?: string | null;
+}
+
+/**
+ * Why a portfolio adjustment was intentionally not turned into a swap.
+ * `no_route`: Uniswap has no route the vault's swap adapter can execute for the trade.
+ */
+export type IndexRebalanceSkipReason = 'within_tolerance' | 'below_min_trade' | 'no_free_native' | 'no_route';
+
+/** A needed adjustment omitted by the planner, persisted for history and diagnostics. */
+export interface IndexRebalanceSkippedLeg {
+  /** Lowercase ERC-20 address. */
+  asset: string;
+  /** Symbol snapshot, so old history stays readable after the basket changes. */
+  symbol: string;
+  side: IndexLegSide;
+  reason: IndexRebalanceSkipReason;
+  /** Native value the leg wanted to trade, in wei. */
+  valueNative: string;
+  /** Minimum native trade size at planning time, in wei. */
+  minTradeNative: string;
+  /** Why no route was found (`no_route` only). */
+  detail?: string | null;
+}

@@ -1,6 +1,18 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsObject, ValidateNested } from 'class-validator';
+import {
+  IsEnum,
+  IsEthereumAddress,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateNested,
+  ValidateIf,
+} from 'class-validator';
+
+import { ChainType } from '@/types/vault.types';
 
 export class SignatureData {
   @Expose()
@@ -25,6 +37,17 @@ export class SignatureData {
 
 export class LoginReq {
   @Expose()
+  @IsOptional()
+  @IsEnum(ChainType)
+  @ApiProperty({
+    description: 'Chain of the wallet; defaults to cardano for clients that predate EVM login',
+    enum: ChainType,
+    required: false,
+  })
+  chainType?: ChainType;
+
+  @Expose()
+  @ValidateIf((o: LoginReq) => o.chainType !== ChainType.robinhood)
   @IsNotEmpty()
   @IsObject()
   @ValidateNested()
@@ -36,6 +59,7 @@ export class LoginReq {
   signature: SignatureData;
 
   @Expose()
+  @ValidateIf((o: LoginReq) => o.chainType !== ChainType.robinhood)
   @IsNotEmpty()
   @IsString()
   @ApiProperty({
@@ -52,4 +76,29 @@ export class LoginReq {
     example: 'addr1q934ccfkwy292....',
   })
   walletAddress: string;
+
+  @Expose()
+  @ValidateIf((o: LoginReq) => o.chainType === ChainType.robinhood)
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]+$/, { message: 'evmSignature must be a 0x-prefixed hex string' })
+  @ApiProperty({
+    description: 'personal_sign signature over the message from POST /auth/evm/challenge (robinhood only)',
+    required: false,
+  })
+  evmSignature?: string;
+}
+
+export class EvmChallengeReq {
+  @Expose()
+  @IsEthereumAddress()
+  @ApiProperty({ description: 'EVM wallet address that will sign the login message' })
+  walletAddress: string;
+}
+
+export class CardanoChallengeReq {
+  @Expose()
+  @IsNotEmpty()
+  @IsString()
+  @ApiProperty({ description: 'Stake address that will sign the login message' })
+  stakeAddress: string;
 }

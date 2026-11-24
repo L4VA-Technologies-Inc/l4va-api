@@ -1,22 +1,26 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
-import { Brackets, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { PriceService } from '../price/price.service';
+import { userVaultMembership } from '../vaults/utils/user-vault-membership';
 
+import { OwnProfileRes } from './dto/own-profile.res';
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ImageType } from './dto/upload-profile-image.dto';
+import { EmailVerificationService } from './email-verification.service';
+import { WalletLinkService } from './wallet-link.service';
 
 import { Asset } from '@/database/asset.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class UsersService {
@@ -33,13 +37,24 @@ export class UsersService {
     @InjectRepository(LinkEntity)
     private linksRepository: Repository<LinkEntity>,
     private readonly gcsService: GoogleCloudStorageService,
-    private readonly priceService: PriceService
+    private readonly priceService: PriceService,
+    private readonly emailVerificationService: EmailVerificationService,
+    private readonly walletLinkService: WalletLinkService
   ) {}
+
+  async findByStakeAddress(address: string): Promise<User | undefined> {
+    return this.usersRepository.findOne({
+      where: {
+        stake_address: address,
+      },
+      relations: ['profile_image', 'banner_image', 'social_links'],
+    });
+  }
 
   async findByAddress(address: string): Promise<User | undefined> {
     return this.usersRepository.findOne({
       where: {
-        stake_address: address,
+        address: address,
       },
       relations: ['profile_image', 'banner_image', 'social_links'],
     });
@@ -67,30 +82,7 @@ export class UsersService {
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId })
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-              { userId }
-            )
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-              { userAddress: user.address }
-            );
-        })
-      )
+      .andWhere(userVaultMembership(userId, user.address))
       .getCount();
 
     user.total_vaults = vaultsCount || 0;
@@ -107,7 +99,7 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  async getProfile(userId: string): Promise<PublicProfileRes> {
+  async getProfile(userId: string): Promise<OwnProfileRes> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links'],
@@ -128,36 +120,22 @@ export class UsersService {
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId })
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM assets
-              WHERE assets.vault_id = vault.id 
-              AND assets.added_by = :userId
-              AND assets.status IN ('locked', 'distributed')
-            )`,
-              { userId }
-            )
-            .orWhere(
-              `EXISTS (
-              SELECT 1 FROM snapshot
-              WHERE snapshot.vault_id = vault.id 
-              AND snapshot.address_balances -> :userAddress IS NOT NULL
-              ORDER BY snapshot.created_at DESC
-              LIMIT 1
-            )`,
-              { userAddress: user.address }
-            );
-        })
-      )
+      .andWhere(userVaultMembership(userId, user.address))
       .getCount();
     user.total_vaults = vaultsCount || 0;
     const plainedUsers = instanceToPlain(user);
 
-    plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.priceService.getAdaPrice())).toFixed(2));
-    plainedUsers.totalValueAda = user.tvl;
+    // TVL is stored in the chain's native unit (ADA in `tvl`, ETH in `tvl_eth`); USD is derived
+    // from that native value, so a Robinhood profile never goes through the ADA price.
+    const tvlAda = Number(user.tvl) || 0;
+    const tvlEth = Number(user.tvl_eth) || 0;
+    const isRobinhood = user.chain_type === ChainType.robinhood;
+    const tvlUsd = isRobinhood
+      ? tvlEth * (await this.priceService.getEthPrice())
+      : tvlAda * (await this.priceService.getAdaPrice());
+    plainedUsers.totalValueAda = tvlAda;
+    plainedUsers.totalValueEth = tvlEth;
+    plainedUsers.totalValueUsd = parseFloat(tvlUsd.toFixed(2));
 
     // Calculate gains as percentage: (gains / initial_investment) * 100
     // initial_investment = current_value - gains
@@ -185,7 +163,7 @@ export class UsersService {
 
     plainedUsers.gains = gainsPercentage;
 
-    return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
+    return plainToInstance(OwnProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
@@ -203,8 +181,18 @@ export class UsersService {
       user.name = updateData.name;
     }
 
+    let emailChanged = false;
     if (updateData.email !== undefined) {
-      user.email = updateData.email;
+      const nextEmail = updateData.email?.trim().toLowerCase() || null;
+      if (nextEmail !== (user.email?.toLowerCase() || null)) {
+        if (nextEmail) {
+          // Fail early instead of sending a verification link that can never be confirmed
+          await this.walletLinkService.assertEmailAvailable(user, nextEmail);
+        }
+        user.email = nextEmail;
+        user.email_verified = false;
+        emailChanged = true;
+      }
     }
 
     if (updateData.description !== undefined) {
@@ -254,6 +242,22 @@ export class UsersService {
       });
     }
     const selectedUser = await this.usersRepository.save(user);
+
+    if (emailChanged) {
+      if (selectedUser.email) {
+        // The email is saved even if Novu fails; the user can resend from the profile
+        try {
+          await this.emailVerificationService.sendVerification(selectedUser);
+        } catch (error) {
+          this.logger.error(`Failed to send verification email to user ${userId}: ${error?.message || error}`);
+        }
+      } else {
+        await this.usersRepository.update(
+          { id: userId },
+          { email_verification_token_hash: null, email_verification_expires_at: null, email_verification_sent_at: null }
+        );
+      }
+    }
 
     selectedUser.banner_image = transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
     selectedUser.profile_image = transformImageToUrl(selectedUser.profile_image as FileEntity) as any;

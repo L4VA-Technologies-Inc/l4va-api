@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv';
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file (for local/development configuration only)
   // This file should only contain non-sensitive config committed to git
-  dotenv.config();
+  dotenv.config({ path: process.env.ENV_FILE || '.env' });
 
   const nodeEnv = process.env.NODE_ENV;
 
@@ -54,7 +54,7 @@ export async function loadSecrets(): Promise<void> {
     console.log(`✅ Using ADC for GCP authentication (${nodeEnv}), project: ${process.env.GCP_PROJECT_ID}`);
   }
 
-  const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';
+  const secretName = process.env.GCP_SECRET_NAME || (nodeEnv === 'mainnet' ? 'mainnet' : 'testnet');
   const projectId = process.env.GCP_PROJECT_ID;
 
   try {

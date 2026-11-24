@@ -1,9 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { SystemSettings } from '@/database/systemSettings.entity';
+import { VaultArchetype } from '@/types/index-vault.types';
+import { ChainType } from '@/types/vault.types';
 
 export interface SystemSettingsData {
   protocol_enabled: boolean;
@@ -15,17 +18,54 @@ export interface SystemSettingsData {
   protocol_flat_fee: number;
   // Per-asset contribution fee: charged per NFT or per FT type (quantity ignored)
   protocol_fee_per_asset: number;
+  /**
+   * EVM (Robinhood) siblings of protocol_fee_per_asset / protocol_acquires_fee,
+   * in wei as decimal strings — same reasoning as the governance *_evm keys.
+   * Paid by the user as a native transfer before contribution signatures are
+   * issued (see EvmVaultContributionService.prepareContribution).
+   */
+  protocol_fee_per_asset_evm: string;
+  /** Flat per-acquire transfer. Off by default: acquires use evm_acquire_fee_bps instead (one transaction). */
+  protocol_acquires_fee_evm: string;
+  /**
+   * On-chain `ProtocolFeeConfig` FeeType.Contribution rate, in bps (100 = 1%,
+   * contract max 500). Taken from the ETH raised when a cycle closes, so the
+   * acquirer sends a single transaction. Pushed on chain by
+   * EvmProtocolFeeSyncService on boot and on every settings reload. null
+   * leaves the on-chain value alone.
+   */
+  evm_acquire_fee_bps: number | null;
   lp_recommended_min_liquidity: number;
   max_acquire_amount_ada: number;
   auto_create_treasury_wallets: boolean;
   auto_create_treasury_wallets_testnet: boolean;
   vault_creator_whitelist: string[];
   hidden_mainnet_vault_ids: string[];
+  // Closed launch: while on, the client shows a maintenance page to everyone except
+  // wallets in `maintenance_allowlist` (any chain; EVM compared case-insensitively).
+  maintenance_mode: boolean;
+  maintenance_allowlist: string[];
   // Kill switches for sensitive flows
   vault_creation_enabled: boolean;
   contribution_enabled: boolean;
   acquire_enabled: boolean;
   governance_enabled: boolean;
+  // Stops every user-initiated EVM (Robinhood-chain) flow handled by the API:
+  // vault creation, contribution/acquire preparation and proposals. Cardano is
+  // unaffected. Does not stop direct contract calls; pause the contracts for that.
+  evm_enabled: boolean;
+  // Cardano L4VA buyback cron and manual runs
+  cardano_buyback_enabled: boolean;
+  // Allows disabling NFT (ERC721/ERC1155) assets on EVM (Robinhood-chain) vaults
+  // without a contract change; Cardano NFT support is unaffected.
+  evm_nft_assets_enabled: boolean;
+  /**
+   * Vault archetypes a creator may choose, per chain. Robinhood is limited to
+   * index-weighted vaults until RWA and NFT support lands there; Cardano has no
+   * index vaults at all. Both the create endpoint and the AI assistant read
+   * this, so a chain can be reopened without a deploy.
+   */
+  vault_archetypes_enabled: Record<string, VaultArchetype[]>;
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: number;
   governance_fee_proposal_distribution: number;
@@ -35,6 +75,22 @@ export interface SystemSettingsData {
   governance_fee_proposal_expansion: number;
   governance_fee_proposal_asset_whitelist_update: number;
   governance_fee_voting: number; // Fee per vote
+  /**
+   * EVM (Robinhood) governance fees, in wei, as decimal strings.
+   *
+   * Deliberately separate from the lovelace keys above rather than converted:
+   * a 5 ADA fee and a 0.001 ETH fee are unrelated numbers, and a converted fee
+   * would drift with price between the quote and the payment. Strings because
+   * wei exceeds Number.MAX_SAFE_INTEGER.
+   */
+  governance_fee_proposal_staking_evm: string;
+  governance_fee_proposal_distribution_evm: string;
+  governance_fee_proposal_termination_evm: string;
+  governance_fee_proposal_burning_evm: string;
+  governance_fee_proposal_marketplace_action_evm: string;
+  governance_fee_proposal_expansion_evm: string;
+  governance_fee_proposal_asset_whitelist_update_evm: string;
+  governance_fee_voting_evm: string; // Fee per vote
   // Voting duration constraints (in milliseconds)
   min_voting_duration: number;
   max_voting_duration: number;
@@ -43,7 +99,30 @@ export interface SystemSettingsData {
   price_max_deviation_percent_ft: number;
   price_min_absolute_move_ada: number;
   price_min_asset_price_for_deviation_check_ada: number;
+  // EVM termination preflight (Robinhood). Operational policy only — contract
+  // solvency does not depend on these; see EvmTerminationPreflightService.
+  evm_termination_max_pool_vt_bps: number;
+  evm_termination_pool_data_max_age_seconds: number;
+  evm_termination_sweep_delay_days: number;
+  /**
+   * Waivers let the authority exclude an asset from the distribution and route
+   * it to the treasury at the deadline. The on-chain cap bounds the COUNT, not
+   * the VALUE, so this stays off until a dust/approval policy is defined.
+   */
+  evm_termination_allow_waivers: boolean;
+  /**
+   * Index-vault auto-rebalancing (backend keeper, no contract involvement).
+   * The minimum guards small vaults from paying more in gas than they gain;
+   * the default applies when a creator does not pick a cadence. Each run is
+   * delayed by a random 0..jitter hours so the time cannot be front-run.
+   */
+  index_rebalance_min_cadence_days: number;
+  index_rebalance_default_cadence_days: number;
+  index_rebalance_jitter_hours: number;
 }
+
+/** Emitted after settings are (re)loaded from the database. */
+export const SYSTEM_SETTINGS_LOADED_EVENT = 'system-settings.loaded';
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_enabled: true,
@@ -54,6 +133,9 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
   protocol_fee_per_asset: 2_000_000, // 2 ADA per asset entry (NFT or FT type, qty ignored)
+  protocol_fee_per_asset_evm: '100000000000000', // 0.0001 ETH per asset entry
+  protocol_acquires_fee_evm: '0',
+  evm_acquire_fee_bps: null,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
@@ -63,6 +145,13 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   contribution_enabled: true,
   acquire_enabled: true,
   governance_enabled: true,
+  evm_enabled: true,
+  cardano_buyback_enabled: true,
+  evm_nft_assets_enabled: false,
+  vault_archetypes_enabled: {
+    [ChainType.cardano]: [VaultArchetype.standard],
+    [ChainType.robinhood]: [VaultArchetype.index_weighted],
+  },
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: 5000000, // 5 ADA
   governance_fee_proposal_distribution: 5000000, // 5 ADA
@@ -72,6 +161,16 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   governance_fee_proposal_expansion: 10000000, // 10 ADA
   governance_fee_proposal_asset_whitelist_update: 5000000, // 5 ADA
   governance_fee_voting: 0, // No voting fee by default
+  // EVM governance fees (wei, decimal strings). Small non-zero test values so the
+  // flow is exercised end-to-end; tune per proposal type from admin settings.
+  governance_fee_proposal_staking_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_distribution_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_termination_evm: '200000000000000', // 0.0002 ETH
+  governance_fee_proposal_burning_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_marketplace_action_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_proposal_expansion_evm: '200000000000000', // 0.0002 ETH
+  governance_fee_proposal_asset_whitelist_update_evm: '100000000000000', // 0.0001 ETH
+  governance_fee_voting_evm: '10000000000000', // 0.00001 ETH
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
   max_voting_duration: 259200000, // 3 days in ms
@@ -81,7 +180,19 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   price_min_absolute_move_ada: 0,
   // Keep this low so deviation checks apply to typical FT price feeds by default
   price_min_asset_price_for_deviation_check_ada: 0.1,
+  // 5% of VT supply sitting in pools. Above this, holders would be handed LP
+  // tokens whose VT side is dying, because LP removal is not implemented yet.
+  evm_termination_max_pool_vt_bps: 500,
+  evm_termination_pool_data_max_age_seconds: 300,
+  // Mirrors the contract's MIN_SWEEP_DELAY floor; the contract rejects less.
+  evm_termination_sweep_delay_days: 90,
+  index_rebalance_min_cadence_days: 1,
+  index_rebalance_default_cadence_days: 30,
+  index_rebalance_jitter_hours: 6,
+  evm_termination_allow_waivers: false,
   hidden_mainnet_vault_ids: ['00000000-0000-0000-0000-000000000000'],
+  maintenance_mode: false,
+  maintenance_allowlist: [],
   vault_creator_whitelist: [
     'addr1q9j4eqs7v5pz08fddkfng2kvj762jhkhnpen4shr5jtht3evu56kfxkaqdjl4he2d6nguzl489fsvwsnx5554fe4lsjqe0ygg5',
     'addr1q90jnj7v8qmd3ypa668tufp7r663ppkctfd34dfwdfmam9eu2heaaj7eknfhahkydax07wqmvszndrcmh83adfph4umsskaxm5',
@@ -103,7 +214,8 @@ export class SystemSettingsService implements OnModuleInit {
   constructor(
     @InjectRepository(SystemSettings)
     private readonly systemSettingsRepository: Repository<SystemSettings>,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
@@ -125,6 +237,7 @@ export class SystemSettingsService implements OnModuleInit {
           ...settingsRecord[0].data,
         };
         this.logger.log('System settings loaded from database');
+        this.eventEmitter.emit(SYSTEM_SETTINGS_LOADED_EVENT);
       } else {
         this.logger.warn('No system settings found in database, using defaults');
       }
@@ -173,6 +286,60 @@ export class SystemSettingsService implements OnModuleInit {
       : 0;
   }
 
+  get protocolFeePerAssetEvm(): string {
+    return this.settings.protocol_enabled ? this.evmFee(this.settings.protocol_fee_per_asset_evm) : '0';
+  }
+
+  get protocolAcquiresFeeEvm(): string {
+    return this.settings.protocol_enabled ? this.evmFee(this.settings.protocol_acquires_fee_evm) : '0';
+  }
+
+  /** Desired on-chain acquire fee in bps, or null when the API should not manage it. */
+  get evmAcquireFeeBps(): number | null {
+    const raw = this.settings.evm_acquire_fee_bps;
+    if (raw === null || raw === undefined || (raw as unknown) === '') return null;
+    const bps = Number(raw);
+    if (!Number.isInteger(bps) || bps < 0 || bps > 500) {
+      this.logger.warn(
+        `Invalid evm_acquire_fee_bps "${raw}" — must be an integer 0..500; leaving on-chain value alone`
+      );
+      return null;
+    }
+    return this.settings.protocol_enabled ? bps : 0;
+  }
+
+  get evmTerminationMaxPoolVtBps(): number {
+    return this.settings.evm_termination_max_pool_vt_bps;
+  }
+
+  get evmTerminationPoolDataMaxAgeSeconds(): number {
+    return this.settings.evm_termination_pool_data_max_age_seconds;
+  }
+
+  get evmTerminationSweepDelayDays(): number {
+    return this.settings.evm_termination_sweep_delay_days;
+  }
+
+  get evmTerminationAllowWaivers(): boolean {
+    return this.settings.evm_termination_allow_waivers;
+  }
+
+  get indexRebalanceMinCadenceDays(): number {
+    const value = Number(this.settings.index_rebalance_min_cadence_days);
+    return Number.isInteger(value) && value >= 1 ? value : DEFAULT_SETTINGS.index_rebalance_min_cadence_days;
+  }
+
+  get indexRebalanceDefaultCadenceDays(): number {
+    const value = Number(this.settings.index_rebalance_default_cadence_days);
+    const fallback = DEFAULT_SETTINGS.index_rebalance_default_cadence_days;
+    return Math.max(Number.isInteger(value) && value >= 1 ? value : fallback, this.indexRebalanceMinCadenceDays);
+  }
+
+  get indexRebalanceJitterHours(): number {
+    const value = Number(this.settings.index_rebalance_jitter_hours);
+    return Number.isFinite(value) && value >= 0 ? value : DEFAULT_SETTINGS.index_rebalance_jitter_hours;
+  }
+
   get lpRecommendedMinLiquidity(): number {
     return this.settings.lp_recommended_min_liquidity;
   }
@@ -197,6 +364,17 @@ export class SystemSettingsService implements OnModuleInit {
 
   get hiddenMainnetVaultIds(): string[] {
     return this.settings.hidden_mainnet_vault_ids || [];
+  }
+
+  get maintenanceMode(): boolean {
+    return this.settings.maintenance_mode === true;
+  }
+
+  /** Whether `address` may use the site while maintenance mode is on. */
+  isAllowedDuringMaintenance(address?: string | null): boolean {
+    if (!address) return false;
+    const needle = address.toLowerCase();
+    return (this.settings.maintenance_allowlist || []).some(a => a?.toLowerCase() === needle);
   }
 
   isAddressWhitelistedForVaultCreation(address: string): boolean {
@@ -243,6 +421,50 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_fee_voting || 0;
   }
 
+  // EVM fee values (wei, as decimal strings)
+  private evmFee(value: string | number | undefined): string {
+    if (value === undefined || value === null || value === '') return '0';
+    const asString = String(value);
+    // Guard against a malformed settings edit reaching BigInt() downstream.
+    if (!/^\d+$/.test(asString)) {
+      this.logger.warn(`Invalid EVM fee value "${asString}" — treating as 0`);
+      return '0';
+    }
+    return asString;
+  }
+
+  get governanceFeeProposalStakingEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_staking_evm);
+  }
+
+  get governanceFeeProposalDistributionEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_distribution_evm);
+  }
+
+  get governanceFeeProposalTerminationEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_termination_evm);
+  }
+
+  get governanceFeeProposalBurningEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_burning_evm);
+  }
+
+  get governanceFeeProposalMarketplaceActionEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_marketplace_action_evm);
+  }
+
+  get governanceFeeProposalExpansionEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_expansion_evm);
+  }
+
+  get governanceFeeProposalAssetWhitelistUpdateEvm(): string {
+    return this.evmFee(this.settings.governance_fee_proposal_asset_whitelist_update_evm);
+  }
+
+  get governanceFeeVotingEvm(): string {
+    return this.evmFee(this.settings.governance_fee_voting_evm);
+  }
+
   get minVotingDuration(): number {
     // Environment-based: 5 min (preprod) / 1 day (mainnet)
     // Always use environment-based value (database setting is ignored for this)
@@ -253,16 +475,66 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.max_voting_duration || 259200000; // 3 days default
   }
 
+  /** Robinhood voting window: 48 hours (5 min on testnet) to 14 days. */
+  get minVotingDurationEvm(): number {
+    return this.isMainnet ? 172800000 : 300000;
+  }
+
+  get maxVotingDurationEvm(): number {
+    return 1209600000; // 14 days
+  }
+
+  /** Robinhood acquire expansion: same window as the acquire phase, capped at 100,000 ETH. */
+  get maxAcquireExpansionDurationEvm(): number {
+    return this.maxAcquireWindowDuration;
+  }
+
+  get maxAcquireExpansionEth(): number {
+    return 100000;
+  }
+
+  /** Network the vault creation spec resolves against: the API's own deployment network. */
+  get specNetwork(): 'mainnet' | 'preprod' {
+    return this.isMainnet ? 'mainnet' : 'preprod';
+  }
+
+  /** Longest contribution window a vault may be created with. */
+  get maxContributionDuration(): number {
+    return 2592000000; // 30 days
+  }
+
+  /** Robinhood minAcquireThreshold range, in ETH. */
+  get minAcquireThresholdEth(): number {
+    return 0.01;
+  }
+
+  get maxAcquireThresholdEth(): number {
+    return 100000;
+  }
+
   get minContributionDuration(): number {
-    // Environment-based: 10 min (preprod) / 5 days (mainnet)
-    // Always use environment-based value
-    return this.isMainnet ? 432000000 : 600000;
+    // Environment-based: 10 min (preprod) / 5 days (mainnet); MIN_CONTRIBUTION_DURATION_MS overrides (e.g. staging)
+    return this.durationOverride('MIN_CONTRIBUTION_DURATION_MS') ?? (this.isMainnet ? 432000000 : 600000);
   }
 
   get minAcquireWindowDuration(): number {
-    // Environment-based: 10 min (preprod) / 5 days (mainnet)
-    // Always use environment-based value
-    return this.isMainnet ? 432000000 : 600000;
+    // Environment-based: 5 min (preprod, matches the client form) / 24 hours (mainnet);
+    // MIN_ACQUIRE_WINDOW_DURATION_MS overrides (e.g. staging)
+    return this.durationOverride('MIN_ACQUIRE_WINDOW_DURATION_MS') ?? (this.isMainnet ? 86400000 : 300000);
+  }
+
+  /** Staging: when MIN_ACQUIRE_WINDOW_DURATION_MS is set, it is also the default acquire window. */
+  get defaultAcquireWindowDuration(): number | null {
+    return this.durationOverride('MIN_ACQUIRE_WINDOW_DURATION_MS');
+  }
+
+  private durationOverride(key: string): number | null {
+    const value = Number(this.configService.get<string>(key));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+
+  get maxAcquireWindowDuration(): number {
+    return 604800000; // 7 days
   }
 
   get minExpansionDuration(): number {
@@ -309,6 +581,32 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_enabled !== false; // Default true if not set
   }
 
+  get evmEnabled(): boolean {
+    return this.settings.evm_enabled !== false; // Default true if not set
+  }
+
+  get cardanoBuybackEnabled(): boolean {
+    return this.settings.cardano_buyback_enabled !== false; // Default true if not set
+  }
+
+  get evmNftAssetsEnabled(): boolean {
+    return this.settings.evm_nft_assets_enabled !== false; // Default true if not set
+  }
+
+  /**
+   * Archetypes a creator may pick on this chain, never empty: a chain with no
+   * configured entry falls back to standard vaults rather than to nothing,
+   * which would take vault creation down.
+   */
+  vaultArchetypesEnabled(chainType: ChainType): VaultArchetype[] {
+    const configured = this.settings.vault_archetypes_enabled?.[chainType];
+    return Array.isArray(configured) && configured.length > 0 ? configured : [VaultArchetype.standard];
+  }
+
+  isVaultArchetypeEnabled(chainType: ChainType, archetype: VaultArchetype): boolean {
+    return this.vaultArchetypesEnabled(chainType).includes(archetype);
+  }
+
   /**
    * Get the fee for a specific proposal type
    * @param proposalType - The type of proposal
@@ -334,9 +632,45 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalExpansion;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdate;
+      case 'index_reweight':
+        return this.governanceFeeProposalMarketplaceAction;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;
+    }
+  }
+
+  /**
+   * Get the EVM fee for a specific proposal type.
+   * Mirrors getGovernanceFeeForProposalType, including the buy_sell and
+   * acquire_expansion aliases.
+   * @returns Fee amount in wei, as a decimal string
+   */
+  getGovernanceFeeForProposalTypeEvm(proposalType: string): string {
+    switch (proposalType) {
+      case 'staking':
+        return this.governanceFeeProposalStakingEvm;
+      case 'distribution':
+        return this.governanceFeeProposalDistributionEvm;
+      case 'termination':
+        return this.governanceFeeProposalTerminationEvm;
+      case 'burning':
+        return this.governanceFeeProposalBurningEvm;
+      case 'marketplace_action':
+        return this.governanceFeeProposalMarketplaceActionEvm;
+      case 'buy_sell':
+        return this.governanceFeeProposalMarketplaceActionEvm;
+      case 'expansion':
+        return this.governanceFeeProposalExpansionEvm;
+      case 'acquire_expansion':
+        return this.governanceFeeProposalExpansionEvm;
+      case 'asset_whitelist_update':
+        return this.governanceFeeProposalAssetWhitelistUpdateEvm;
+      case 'index_reweight':
+        return this.governanceFeeProposalMarketplaceActionEvm;
+      default:
+        this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
+        return '0';
     }
   }
 }

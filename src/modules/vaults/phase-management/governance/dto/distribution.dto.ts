@@ -37,8 +37,16 @@ export enum DistributionBatchStatus {
 }
 
 /**
- * Distribution batch information stored in proposal metadata
- * Note: txHash is NOT stored here - it's stored in the Transaction entity
+ * Distribution batch information stored in proposal metadata.
+ *
+ * Status lifecycle:
+ *   PENDING / RETRY_PENDING → PROCESSING → COMPLETED
+ *                                        ↘ RETRY_PENDING (node definitively rejected the tx)
+ *                                        ↘ FAILED        (rejected MAX_RETRY_ATTEMPTS times)
+ *
+ * A batch in PROCESSING with a `txHash` may already be on chain: it is never
+ * rebuilt, only checked on chain or resubmitted as the exact same `signedTx`
+ * (same inputs, so it can land at most once).
  */
 export interface DistributionBatch {
   batchId: string;
@@ -49,6 +57,10 @@ export interface DistributionBatch {
   status: DistributionBatchStatus;
   claimIds: string[];
   transactionId?: string; // Reference to Transaction entity
+  /** Hash of the signed tx, persisted BEFORE it is submitted. */
+  txHash?: string;
+  /** The exact signed tx (hex), persisted before submission; cleared once the batch is completed. */
+  signedTx?: string;
   retryCount: number;
   lastAttempt?: string;
   error?: string;
@@ -59,6 +71,12 @@ export interface DistributionBatch {
  * Simplified version - doesn't store redundant data that can be fetched from related entities
  */
 export interface DistributionMetadata {
+  /**
+   * 2 = batches persist `txHash`/`signedTx` before submission, so an unfinished
+   * batch can be resumed safely. Plans without it were written by older code
+   * that could submit without recording the tx; they are never auto-resumed.
+   */
+  planVersion?: number;
   totalLovelaceToDistribute: string;
   totalRecipients: number;
   lovelacePerHolder: string; // Average, actual amounts may vary based on VT proportion
@@ -66,6 +84,50 @@ export interface DistributionMetadata {
   batches: DistributionBatch[];
   completedBatches: number;
   failedBatches: number;
+}
+
+/**
+ * EVM distribution metadata, stored at `proposal.metadata.evmDistribution`.
+ *
+ * Deliberately NOT reusing `DistributionMetadata`. That type is Cardano-shaped
+ * — lovelace amounts and a `batches` array — and the batch-retry cron keys off
+ * `metadata.distribution.batches` to call the Cardano `retryFailedBatches`.
+ * Writing EVM state under that key would hand EVM proposals to Cardano retry
+ * logic. There are no batches here anyway: one on-chain call reserves the pot
+ * and holders claim it themselves.
+ */
+export interface EvmDistributionMetadata {
+  /** On-chain id from the `DistributionOpened` event. */
+  distributionId: string;
+  /** `address(0)` for native, else the ERC-20. */
+  asset: string;
+  /** Post-fee pot in base units. */
+  netPot: string;
+  /** `circulatingSupplyAt(timepoint)` — the payout denominator. */
+  supply: string;
+  /** Chain timestamp the shares are computed against. */
+  timepoint: string;
+  /** Unix seconds after which claims close and the remainder can be swept. */
+  deadline: string;
+  txHash: string | null;
+  openedAt: string;
+  /** Set once every snapshot holder with a share has been paid by the auto-claim cron. */
+  autoClaimCompletedAt?: string;
+  /** Failed auto-claim attempts per holder; a holder that keeps failing is skipped (it can still claim itself). */
+  autoClaimFailures?: Record<string, number>;
+  /** Payout transactions sent by the auto-claim cron (`claimDistributionFor`), oldest first. */
+  payouts?: EvmDistributionPayout[];
+  /** Set once `sweepDistributionRemainder` ran after the deadline (frees the vault's distribution slot). */
+  sweptAt?: string;
+  sweepTxHash?: string | null;
+}
+
+export interface EvmDistributionPayout {
+  holder: string;
+  /** Base units of `asset` paid. */
+  amount: string;
+  txHash: string;
+  paidAt: string;
 }
 
 /**

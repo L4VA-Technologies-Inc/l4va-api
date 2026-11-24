@@ -323,8 +323,11 @@ export class GoogleCloudStorageService {
       const imageType = body?.imageType;
       const resizeParams = imageType ? ImageResizeMap[imageType] : null;
 
+      // Phones store portrait photos sideways plus an EXIF Orientation tag. Re-encoding to WebP
+      // drops that tag, so apply it first (`.rotate()` with no angle) or the image lands rotated.
       if (resizeParams) {
         processedImageBuffer = await sharp(file.buffer)
+          .rotate()
           .resize(resizeParams.width, resizeParams.height, {
             fit: 'cover',
             position: 'center',
@@ -337,6 +340,7 @@ export class GoogleCloudStorageService {
           .toBuffer();
       } else {
         processedImageBuffer = await sharp(file.buffer)
+          .rotate()
           .webp({
             quality: 80,
             lossless: false,
@@ -367,6 +371,37 @@ export class GoogleCloudStorageService {
     } catch (error) {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
+    }
+  }
+
+  /**
+   * Store an AI-generated image as a square WebP and return its file entity.
+   * The same asset backs both the vault image and the vault token image.
+   */
+  async uploadGeneratedImage(buffer: Buffer, size = 640): Promise<FileEntity> {
+    try {
+      const processed = await sharp(buffer)
+        .resize(size, size, { fit: 'cover', position: 'center' })
+        .webp({ quality: 80, lossless: false, alphaQuality: 80 })
+        .toBuffer();
+
+      const fileKey = `${uuid()}`;
+      const uploadResult = await this.uploadFile(processed, fileKey, 'image/webp');
+      if (!uploadResult) throw new BadRequestException('Failed to upload generated image to Google Cloud Storage');
+
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+      const newFile = this.fileRepository.create({
+        file_key: uploadResult.Key,
+        file_url: `${protocol}${this.appHost}/api/v1/image/${uploadResult.Key}`,
+        file_name: `ai-generated-${fileKey}.webp`,
+        file_type: 'image/webp',
+      });
+
+      await this.fileRepository.save(newFile);
+      return newFile;
+    } catch (error) {
+      this.logger.error('Error uploading generated image:', error);
+      throw new BadRequestException('Failed to store generated image');
     }
   }
 

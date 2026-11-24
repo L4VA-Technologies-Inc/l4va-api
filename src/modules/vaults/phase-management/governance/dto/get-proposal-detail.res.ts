@@ -112,6 +112,9 @@ export class ProposalDetailDto {
     name: string;
     vault_token_ticker?: string;
     vault_status?: string;
+    /** 'cardano' | 'robinhood' — the client uses this to pick the fee/payment path. */
+    chainType?: string;
+    contractAddress?: string;
     termination_type?: string;
     terminationMetadata?: any; // Includes status, txHashes, etc.
   };
@@ -208,6 +211,49 @@ export class StakingTokenDto extends ProposalAssetDto {
   market?: string;
 }
 
+/** What one Robinhood swap action actually did on-chain (absent until it ran). */
+export class EvmSwapExecutionDto {
+  @Expose()
+  @ApiProperty({ description: 'Transaction status', example: 'confirmed' })
+  status: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Swap transaction hash', nullable: true })
+  txHash: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Input amount, base units', nullable: true })
+  amountIn: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Output before the protocol fee, base units', nullable: true })
+  amountOut: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Protocol fee, base units of the output token', nullable: true })
+  fee: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetInSymbol: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetInDecimals: number | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetOutSymbol: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetOutDecimals: number | null;
+
+  @Expose()
+  @ApiProperty({ description: 'When the swap was last updated (confirmed or failed)' })
+  executedAt: Date;
+}
+
 export class MarketplaceActionDetailDto {
   @Expose()
   @ApiProperty({ description: 'Asset ID', example: '123e4567-e89b-12d3-a456-426614174000' })
@@ -269,11 +315,76 @@ export class MarketplaceActionDetailDto {
   wayupUrl?: string;
 
   @Expose()
-  @ApiPropertyOptional({
-    description: 'Current status of the asset (e.g., LOCKED, LISTED, SOLD)',
-    example: 'SOLD',
-  })
+  @ApiPropertyOptional({ description: 'Current status of the asset (e.g., LOCKED, LISTED, SOLD)', example: 'SOLD' })
   assetStatus?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Market platform (WayUp, DexHunter, Uniswap)', example: 'Uniswap' })
+  market?: string;
+
+  // DexHunter swap fields
+  @Expose()
+  @ApiPropertyOptional({ description: 'Slippage tolerance % for DexHunter swaps', example: 0.5 })
+  slippage?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Use market price at execution time', example: true })
+  useMarketPrice?: boolean;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Custom limit price in ADA', example: 1.5 })
+  customPriceAda?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Estimated ADA output from swap', example: 100 })
+  estimatedOutput?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Actual ADA output after execution', example: 99.5 })
+  actualOutput?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Execution tx hash' })
+  txHash?: string;
+
+  // EVM Uniswap swap fields
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: ERC-20 input token address', example: '0xc9f9...' })
+  inputAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: ERC-20 expected output token address', example: '0x3b82...' })
+  expectedOutputAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: raw token amount in smallest unit', example: '1000000000000000000' })
+  amount?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: human-readable token amount', example: '1.5' })
+  humanAmount?: string;
+
+  @Expose()
+  @Type(() => EvmSwapExecutionDto)
+  @ApiPropertyOptional({ type: EvmSwapExecutionDto, nullable: true, description: 'EVM: the swap this action ran' })
+  execution?: EvmSwapExecutionDto | null;
+
+  // EVM close-position fields
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: on-chain positionId for CLOSE_POSITION', example: '3' })
+  positionId?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: position asset address', example: '0xc9f9...' })
+  positionAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: underlying asset to receive on close', example: '0x3b82...' })
+  underlyingAsset?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'EVM: raw position amount', example: '1000000000000000000' })
+  positionAmount?: string;
 }
 
 /**
@@ -446,6 +557,35 @@ export class GetProposalDetailRes {
   })
   @Type(() => DistributionStatusDto)
   distributionStatus?: DistributionStatusDto;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description:
+      'V13 EVM distributions: claims open at `activatesAt` (unix seconds, earlier if approved) and close at ' +
+      '`deadline`; a cancelled distribution pays nothing and its pot returns to the vault',
+  })
+  evmDistributionTiming?: {
+    activatesAt: number;
+    deadline: number;
+    approved: boolean;
+    cancelled: boolean;
+    pending: boolean;
+  };
+
+  @Expose()
+  @ApiPropertyOptional({
+    description:
+      'EVM distributions: asset (zero address = native ETH), requested and net pot in base units, ' +
+      'the openDistribution tx and the payouts sent to holders so far',
+  })
+  evmDistribution?: {
+    asset: string;
+    requestedAmount: string | null;
+    netPot: string | null;
+    openTxHash: string | null;
+    payouts: { holder: string; amount: string; txHash: string; paidAt: string }[];
+    paidOutAt: string | null;
+  };
 
   @Expose()
   @ApiPropertyOptional({ description: 'Fungible tokens for staking', type: [StakingTokenDto] })

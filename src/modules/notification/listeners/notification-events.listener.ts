@@ -18,10 +18,13 @@ export class NotificationEventsListener {
     private notificationService: NotificationService,
     private readonly configService: ConfigService
   ) {
+    // Same source as the verification link (EmailVerificationService): every environment that sets
+    // CLIENT_APP_URL (stage, local) must send links to itself, not to testnet/app.
     this.emailUrl =
-      this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'
+      this.configService.get<string>('CLIENT_APP_URL')?.replace(/\/+$/, '') ||
+      (this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'
         ? 'https://app.l4va.org'
-        : 'https://testnet.l4va.org';
+        : 'https://testnet.l4va.org');
   }
 
   private formatEmailTime(date: Date = new Date()): string {
@@ -72,10 +75,15 @@ export class NotificationEventsListener {
               headline: `The proposal ${event.proposalName} has been executed`,
               statusPhrase: 'been executed',
             }
-          : {
-              headline: `The proposal ${event.proposalName} has been rejected`,
-              statusPhrase: 'been rejected',
-            };
+          : event.actionStatus === 'ending_soon'
+            ? {
+                headline: `Time running out to vote on "${event.proposalName}"`,
+                statusPhrase: 'not received your vote yet and is ending soon',
+              }
+            : {
+                headline: `The proposal ${event.proposalName} has been rejected`,
+                statusPhrase: 'been rejected',
+              };
 
     await this.notificationService.sendBulkGovernanceEmailNotification(
       {
@@ -148,13 +156,18 @@ export class NotificationEventsListener {
   async handleContributionComplete(event: {
     vaultId: string;
     vaultName: string;
-    totalValueLocked: number;
+    // Cardano only (ADA); EVM vaults send no value.
+    totalValueLocked?: number;
     contributorIds: string[];
   }) {
+    const tvl =
+      event.totalValueLocked !== undefined
+        ? ` Total value locked = ${event.totalValueLocked.toLocaleString()} ADA`
+        : '';
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} contribution stage complete`,
-        description: `${event.vaultName} vault has successfully completed contribution stage. Total value locked = ${event.totalValueLocked.toLocaleString()} ADA`,
+        description: `${event.vaultName} vault has successfully completed contribution stage.${tvl}`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
@@ -167,15 +180,20 @@ export class NotificationEventsListener {
     vaultId: string;
     vaultName: string;
     tokenHoldersIds: string[];
-    adaSpent: number;
+    // Cardano only (ADA); EVM vaults send no amounts.
+    adaSpent?: number;
     tokenPercentage: number;
     tokenTicker: string;
-    impliedVaultValue: number;
+    impliedVaultValue?: number;
   }) {
+    const amounts =
+      event.adaSpent !== undefined && event.impliedVaultValue !== undefined
+        ? ` ${event.adaSpent.toLocaleString()} ADA was sent to acquire ${event.tokenPercentage}% of ${event.tokenTicker} tokens. Implied vault value is ${event.impliedVaultValue.toLocaleString()} ADA`
+        : '';
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} vault success!`,
-        description: `${event.vaultName} vault has successfully completed acquire phase and locked. ${event.adaSpent.toLocaleString()} ADA was sent to acquire ${event.tokenPercentage}% of ${event.tokenTicker} tokens. Implied vault value is ${event.impliedVaultValue.toLocaleString()} ADA`,
+        description: `${event.vaultName} vault has successfully completed acquire phase and locked.${amounts}`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
@@ -188,7 +206,7 @@ export class NotificationEventsListener {
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} vault failed`,
-        description: `${event.vaultName} vault has failed to completed acquire phase. Assets and ADA will be refunded minus fees.`,
+        description: `${event.vaultName} vault has failed to completed acquire phase. Assets and funds will be refunded minus fees.`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
@@ -198,10 +216,16 @@ export class NotificationEventsListener {
 
   @OnEvent('vault.failed.email')
   async handleVaultFailedEmail(event: { vault: any }) {
+    const ownerId = event?.vault?.owner?.id;
+    if (!ownerId) {
+      this.logger.warn(`Skipping vault.failed.email for vault ${event?.vault?.id || 'unknown'}: missing owner id`);
+      return;
+    }
+
     const user = await this.userRepository.findOne({
-      where: { id: event.vault.owner.id },
+      where: { id: ownerId },
     });
-    if (!user.email) return;
+    if (!user?.email) return;
 
     await this.notificationService.sendFailedEmailNotification({
       email: user.email,
@@ -275,6 +299,7 @@ export class NotificationEventsListener {
     address: string;
     vaultId: string;
     vaultName: string;
+    proposalId?: string;
     proposalName: string;
     creatorId: string;
   }) {
@@ -282,6 +307,7 @@ export class NotificationEventsListener {
       title: 'Governance Proposal Created',
       description: `Your "${event.proposalName}" Governance Proposal for vault ${event.vaultName} has been created!`,
       vaultId: event.vaultId,
+      proposalId: event.proposalId,
       vaultName: event.vaultName,
       address: event.address,
     });
@@ -302,6 +328,7 @@ export class NotificationEventsListener {
         title: `New vote available for vault "${event.vaultName}"`,
         description: `You have a new governance proposal, ${event.proposalName}, for vault ${event.vaultName}`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
         address: event.address,
       },
@@ -360,6 +387,7 @@ export class NotificationEventsListener {
         title: `The proposal ${event.proposalName} has been executed`,
         description: `The proposal ${event.proposalName} for vault ${event.vaultName} has been executed`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
         address: event.address,
       },
@@ -397,6 +425,7 @@ export class NotificationEventsListener {
         title: `The proposal ${event.proposalName} has been rejected`,
         description: `The proposal ${event.proposalName} for vault ${event.vaultName} has been rejected`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
         address: event.address,
       },
@@ -458,10 +487,11 @@ export class NotificationEventsListener {
     );
   }
 
-  @OnEvent('governance.vote_time_running_out') // Haven`t added
+  @OnEvent('governance.vote_time_running_out')
   async handleVoteTimeRunningOut(event: {
     vaultId: string;
     vaultName: string;
+    proposalId: string;
     proposalName: string;
     nonVoterIds: string[];
   }) {
@@ -470,10 +500,25 @@ export class NotificationEventsListener {
         title: `Time running out on Proposal ${event.proposalName}`,
         description: `Time is running out on Proposal "${event.proposalName}" in vault ${event.vaultName}. Cast your vote now!`,
         vaultId: event.vaultId,
+        proposalId: event.proposalId,
         vaultName: event.vaultName,
       },
       event.nonVoterIds
     );
+
+    try {
+      await this.sendGovernanceActionEmails({
+        vaultName: event.vaultName,
+        proposalId: event.proposalId,
+        proposalName: event.proposalName,
+        tokenHolderIds: event.nonVoterIds,
+        actionStatus: 'ending_soon',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send governance ending-soon emails for proposal ${event.proposalId}: ${error?.message || error}`
+      );
+    }
   }
 
   @OnEvent('distribution.claim_available')

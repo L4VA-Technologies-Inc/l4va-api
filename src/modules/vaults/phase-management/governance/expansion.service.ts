@@ -79,7 +79,7 @@ export class ExpansionService {
             }
           : {
               start: Date.now(),
-              end: Date.now() + expansionConfig.duration + 24 * 60 * 60 * 1000, // Add 1 day buffer to ensure on-chain state is updated before accepting contributions
+              end: Date.now() + expansionConfig.duration + 2 * 60 * 60 * 1000, // H-3: 2h buffer = validity of a built contribution tx (was 1 day)
             },
       });
 
@@ -165,6 +165,7 @@ export class ExpansionService {
       );
 
       this.logger.log(`Vault ${vaultId} status changed back to LOCKED with ${expansionMultipliers.length} multipliers`);
+      await this.recordExpansionClose(proposalId, reason, onChainResult.txHash);
 
       // Emit event for tracking
       this.eventEmitter.emit('vault.expansion.closed', {
@@ -176,6 +177,25 @@ export class ExpansionService {
     } catch (error) {
       this.logger.error(`Error closing expansion for vault ${vaultId}: ${error.message}`, error.stack);
     }
+  }
+
+  /**
+   * Store how the window closed on the proposal, for the activity feed. Merged
+   * in SQL so concurrent metadata writes (progress counters) are not clobbered.
+   */
+  private async recordExpansionClose(
+    proposalId: string,
+    reason: 'duration_expired' | 'asset_max_reached' | 'max_ada_reached',
+    txHash: string
+  ): Promise<void> {
+    const expansionClose = { closedAt: new Date().toISOString(), reason, txHash };
+    await this.proposalRepository
+      .createQueryBuilder()
+      .update(Proposal)
+      .set({ metadata: () => `COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('expansionClose', :close::jsonb)` })
+      .where('id = :id', { id: proposalId })
+      .setParameters({ close: JSON.stringify(expansionClose) })
+      .execute();
   }
 
   /**
@@ -310,7 +330,7 @@ export class ExpansionService {
               proposal: { id: expansionProposal.id },
               type: ClaimType.EXPANSION,
               status: ClaimStatus.PENDING,
-              amount: Number(vtAmount),
+              amount: String(vtAmount),
               proposal_id: expansionProposal.id,
               description: `Expansion contribution: ${transaction.assets.length} asset(s) → ${Number(vtAmount) / decimalMultiplier} VT`,
               metadata: {
@@ -390,7 +410,7 @@ export class ExpansionService {
 
           for (const claim of savedClaims) {
             this.logger.log(
-              `Recalculated claim ${claim.id}: ${claim.amount / decimalMultiplier} VT (${recalculatedClaimAmounts.get(claim.id) || 0} base units)`
+              `Recalculated claim ${claim.id}: ${Number(claim.amount) / decimalMultiplier} VT (${recalculatedClaimAmounts.get(claim.id) || 0} base units)`
             );
           }
 
@@ -487,7 +507,7 @@ export class ExpansionService {
             }
           : {
               start: Date.now(),
-              end: Date.now() + expansionConfig.duration + 24 * 60 * 60 * 1000, // Add 1 day buffer
+              end: Date.now() + expansionConfig.duration + 2 * 60 * 60 * 1000, // H-3: 2h buffer = validity of a built contribution tx (was 1 day)
             },
       });
 
@@ -576,6 +596,7 @@ export class ExpansionService {
       );
 
       this.logger.log(`Vault ${vaultId} status changed back to LOCKED with new multiplier ${newMultiplier}`);
+      await this.recordExpansionClose(proposalId, reason, onChainResult.txHash);
 
       // Emit event for tracking
       this.eventEmitter.emit('vault.acquire_expansion.closed', {
@@ -795,7 +816,7 @@ export class ExpansionService {
               proposal: { id: expansionProposal.id },
               type: ClaimType.ACQUIRER,
               status: ClaimStatus.PENDING,
-              amount: Number(vtAmount),
+              amount: String(vtAmount),
               proposal_id: expansionProposal.id,
               description: `Acquire expansion: ${transaction.amount} ADA → ${Number(vtAmount) / decimalMultiplier} VT`,
               is_treasury_claim: true,

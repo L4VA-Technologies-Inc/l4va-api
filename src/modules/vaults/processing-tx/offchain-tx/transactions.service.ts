@@ -1,6 +1,9 @@
+import { Buffer } from 'node:buffer';
+
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config/dist/config.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
@@ -21,7 +24,7 @@ import {
   GetTransactionType,
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { VaultStatus } from '@/types/vault.types';
+import { ChainType, VaultStatus } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 @Injectable()
@@ -42,7 +45,8 @@ export class TransactionsService {
     private readonly proposalRepository: Repository<Proposal>,
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService,
-    private readonly gcsService: GoogleCloudStorageService
+    private readonly gcsService: GoogleCloudStorageService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -53,7 +57,13 @@ export class TransactionsService {
     vault_id: string;
     type: TransactionType;
     assets: Asset[];
-    amount?: number;
+    /**
+     * Smallest units (lovelace / wei). Accepts a decimal string so wei above
+     * Number.MAX_SAFE_INTEGER is stored exactly in the decimal(30,0) column —
+     * note the entity reads it back via parseFloat, so callers dealing in wei
+     * should treat the metadata copy as authoritative.
+     */
+    amount?: number | string;
     userId?: string;
     fee?: number;
     metadata?: object;
@@ -65,13 +75,81 @@ export class TransactionsService {
       type: data.type,
       status: TransactionStatus.created,
       assets: data.assets,
-      amount: data.amount,
+      amount: data.amount as number,
       user_id: data.userId,
       fee: data.fee,
       metadata: data.metadata,
       is_expansion: data.is_expansion || false,
       expansion_proposal_id: data.expansion_proposal_id,
     });
+  }
+
+  /**
+   * H-2/H-3: the on-chain windows outlive the DB phases and anyone can spend a contribution
+   * UTxO to strip its receipt, while the backend only learns about spends it built itself.
+   * Before a phase is closed (and periodically while it is open) check every counted Cardano
+   * contribution/acquire UTxO on chain. If it was spent by a transaction the backend does not
+   * know, it is no longer in the vault: stop counting it (tx -> refunded, assets -> released).
+   */
+  async reconcileCardanoContributionUtxos(
+    vaultId: string
+  ): Promise<{ released: Array<{ txId: string; txHash: string; spentBy: string }> }> {
+    const released: Array<{ txId: string; txHash: string; spentBy: string }> = [];
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'contract_address', 'script_hash', 'chain_type'],
+    });
+    if (!vault?.contract_address || !vault.script_hash || vault.chain_type === ChainType.robinhood) {
+      return { released };
+    }
+    const receiptUnit = `${vault.script_hash}${Buffer.from('receipt').toString('hex')}`;
+
+    const txs = await this.transactionRepository.find({
+      where: {
+        vault_id: vaultId,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: In([TransactionStatus.submitted, TransactionStatus.confirmed]),
+        tx_hash: Not(IsNull()),
+      },
+      select: ['id', 'tx_hash'],
+    });
+
+    for (const tx of txs) {
+      let utxos: Awaited<ReturnType<BlockFrostAPI['txsUtxos']>>;
+      try {
+        utxos = await this.blockfrost.txsUtxos(tx.tx_hash);
+      } catch (error) {
+        // Not indexed yet (or Blockfrost hiccup): leave it, the next run re-checks
+        this.logger.warn(`[reconcile] ${tx.tx_hash}: ${(error as Error).message}`);
+        continue;
+      }
+      const output = utxos.outputs.find(
+        o => o.address === vault.contract_address && o.amount.some(a => a.unit === receiptUnit)
+      );
+      // No receipt output at the contract: the tx on chain is not a contribution to this vault
+      // (e.g. an unrelated tx whose hash got attached to the record), so it never counts.
+      const spentBy = output ? (output as { consumed_by_tx?: string | null }).consumed_by_tx : 'no-contract-output';
+      if (!spentBy) continue;
+
+      if (output) {
+        const knownSpend = await this.transactionRepository.exists({ where: { tx_hash: spentBy } });
+        if (knownSpend) continue;
+      }
+
+      await this.transactionRepository.update({ id: tx.id }, { status: TransactionStatus.refunded });
+      await this.assetRepository
+        .createQueryBuilder()
+        .update(Asset)
+        .set({ status: AssetStatus.RELEASED })
+        .where('transaction_id = :txId', { txId: tx.id })
+        .andWhere('status IN (:...statuses)', { statuses: [AssetStatus.PENDING, AssetStatus.LOCKED] })
+        .execute();
+      released.push({ txId: tx.id, txHash: tx.tx_hash, spentBy });
+      this.logger.warn(
+        `[reconcile] vault ${vaultId}: contribution ${tx.tx_hash} ${output ? `was spent by unknown tx ${spentBy}` : 'has no receipt output at the contract'}; no longer counted`
+      );
+    }
+    return { released };
   }
 
   async createAssets(txId: string): Promise<{ success: boolean }> {
@@ -83,11 +161,12 @@ export class TransactionsService {
       throw new NotFoundException('Transaction not found');
     }
 
-    // Handle metadata structure for acquire transactions
-    // New format: { assets: [...], isExpansion: boolean }
-    // Old format: [...] (array directly)
+    // Handle metadata structure:
+    // - Contribute: array [...] OR { assets: [...], evmChildTxHashes: [...] }
+    // - Acquire: { assets: [...], isExpansion: boolean } OR [...] (legacy)
     let pendingAssets = transaction.metadata || [];
-    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
+    if (transaction.metadata && !Array.isArray(transaction.metadata)) {
+      // Metadata is an object - extract the assets array
       pendingAssets = (transaction.metadata as any).assets || [];
     }
 
@@ -104,12 +183,33 @@ export class TransactionsService {
 
     if (transaction.type === TransactionType.acquire) {
       pendingAssets.forEach(assetItem => {
+        const rawType = String(assetItem.type ?? assetItem.asset_type ?? '')
+          .trim()
+          .toLowerCase();
+        const policyId = String(assetItem.policyId ?? assetItem.policy_id ?? '')
+          .trim()
+          .toLowerCase();
+        const assetName = String(assetItem.assetName ?? assetItem.asset_id ?? '')
+          .trim()
+          .toLowerCase();
+        const isNativeEthAddress = policyId === '0x0000000000000000000000000000000000000000';
+
+        // Acquire flow supports only native assets: ADA (Cardano) or ETH (EVM).
+        if (rawType && rawType !== AssetType.ADA && rawType !== AssetType.ETH) {
+          throw new BadRequestException(
+            `Invalid acquire asset type "${rawType}". Acquire supports only "${AssetType.ADA}" or "${AssetType.ETH}".`
+          );
+        }
+
+        const resolvedType: AssetType =
+          rawType === AssetType.ETH || isNativeEthAddress || assetName === 'eth' ? AssetType.ETH : AssetType.ADA;
+
         assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
-          type: AssetType.ADA, // Using ADA type for acquire
-          policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          type: resolvedType,
+          policy_id: policyId,
+          asset_id: assetName || (resolvedType === AssetType.ETH ? 'eth' : ''),
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
@@ -128,7 +228,12 @@ export class TransactionsService {
           return { assetItem, blockfrostMetadata: null };
         }
 
-        // Otherwise fetch from Blockfrost
+        // Skip Blockfrost for EVM assets (Blockfrost is Cardano-specific)
+        if (assetItem.policyId?.startsWith('0x')) {
+          return { assetItem, blockfrostMetadata: null };
+        }
+
+        // Otherwise fetch from Blockfrost for Cardano assets
         try {
           const unit = assetItem.policyId + assetItem.assetName;
           const assetInfo = await this.blockfrost.assetsById(unit);
@@ -217,7 +322,7 @@ export class TransactionsService {
           vault: { id: transaction.vault_id } as Vault,
           type: assetItem.type,
           policy_id: assetItem.policyId || '',
-          asset_id: assetItem.assetName,
+          asset_id: assetItem.assetName || '', // Default to empty string for EVM ERC20 tokens
           quantity: rawQuantity, // Store raw blockchain quantity
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
@@ -249,8 +354,12 @@ export class TransactionsService {
 
       await this.assetRepository.save(assetsToCreate);
 
-      // Clear metadata after successful asset creation
-      await this.transactionRepository.update({ id: transaction.id }, { metadata: null });
+      // Preserve evmChildTxHashes so the reconciler can find parent transactions for child tx hashes.
+      const evmChildTxHashes = (transaction.metadata as any)?.evmChildTxHashes;
+      await this.transactionRepository.update(
+        { id: transaction.id },
+        { metadata: evmChildTxHashes ? { evmChildTxHashes } : null }
+      );
     }
 
     return {
@@ -262,6 +371,10 @@ export class TransactionsService {
     return this.transactionRepository.findOne({
       where: { tx_hash: txHash },
     });
+  }
+
+  async getTransactionById(id: string): Promise<Transaction | null> {
+    return this.transactionRepository.findOne({ where: { id } });
   }
 
   async getContributionTransactions(vaultId?: string): Promise<Transaction[]> {
@@ -511,6 +624,30 @@ export class TransactionsService {
     return { items, total, page: parsedPage, limit: parsedLimit };
   }
 
+  /**
+   * A client-supplied record id must point at the record built for this action. Without this, any
+   * signed tx could be attached to someone's unpaid contribute/acquire record and the webhook would
+   * confirm it by hash, locking assets that were never sent.
+   */
+  async assertSubmittableTransaction(
+    id: string,
+    expected: { vaultId: string; type: TransactionType; userId?: string }
+  ): Promise<void> {
+    const tx = await this.transactionRepository.findOne({
+      where: { id },
+      select: ['id', 'vault_id', 'type', 'user_id', 'status', 'tx_hash'],
+    });
+    if (!tx || tx.vault_id !== expected.vaultId || tx.type !== expected.type) {
+      throw new BadRequestException('Transaction record does not match this action');
+    }
+    if (expected.userId && tx.user_id && tx.user_id !== expected.userId) {
+      throw new ForbiddenException('Transaction record belongs to another user');
+    }
+    if (tx.tx_hash || ![TransactionStatus.created, TransactionStatus.pending].includes(tx.status)) {
+      throw new BadRequestException('Transaction record was already submitted');
+    }
+  }
+
   async updateTransactionHash(id: string, txHash: string, metadata?: Record<string, any>): Promise<void> {
     const result = await this.transactionRepository.update(
       { id },
@@ -567,9 +704,11 @@ export class TransactionsService {
    * Only locks assets that are still pending to prevent double locking
    * Invalidates user wallet cache to ensure they see updated asset list
    * @param transactionId Transaction ID
+   * @param assetIds Only these Asset rows of the transaction. EVM passes the row of the on-chain
+   *   contribution that just landed, so a row the user listed but never contributed stays PENDING.
    * @returns Number of assets locked
    */
-  async lockAssetsForTransaction(transactionId: string): Promise<number> {
+  async lockAssetsForTransaction(transactionId: string, assetIds?: string[]): Promise<number> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: transactionId },
       select: ['id', 'vault_id', 'tx_hash'],
@@ -585,8 +724,12 @@ export class TransactionsService {
       this.taptoolsService.invalidateWalletCache(transaction.user.address);
     }
 
+    if (assetIds && assetIds.length === 0) return 0;
+    const onlyIds = assetIds ? { id: In(assetIds) } : {};
+
     const assets = await this.assetRepository.find({
       where: {
+        ...onlyIds,
         transaction: { id: transaction.id },
         status: AssetStatus.PENDING, // Only lock pending assets
         deleted: false,
@@ -599,10 +742,21 @@ export class TransactionsService {
       return 0;
     }
 
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<
+      Vault,
+      | 'id'
+      | 'chain_type'
+      | 'acquire_reserve'
+      | 'require_reserved_cost_ada'
+      | 'require_reserved_cost_usd'
+      | 'total_assets_cost_ada'
+      | 'total_assets_cost_usd'
+      | 'total_acquired_value_ada'
+    > = await this.vaultRepository.findOne({
       where: { id: transaction.vault_id },
       select: [
         'id',
+        'chain_type',
         'acquire_reserve',
         'require_reserved_cost_ada',
         'require_reserved_cost_usd',
@@ -623,6 +777,7 @@ export class TransactionsService {
     const now = new Date();
     await this.assetRepository.update(
       {
+        ...onlyIds,
         transaction: { id: transaction.id },
         status: AssetStatus.PENDING,
         deleted: false,
@@ -634,7 +789,6 @@ export class TransactionsService {
       }
     );
 
-    // Calculate and update vault values
     const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(transaction.vault_id);
 
     await this.vaultRepository.update(vault.id, {
@@ -642,6 +796,7 @@ export class TransactionsService {
       require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
       total_assets_cost_ada: assetsPrices.totalValueAda,
       total_assets_cost_usd: assetsPrices.totalValueUsd,
+      total_assets_cost_eth: assetsPrices.totalValueEth,
       total_acquired_value_ada: assetsPrices.totalAcquiredAda,
     });
 
@@ -729,6 +884,7 @@ export class TransactionsService {
             require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
             total_assets_cost_ada: assetsPrices.totalValueAda,
             total_assets_cost_usd: assetsPrices.totalValueUsd,
+            total_assets_cost_eth: assetsPrices.totalValueEth,
             total_acquired_value_ada: assetsPrices.totalAcquiredAda,
           });
 
@@ -865,10 +1021,11 @@ export class TransactionsService {
   private async updateExpansionProposalAssetCount(vaultId: string): Promise<void> {
     try {
       // Check if vault is in expansion status
-      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'expansion_phase_start'],
-      });
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'chain_type'> =
+        await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'vault_status', 'expansion_phase_start', 'chain_type'],
+        });
 
       if (!vault || vault.vault_status !== VaultStatus.expansion) {
         // Not in expansion mode, nothing to update
@@ -926,6 +1083,21 @@ export class TransactionsService {
       await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
 
       this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
+
+      // For EVM vaults: signal closeAssetWindow when asset max is hit so the on-chain
+      // asset window closes immediately rather than waiting for the configured duration.
+      const assetMax = expansionProposal.metadata.expansion.assetMax;
+      if (
+        vault.chain_type === ChainType.robinhood &&
+        assetMax &&
+        !expansionProposal.metadata.expansion.noMax &&
+        currentAssetCount >= assetMax
+      ) {
+        this.logger.log(
+          `EVM vault ${vaultId} hit expansion asset max (${currentAssetCount}/${assetMax}) — emitting closeAssetWindow`
+        );
+        this.eventEmitter.emit('vault.expansion.asset_max_reached', { vaultId });
+      }
     } catch (error) {
       this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
       // Don't throw - this is a secondary operation that shouldn't fail the main transaction

@@ -10,6 +10,7 @@ import {
   ClaimTransactionDto,
   CurrentEpochEstimateDto,
   CurrentEpochResponseDto,
+  LinkedWalletClaimsDto,
   EpochDto,
   EpochsResponseDto,
   PrepareClaimResponseDto,
@@ -23,13 +24,17 @@ import {
   WalletVaultDetailsDto,
   WalletVaultTimelineDto,
 } from './dto/rewards.dto';
-import { RewardClaimProxy } from './services/reward-claim-proxy.service';
+import { CardanoSwapVerifier } from './services/cardano-swap-verifier.service';
+import { EvmSwapVerifier } from './services/evm-swap-verifier.service';
+import { RewardClaimProxy, type EvmDistributorClaimDto } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { Vault } from '@/database/vault.entity';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
+import { WalletLinkService } from '@/modules/users/wallet-link.service';
 import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
+import { ChainType } from '@/types/vault.types';
 
 /**
  * Public rewards controller for l4va-api.
@@ -45,6 +50,9 @@ export class RewardsController {
   constructor(
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly rewardClaimProxy: RewardClaimProxy,
+    private readonly walletLinkService: WalletLinkService,
+    private readonly evmSwapVerifier: EvmSwapVerifier,
+    private readonly cardanoSwapVerifier: CardanoSwapVerifier,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>
   ) {}
@@ -53,13 +61,10 @@ export class RewardsController {
    * POST /rewards/widget-swap
    * Called by the frontend DexHunter widget onSuccess callback.
    *
-   * Only tracks swaps involving Vault Tokens (VT):
-   * - Extracts policy IDs from token_id_in/token_id_out
-   * - Queries vaults table to match against vault policy_ids
-   * - If VT is involved, indexes event with vault_id (vault-scoped)
-   * - Non-VT swaps are acknowledged but not indexed
-   *
-   * This ensures swap rewards are vault-centric and tied to specific vaults.
+   * Only the tx hash is taken from the body. The swap is verified on-chain (Cardano: Blockfrost,
+   * Robinhood: RPC receipt): the caller must have made the transaction and it must move a vault
+   * token to or from the caller's wallet. The event is always credited to the authenticated user
+   * and scoped to that vault; anything else is acknowledged but not indexed.
    */
   @UseGuards(AuthGuard)
   @Post('widget-swap')
@@ -73,80 +78,76 @@ export class RewardsController {
     vaultId?: string;
     vaultName?: string;
   }> {
-    const swaps: WidgetSwapItemData[] = Array.isArray(body?.data)
-      ? body.data
-      : body?.tx_hash
-        ? [body as WidgetSwapItemData]
-        : [];
-
-    // Find successful swap: if tx_hash exists, the swap was successful
-    // Also normalize field names for DexHunter compatibility (token_in/out → token_id_in/out)
-    const successfulSwap = swaps.find(swap => {
-      return !!swap?.tx_hash;
-    });
-
-    if (!successfulSwap) {
-      return { indexed: false, reason: 'no transaction hash found' };
+    if (body?.chainType === ChainType.robinhood) {
+      return this.trackEvmWidgetSwap(req, body);
     }
 
-    // Normalize DexHunter field names for backward compatibility
-    const normalizedSwap = {
-      ...successfulSwap,
-      token_id_in: successfulSwap.token_id_in || (successfulSwap as any).token_in || '',
-      token_id_out: successfulSwap.token_id_out || (successfulSwap as any).token_out || '',
-    };
+    // Cardano (DexHunter widget): nothing in the body is trusted beyond the tx hash. The swap is
+    // verified on-chain (Blockfrost) and always credited to the caller — same rules as Robinhood.
+    const txHash = body?.tx_hash ?? (Array.isArray(body?.data) ? body.data.find(s => s?.tx_hash)?.tx_hash : undefined);
+    if (!txHash) return { indexed: false, reason: 'no transaction hash found' };
 
-    // Extract policy IDs from token units (first 56 characters)
-    const extractPolicyId = (tokenUnit: string): string | null => {
-      if (!tokenUnit || tokenUnit === '' || tokenUnit.toLowerCase() === 'lovelace') {
-        return null; // ADA has no policy ID
-      }
-      // Cardano policy IDs are 56 characters (28 bytes hex-encoded)
-      return tokenUnit.length >= 56 ? tokenUnit.substring(0, 56) : tokenUnit;
-    };
+    const swap = await this.cardanoSwapVerifier.verify(txHash, req.user.sub);
+    if (swap.ok === false) return { indexed: false, reason: swap.reason };
 
-    const policyIdIn = extractPolicyId(normalizedSwap.token_id_in);
-    const policyIdOut = extractPolicyId(normalizedSwap.token_id_out);
-
-    // Check if either token is a VT (matches a vault's policy_id)
-    const policyIds = [policyIdIn, policyIdOut].filter(Boolean);
-    if (policyIds.length === 0) {
-      return { indexed: false, reason: 'no vault tokens involved (ADA-only swap)' };
-    }
-
-    const vault: Pick<Vault, 'id' | 'script_hash' | 'name'> = await this.vaultRepository.findOne({
-      where: policyIds.map(policyId => ({ script_hash: policyId })),
-      select: ['id', 'script_hash', 'name'],
-    });
-
-    if (!vault) {
-      return { indexed: false, reason: 'no vault tokens involved' };
-    }
-
-    // Index VT swap event (vault-scoped)
+    const item = Array.isArray(body?.data) ? body.data.find(s => s?.tx_hash === txHash) : (body as WidgetSwapItemData);
     const event = await this.rewardEventProducer.indexEvent({
-      walletAddress: normalizedSwap.user_address || req.user.address,
-      vaultId: vault.id,
+      walletAddress: req.user.address,
+      vaultId: swap.vault.id,
       eventType: RewardActivityType.WIDGET_SWAP,
-      txHash: normalizedSwap.tx_hash,
+      txHash: txHash.toLowerCase(),
       units: 1,
       metadata: {
-        dex: normalizedSwap.dex,
-        tokenIn: normalizedSwap.token_id_in,
-        tokenOut: normalizedSwap.token_id_out,
-        amountIn: normalizedSwap.amount_in,
-        expectedOutput: normalizedSwap.expected_output,
-        vaultName: vault.name,
-        vaultPolicyId: vault.script_hash,
+        dex: item?.dex,
+        side: swap.side,
+        vtUnit: swap.vtUnit,
+        vtDelta: swap.vtDelta,
+        vaultName: swap.vault.name,
+        vaultPolicyId: swap.vault.script_hash,
       },
     });
 
     return {
       indexed: !!event,
       eventId: event?.id,
-      vaultId: vault.id,
-      vaultName: vault.name,
+      vaultId: swap.vault.id,
+      vaultName: swap.vault.name,
     };
+  }
+
+  /**
+   * Robinhood (Uniswap widget): nothing in the body is trusted beyond the tx
+   * hash. The swap is verified on-chain and always credited to the caller.
+   */
+  private async trackEvmWidgetSwap(
+    req: AuthRequest,
+    body: WidgetSwapEventData
+  ): Promise<{ indexed: boolean; reason?: string; eventId?: string; vaultId?: string; vaultName?: string }> {
+    const txHash = body.tx_hash ?? body.data?.find(swap => swap?.tx_hash)?.tx_hash;
+    if (!txHash) return { indexed: false, reason: 'no transaction hash found' };
+
+    const swap = await this.evmSwapVerifier.verify(txHash, req.user.address);
+    if (swap.ok === false) return { indexed: false, reason: swap.reason };
+
+    const event = await this.rewardEventProducer.indexEvent({
+      walletAddress: req.user.address.toLowerCase(),
+      vaultId: swap.vault.id,
+      eventType: RewardActivityType.WIDGET_SWAP,
+      txHash: txHash.toLowerCase(),
+      units: 1,
+      metadata: {
+        dex: 'uniswap',
+        chain: ChainType.robinhood,
+        side: swap.side,
+        vaultToken: swap.vaultToken,
+        vtAmount: swap.vtAmount,
+        router: swap.router,
+        blockNumber: swap.blockNumber,
+        vaultName: swap.vault.name,
+      },
+    });
+
+    return { indexed: !!event, eventId: event?.id, vaultId: swap.vault.id, vaultName: swap.vault.name };
   }
 
   // ============================================================================
@@ -248,6 +249,24 @@ export class RewardsController {
     return this.rewardClaimProxy.getAvailableClaims(walletAddress);
   }
 
+  /**
+   * GET /rewards/me/claims/by-chain
+   * Read-only rewards overview per chain for wallets linked by verified email.
+   * Without a linked wallet only the current wallet's chain is returned.
+   * Claiming still goes through the wallet (and chain) where rewards were earned.
+   */
+  @UseGuards(AuthGuard)
+  @Get('me/claims/by-chain')
+  async getClaimsByChain(@Request() req: AuthRequest): Promise<LinkedWalletClaimsDto[]> {
+    const wallets = await this.walletLinkService.getLinkedWallets(req.user.sub);
+    return Promise.all(
+      wallets.map(async wallet => ({
+        ...wallet,
+        claims: await this.rewardClaimProxy.getAvailableClaims(wallet.address),
+      }))
+    );
+  }
+
   @UseGuards(AuthGuard)
   @Get('me/claims/claimable')
   async getClaimableAmount(@Request() req: AuthRequest): Promise<ClaimsSummaryDto> {
@@ -327,6 +346,37 @@ export class RewardsController {
   ): Promise<CancelClaimResponseDto> {
     const result = await this.rewardClaimProxy.cancelClaim(req.user.address, body.reservationId);
     return { cancelled: result.success, message: result.message };
+  }
+
+  /**
+   * POST /rewards/me/claims/evm
+   * Robinhood Chain claim. Fully server-side: reserve + treasury ERC-20 transfer.
+   * Unlike Cardano, the user does not sign a transaction.
+   */
+  @UseGuards(AuthGuard)
+  @Post('me/claims/evm')
+  async claimEvmRewards(
+    @Request() req: AuthRequest,
+    @Body()
+    body: {
+      epochIds?: string[];
+      claimImmediate?: boolean;
+      claimVested?: boolean;
+    }
+  ): Promise<SubmitClaimResponseDto> {
+    return this.rewardClaimProxy.claimEvm(req.user.address, body);
+  }
+
+  /**
+   * GET /rewards/me/claims/evm-distributor
+   * Robinhood Chain claim via the L4VARewardsDistributor contract. Returns the
+   * arguments for `claim(account, cumulativeAmount, proof)`; the wallet sends the
+   * transaction. Replaces POST /rewards/me/claims/evm once the distributor is live.
+   */
+  @UseGuards(AuthGuard)
+  @Get('me/claims/evm-distributor')
+  async getEvmDistributorClaim(@Request() req: AuthRequest): Promise<EvmDistributorClaimDto> {
+    return this.rewardClaimProxy.getEvmDistributorClaim(req.user.address);
   }
 
   // ============================================================================

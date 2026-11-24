@@ -1,0 +1,32 @@
+{
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
+  "rootDir": "../..",
+  "testEnvironment": "node",
+  "testRegex": "test/lifecycle/.*\\.spec\\.ts$",
+  "modulePathIgnorePatterns": [
+    "<rootDir>/dist"
+  ],
+  "transform": {
+    "^.+\\.(t|j)s$": [
+      "ts-jest",
+      {
+        "tsconfig": "<rootDir>/test/lifecycle/tsconfig.json",
+        "isolatedModules": true
+      }
+    ]
+  },
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/src/$1",
+    "^src/(.*)$": "<rootDir>/src/$1"
+  },
+  "globalSetup": "<rootDir>/test/lifecycle/global-setup.ts",
+  "testTimeout": 120000,
+  "maxWorkers": 1,
+  "setupFiles": [
+    "<rootDir>/test/lifecycle/setup-env.ts"
+  ]
+}

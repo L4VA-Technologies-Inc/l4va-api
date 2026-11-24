@@ -1,3 +1,5 @@
+import { ChainType } from '@/types/vault.types';
+
 export enum RewardActivityType {
   ASSET_CONTRIBUTION = 'asset_contribution',
   TOKEN_ACQUIRE = 'token_acquire',
@@ -7,6 +9,14 @@ export enum RewardActivityType {
   WIDGET_SWAP = 'widget_swap',
   GOVERNANCE_PROPOSAL = 'governance_proposal',
   GOVERNANCE_VOTE = 'governance_vote',
+}
+
+/**
+ * Reversal outbox events — not scored activities. `contribution_cancelled`: a contribution was
+ * cancelled (refunded) on-chain, so l4va-rewards withdraws the reward event it produced.
+ */
+export enum RewardReversalType {
+  CONTRIBUTION_CANCELLED = 'contribution_cancelled',
 }
 
 export enum EpochStatus {
@@ -121,6 +131,9 @@ export interface WidgetSwapItemData {
 
 export interface WidgetSwapEventData {
   data?: WidgetSwapItemData[];
+
+  /** 'robinhood' for the Uniswap widget; omitted by the Cardano DexHunter widget. */
+  chainType?: ChainType;
 
   // Backward compatibility for flat payloads
   amount_in?: string;
