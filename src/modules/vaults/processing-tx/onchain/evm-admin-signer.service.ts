@@ -346,7 +346,13 @@ export class EvmAdminSigner {
     // Gas, fees and chain id are reads: take them from the read transport (with its fallbacks), so
     // a rate-limited primary does not stop the send before anything is signed. Only the broadcast
     // below goes to the single write node (see buildEvmWriteTransport).
-    const prepared = await prepareTransactionRequest(this.publicClient, { account, nonce, ...request });
+    // The clients here are untyped (`any`), so viem cannot infer the chain/account generics and
+    // its parameter type collapses to one demanding `kzg`; the request itself is a plain call.
+    const prepared = await prepareTransactionRequest(this.publicClient, {
+      account,
+      nonce,
+      ...request,
+    } as unknown as Parameters<typeof prepareTransactionRequest>[1]);
     const serializedTransaction = (await account.signTransaction(prepared)) as Hex;
     const hash = keccak256(serializedTransaction);
 
