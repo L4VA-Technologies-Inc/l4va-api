@@ -28,6 +28,7 @@ import {
   acquireExpansionIsFull,
   latestOutstandingAcquireDeadline,
 } from '@/modules/vaults/processing-tx/onchain/evm-acquire-signatures';
+import { isExpansionWindowTooShortReason } from '@/modules/vaults/processing-tx/onchain/evm-admin-signer.service';
 import { EvmAirdropOrchestrator } from '@/modules/vaults/processing-tx/onchain/evm-airdrop-orchestrator.service';
 import {
   EmptyAllocationError,
@@ -2996,8 +2997,31 @@ export class LifecycleService {
       // unnecessary pricing work.)
       const existing = await snapshotsRepo.findOne({
         where: { vault_id: vault.id, cycle_id: cycleId.toString() },
-        select: ['id', 'status'],
+        select: ['id', 'status', 'failure_reason', 'submit_tx_hash'],
       });
+      // A closeCycle refused in simulation with ExpansionWindowTooShort (V13 24 h minimum) sent
+      // nothing, yet older code marked its snapshot `failed`, which nothing retries. The cycle is
+      // still Active on-chain (checked above), so rebuild it: prices are refreshed and the close
+      // runs once the minimum has passed (the commit step waits for it).
+      if (
+        existing?.status === EvmSnapshotStatus.failed &&
+        !existing.submit_tx_hash &&
+        isExpansionWindowTooShortReason(existing.failure_reason)
+      ) {
+        const reset = await snapshotsRepo.update(
+          { id: existing.id, status: EvmSnapshotStatus.failed },
+          {
+            status: EvmSnapshotStatus.calculated,
+            failure_reason: 'closeCycle refused before the V13 expansion minimum; rebuilding',
+          }
+        );
+        if (!reset.affected) continue;
+        existing.status = EvmSnapshotStatus.calculated;
+        this.logger.warn(
+          `EVM snapshot ${existing.id} (vault=${vault.id} cycle=${cycleId}) failed on ExpansionWindowTooShort — ` +
+            `reset to calculated for a rebuild`
+        );
+      }
       if (existing && existing.status !== EvmSnapshotStatus.calculated) continue;
 
       this.processingVaults.add(vault.id);
