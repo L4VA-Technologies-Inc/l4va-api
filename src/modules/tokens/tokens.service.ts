@@ -94,11 +94,6 @@ export class TokensService {
     return this.seed;
   }
 
-  private loadCardanoSeed(): CardanoSeed[] {
-    // Always re-read — seed is small and may be refreshed with images/metadata
-    return this.loadJson<CardanoSeed[]>('cardano-memecoins.json');
-  }
-
   private async getFxRates() {
     const [ethUsd, adaUsd] = await Promise.all([
       this.priceService.getEthPrice().catch(() => 3000),
@@ -137,15 +132,11 @@ export class TokensService {
     return listItem;
   }
 
-  /** Seed first, then mainnet Blockfrost (policy ID or full unit). */
+  /** Resolve via mainnet Blockfrost (policy ID or full unit). */
   private async resolveCardanoCoin(id: string): Promise<CardanoSeed> {
     const needle = String(id || '')
       .trim()
       .toLowerCase();
-    const seed = this.loadCardanoSeed();
-    const fromSeed = seed.find(c => c.id.toLowerCase() === needle || c.policy_id.toLowerCase() === needle);
-    if (fromSeed) return fromSeed;
-
     if (!/^[0-9a-f]{56,}$/i.test(needle)) {
       throw new NotFoundException(`Cardano token ${id} not found`);
     }
