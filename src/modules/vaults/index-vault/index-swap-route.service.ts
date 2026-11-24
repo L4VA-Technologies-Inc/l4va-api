@@ -32,6 +32,7 @@ import {
 } from '@/modules/vaults/processing-tx/onchain/evm-protocol-versions';
 import {
   allowedPoolIds,
+  GUARDED_SWAP_ADAPTER_ABI,
   disallowedPool,
   guardedPoolOf,
   isGuardedSwapAdapter,
@@ -352,6 +353,37 @@ export class IndexSwapRouteService {
     return adapter.toLowerCase() as Address;
   }
 
+  /**
+   * The guarded adapter's daily sell cap for `vault` selling `asset` (native = zero address):
+   * the share it may sell per 24 h and how much it may sell right now. `guarded: false` when the
+   * vault's adapter has no cap. Lets the UI keep a swap proposal within what execution allows.
+   */
+  async sellCap(
+    vault: NonNullable<VaultRouteRef> & { contract_address: string },
+    asset: Address
+  ): Promise<{ guarded: boolean; capBps: number | null; remaining: string | null }> {
+    const adapter = resolveVaultSwapAdapter(vault, this.adapter);
+    const client = this.contractReader.publicClient;
+    if (!adapter || !(await isGuardedSwapAdapter(client, adapter as Address))) {
+      return { guarded: false, capBps: null, remaining: null };
+    }
+    const [capBps, remaining] = (await Promise.all([
+      client.readContract({
+        address: adapter,
+        abi: GUARDED_SWAP_ADAPTER_ABI,
+        functionName: 'capBpsFor',
+        args: [asset],
+      }),
+      client.readContract({
+        address: adapter,
+        abi: GUARDED_SWAP_ADAPTER_ABI,
+        functionName: 'remainingCap',
+        args: [vault.contract_address as Address, asset],
+      }),
+    ])) as [number, bigint];
+    return { guarded: true, capBps: Number(capBps), remaining: remaining.toString() };
+  }
+
   // ---------------------------------------------------------------------------
   // Quotes
   // ---------------------------------------------------------------------------
@@ -382,7 +414,9 @@ export class IndexSwapRouteService {
 
     const adapter = (swapper ?? this.adapter ?? NATIVE).toLowerCase() as Address;
     const guard =
-      !opts.ignoreAllowlist && adapter !== NATIVE && (await isGuardedSwapAdapter(this.contractReader.publicClient, adapter))
+      !opts.ignoreAllowlist &&
+      adapter !== NATIVE &&
+      (await isGuardedSwapAdapter(this.contractReader.publicClient, adapter))
         ? adapter
         : null;
 
@@ -832,9 +866,7 @@ export class IndexSwapRouteService {
     };
 
     const legs: Array<[Address, Address]> = [[assetIn, assetOut]];
-    const hubs = this.hubTokens.filter(
-      h => !sameAddress(h, asV3(assetIn)) && !sameAddress(h, asV3(assetOut))
-    );
+    const hubs = this.hubTokens.filter(h => !sameAddress(h, asV3(assetIn)) && !sameAddress(h, asV3(assetOut)));
     for (const hub of hubs) legs.push([assetIn, hub], [hub, assetOut]);
     const byLeg = legs.map(([a, b]) => candidates(a, b));
     const allowed = await allowedPoolIds(
@@ -854,9 +886,11 @@ export class IndexSwapRouteService {
             .catch(() => null)
         )
       );
-      return quoted
-        .filter((q): q is { hop: RouteHop; out: bigint } => q !== null && q.out > 0n)
-        .sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))[0] ?? null;
+      return (
+        quoted
+          .filter((q): q is { hop: RouteHop; out: bigint } => q !== null && q.out > 0n)
+          .sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))[0] ?? null
+      );
     };
 
     const options: Array<{ hops: RouteHop[]; out: bigint }> = [];

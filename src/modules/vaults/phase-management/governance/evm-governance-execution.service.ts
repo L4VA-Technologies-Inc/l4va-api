@@ -698,7 +698,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       const assetIn: Address = action.inputAsset ?? action.policyId ?? '0x0000000000000000000000000000000000000000';
       const assetOut: Address =
         action.expectedOutputAsset ?? action.outputAsset ?? '0x0000000000000000000000000000000000000000';
-      const amountIn = BigInt(action.amount ?? action.quantity ?? 0);
+      let amountIn = BigInt(action.amount ?? action.quantity ?? 0);
 
       if (amountIn === 0n || assetIn.toLowerCase() === assetOut.toLowerCase()) continue;
 
@@ -708,6 +708,26 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
         if (await this.swapService.isOperationIdUsed(vaultAddress, operationId)) {
           this.logger.log(`Proposal ${proposal.id} action[${i}]: operation already executed — skipping`);
           continue;
+        }
+
+        // The guarded adapter caps how much of an asset a vault may sell per 24 h. The UI keeps
+        // proposals within the cap at creation, but the allowance can shrink before execution:
+        // sell what is allowed now instead of failing the whole proposal.
+        const cap = await this.swapRouteService.sellCap(vaultRow, assetIn.toLowerCase() as Address);
+        if (cap.guarded && cap.remaining != null && amountIn > BigInt(cap.remaining)) {
+          const remaining = BigInt(cap.remaining);
+          if (remaining === 0n) {
+            return this.fail(
+              proposal,
+              `Proposal ${proposal.id} action[${i}]: daily sell limit (${(cap.capBps ?? 0) / 100}%) for ${assetIn} ` +
+                'is used up — nothing can be sold right now'
+            );
+          }
+          this.logger.warn(
+            `Proposal ${proposal.id} action[${i}]: ${amountIn} ${assetIn} exceeds the daily sell limit; ` +
+              `selling the allowed ${remaining} instead`
+          );
+          amountIn = remaining;
         }
 
         // Same routing as index rebalances: the floor comes from simulating this exact swap.
