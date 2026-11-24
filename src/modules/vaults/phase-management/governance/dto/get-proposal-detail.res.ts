@@ -211,6 +211,49 @@ export class StakingTokenDto extends ProposalAssetDto {
   market?: string;
 }
 
+/** What one Robinhood swap action actually did on-chain (absent until it ran). */
+export class EvmSwapExecutionDto {
+  @Expose()
+  @ApiProperty({ description: 'Transaction status', example: 'confirmed' })
+  status: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Swap transaction hash', nullable: true })
+  txHash: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Input amount, base units', nullable: true })
+  amountIn: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Output before the protocol fee, base units', nullable: true })
+  amountOut: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Protocol fee, base units of the output token', nullable: true })
+  fee: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetInSymbol: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetInDecimals: number | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetOutSymbol: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  assetOutDecimals: number | null;
+
+  @Expose()
+  @ApiProperty({ description: 'When the swap was last updated (confirmed or failed)' })
+  executedAt: Date;
+}
+
 export class MarketplaceActionDetailDto {
   @Expose()
   @ApiProperty({ description: 'Asset ID', example: '123e4567-e89b-12d3-a456-426614174000' })
@@ -320,6 +363,11 @@ export class MarketplaceActionDetailDto {
   @Expose()
   @ApiPropertyOptional({ description: 'EVM: human-readable token amount', example: '1.5' })
   humanAmount?: string;
+
+  @Expose()
+  @Type(() => EvmSwapExecutionDto)
+  @ApiPropertyOptional({ type: EvmSwapExecutionDto, nullable: true, description: 'EVM: the swap this action ran' })
+  execution?: EvmSwapExecutionDto | null;
 
   // EVM close-position fields
   @Expose()

@@ -16,15 +16,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
-import {
-  createPublicClient,
-  defineChain,
-  getAddress,
-  isAddress,
-  isAddressEqual,
-  recoverMessageAddress,
-  type Hex,
-} from 'viem';
+import { createPublicClient, getAddress, isAddress, isAddressEqual, recoverMessageAddress, type Hex } from 'viem';
 import { createSiweMessage, generateSiweNonce } from 'viem/siwe';
 
 import { PriceService } from '../price/price.service';
@@ -34,7 +26,7 @@ import { userVaultMembership } from '../vaults/utils/user-vault-membership';
 import { LoginReq } from './dto/login.req';
 import { LoginRes } from './dto/login.res';
 
-import { buildEvmTransport } from '@/common/evm/evm-transport';
+import { buildEvmTransport, robinhoodChain } from '@/common/evm/evm-transport';
 import { Vault } from '@/database/vault.entity';
 import { transformImageToUrl } from '@/helpers';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
@@ -221,12 +213,7 @@ export class AuthService {
   private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
     if (!this.evmPublicClient) {
       const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
-      const chain = defineChain({
-        id: Number(this.configService.get<number>('EVM_CHAIN_ID', 46630)),
-        name: 'Robinhood',
-        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-        rpcUrls: { default: { http: [rpcUrl] } },
-      });
+      const chain = robinhoodChain(Number(this.configService.get<string>('EVM_CHAIN_ID') || 46630), rpcUrl);
       this.evmPublicClient = createPublicClient({ chain, transport: buildEvmTransport(this.configService, rpcUrl) });
     }
     return this.evmPublicClient;
