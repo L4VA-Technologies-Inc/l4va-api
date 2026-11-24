@@ -293,13 +293,9 @@ export class TokensService {
     });
   }
 
-  /** Cardano Tokens list — DexHunter seed + L4VA vault tokens (NAV on testnet, DEX LP on mainnet). */
+  /** Cardano Tokens list — L4VA vault tokens only (NAV on testnet, DEX LP on mainnet). Demo seed is not listed. */
   async getCardanoMemecoins() {
-    const [seed, vaultTokens] = await Promise.all([
-      this.enrichCardanoCoins(this.loadCardanoSeed()),
-      this.marketService.listVaultLpTokens(ChainType.cardano),
-    ]);
-    return [...vaultTokens, ...seed];
+    return this.marketService.listVaultLpTokens(ChainType.cardano);
   }
 
   async getCardanoMemecoinOhlc(id: string, days = 7) {
