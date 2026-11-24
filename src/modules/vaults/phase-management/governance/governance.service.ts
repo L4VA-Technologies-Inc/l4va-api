@@ -626,6 +626,7 @@ export class GovernanceService {
       | 'evm_protocol_version'
       | 'contract_address'
       | 'vault_archetype'
+      | 'evm_current_cycle_id'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -641,6 +642,7 @@ export class GovernanceService {
         'evm_protocol_version',
         'contract_address',
         'vault_archetype',
+        'evm_current_cycle_id',
       ],
       relations: ['assets_whitelist'],
     });
@@ -663,6 +665,19 @@ export class GovernanceService {
       vault.vault_status !== VaultStatus.acquire_expansion
     ) {
       throw new BadRequestException('Governance is only available for locked, expansion, or acquire expansion vaults');
+    }
+
+    // While an index vault's basket buy is trading, the raised ETH shows as free but is being spent:
+    // a proposal created now could plan around (or reserve) it. Only the running buy blocks.
+    if (
+      vault.chain_type === ChainType.robinhood &&
+      vault.vault_archetype === VaultArchetype.index_weighted &&
+      vault.vault_status === VaultStatus.locked
+    ) {
+      const buying = await this.indexVaultService.basketBuyInProgress(vault);
+      if (buying) {
+        throw new BadRequestException(`Proposals open once ${buying} finishes. Please try again in a few minutes.`);
+      }
     }
 
     // A passed termination is a one-way door: the vault's DB status only becomes `terminating`

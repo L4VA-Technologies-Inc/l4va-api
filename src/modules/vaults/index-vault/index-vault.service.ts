@@ -482,17 +482,20 @@ export class IndexVaultService implements OnApplicationBootstrap {
     rebalances: ReturnType<IndexVaultService['serializeRebalance']>[];
     /** Smallest trade the rebalancer makes, in wei; legs below it are skipped. */
     minTradeNative: string;
+    /** Set while the basket buy after a lock is trading; proposals wait for it. */
+    setupPending: string | null;
   }> {
     const vault = await this.requireIndexVault(vaultId);
     const hasHoldings = !!vault.contract_address && HOLDING_STATUSES.includes(vault.vault_status);
 
-    const [portfolio, rebalances] = await Promise.all([
+    const [portfolio, rebalances, setupPending] = await Promise.all([
       hasHoldings ? this.getPortfolio(vault) : Promise.resolve(null),
       this.rebalanceRepository.find({
         where: { vault_id: vaultId },
         order: { created_at: 'DESC' },
         take: 10,
       }),
+      vault.vault_status === VaultStatus.locked ? this.basketBuyInProgress(vault) : Promise.resolve(null),
     ]);
 
     return {
@@ -501,6 +504,7 @@ export class IndexVaultService implements OnApplicationBootstrap {
       portfolio,
       rebalances: rebalances.map(r => this.serializeRebalance(r)),
       minTradeNative: MIN_TRADE_NATIVE.toString(),
+      setupPending,
     };
   }
 
@@ -1030,6 +1034,26 @@ export class IndexVaultService implements OnApplicationBootstrap {
    * locked, so a queued expansion opened earlier would skip them. Returns why to wait, or null.
    * A basket buy that failed for good does not block (it would block forever).
    */
+  /**
+   * Set while the last cycle's basket buy is trading right now. Proposals wait only for this: until
+   * it ends the raised ETH shows as free while it is being spent. A buy that has not started, or
+   * failed and waits for a retry, does not block governance.
+   */
+  async basketBuyInProgress(
+    vault: Pick<Vault, 'id' | 'evm_current_cycle_id' | 'vault_archetype'>
+  ): Promise<string | null> {
+    const cycleId = vault.evm_current_cycle_id;
+    if (!cycleId || vault.vault_archetype !== VaultArchetype.index_weighted) return null;
+    const executing = await this.rebalanceRepository.exist({
+      where: {
+        vault_id: vault.id,
+        idempotency_key: `initial:cycle:${cycleId}`,
+        status: IndexRebalanceStatus.executing,
+      },
+    });
+    return executing ? 'the basket for the last cycle is being bought' : null;
+  }
+
   async postLockWorkPending(
     vault: Pick<Vault, 'id' | 'evm_current_cycle_id' | 'vault_archetype'>
   ): Promise<string | null> {
