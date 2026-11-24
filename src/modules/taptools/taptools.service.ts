@@ -21,6 +21,14 @@ import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 import { TapToolsClient } from './taptools.client';
 
 import { buildEvmTransport } from '@/common/evm/evm-transport';
+import {
+  fetchJsonWithRetry,
+  isBaseDown,
+  isBlockedHttpError,
+  markBaseDown,
+  resolveBlockscoutBases,
+  withBlockscoutKey,
+} from '@/common/http/http-retry';
 import { Asset } from '@/database/asset.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -2877,6 +2885,51 @@ export class TaptoolsService {
     }
   }
 
+  /** Blockscout ERC-1155 holdings per wallet (all contracts), cached briefly: one call serves every contract. */
+  private readonly erc1155HoldingsCache = new Map<string, { at: number; byContract: Map<string, bigint[]> }>();
+
+  /**
+   * Token ids of `contract` that `wallet` holds, from Blockscout's `/addresses/{wallet}/nft`.
+   * Null when no Blockscout base answered (the caller then falls back to the log scan).
+   */
+  private async blockscoutErc1155Ids(contract: string, wallet: string): Promise<bigint[] | null> {
+    const key = wallet.toLowerCase();
+    const cached = this.erc1155HoldingsCache.get(key);
+    if (cached && Date.now() - cached.at < 60_000) return cached.byContract.get(contract.toLowerCase()) ?? [];
+
+    for (const base of resolveBlockscoutBases(this.configService)) {
+      if (isBaseDown(base)) continue;
+      try {
+        const byContract = new Map<string, bigint[]>();
+        let params: Record<string, string> | null = {};
+        // Bounded: a wallet with more than ~500 ERC-1155 items is not a case we need to page through.
+        for (let page = 0; params && page < 10; page++) {
+          const url = withBlockscoutKey(new URL(`${base}/addresses/${wallet}/nft`), this.configService);
+          url.searchParams.set('type', 'ERC-1155');
+          for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
+          const res = await fetchJsonWithRetry<{
+            items?: Array<{ id?: string; token?: { address_hash?: string; address?: string } }>;
+            next_page_params?: Record<string, string> | null;
+          }>(url.toString(), { retries: 2 });
+          for (const item of res.items ?? []) {
+            const token = (item.token?.address_hash ?? item.token?.address ?? '').toLowerCase();
+            if (!token || item.id == null) continue;
+            const ids = byContract.get(token) ?? [];
+            ids.push(BigInt(item.id));
+            byContract.set(token, ids);
+          }
+          params = res.next_page_params ?? null;
+        }
+        this.erc1155HoldingsCache.set(key, { at: Date.now(), byContract });
+        return byContract.get(contract.toLowerCase()) ?? [];
+      } catch (err) {
+        if (isBlockedHttpError(err)) markBaseDown(base);
+        this.logger.warn(`Blockscout ERC-1155 lookup failed on ${base} for ${wallet}: ${(err as Error).message}`);
+      }
+    }
+    return null;
+  }
+
   private async getErc1155Assets(
     client: any,
     contractAddress: string,
@@ -2890,27 +2943,32 @@ export class TaptoolsService {
       const addr = contractAddress as Address;
       const wallet = walletAddress as Address;
 
-      // Discover token IDs via TransferSingle and TransferBatch event logs
-      const [singleLogs, batchLogs] = await Promise.all([
-        client
-          .getLogs({
-            address: addr,
-            topics: [ERC1155_TRANSFER_SINGLE_TOPIC, null, null, wallet as any],
-            fromBlock: 0n,
-            toBlock: 'latest',
-          })
-          .catch(() => []),
-        client
-          .getLogs({
-            address: addr,
-            topics: [ERC1155_TRANSFER_BATCH_TOPIC, null, null, wallet as any],
-            fromBlock: 0n,
-            toBlock: 'latest',
-          })
-          .catch(() => []),
-      ]);
+      // Token ids the wallet holds: from Blockscout when it answers. The log scan below is the
+      // fallback; it asks for the whole history in one request, which RPCs with a block-range
+      // limit reject, so on its own it found nothing on mainnet.
+      const fromBlockscout = await this.blockscoutErc1155Ids(contractAddress, walletAddress);
+      const [singleLogs, batchLogs] = fromBlockscout
+        ? [[], []]
+        : await Promise.all([
+            client
+              .getLogs({
+                address: addr,
+                topics: [ERC1155_TRANSFER_SINGLE_TOPIC, null, null, wallet as any],
+                fromBlock: 0n,
+                toBlock: 'latest',
+              })
+              .catch(() => []),
+            client
+              .getLogs({
+                address: addr,
+                topics: [ERC1155_TRANSFER_BATCH_TOPIC, null, null, wallet as any],
+                fromBlock: 0n,
+                toBlock: 'latest',
+              })
+              .catch(() => []),
+          ]);
 
-      const tokenIdSet = new Set<bigint>();
+      const tokenIdSet = new Set<bigint>(fromBlockscout ?? []);
 
       // Parse TransferSingle: data = abi.encode(uint256 id, uint256 value)
       for (const log of singleLogs) {
