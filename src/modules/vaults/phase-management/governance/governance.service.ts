@@ -625,6 +625,7 @@ export class GovernanceService {
       | 'chain_id'
       | 'evm_protocol_version'
       | 'contract_address'
+      | 'vault_archetype'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: [
@@ -639,6 +640,7 @@ export class GovernanceService {
         'chain_id',
         'evm_protocol_version',
         'contract_address',
+        'vault_archetype',
       ],
       relations: ['assets_whitelist'],
     });
@@ -1203,6 +1205,17 @@ export class GovernanceService {
 
         // EVM vaults: store actions directly — no Cardano asset DB lookups needed.
         if (vault.chain_type === ChainType.robinhood) {
+          // Index vaults trade only through re-weights: a one-off swap moves the basket off its
+          // weights, the next rebalance trades it back, and it bypasses the re-weight cap checks.
+          // Closing an LP position is not a trade and stays allowed.
+          if (
+            vault.vault_archetype === VaultArchetype.index_weighted &&
+            actions.some(a => (a as Record<string, any>)?.exec !== 'CLOSE_POSITION')
+          ) {
+            throw new BadRequestException(
+              'Index vaults cannot create swap proposals. Change the basket with a re-weight proposal instead.'
+            );
+          }
           this.indexVaultService.assertMarketSwapOutputsAllowed(actions as Array<Record<string, any>>);
           // Mainnet token trades run through the Uniswap swap adapter; refuse
           // any that cannot be routed now rather than after the vote.
