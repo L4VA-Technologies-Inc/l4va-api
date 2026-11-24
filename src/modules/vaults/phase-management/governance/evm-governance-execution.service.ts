@@ -22,6 +22,7 @@ import { EvmVaultOnchainStatus, VAULT_ABI } from '../../processing-tx/onchain/va
 import { EvmDistributionService } from './evm-distribution.service';
 import { ProposalConditionsChangedError } from './proposal-errors';
 
+import { isRpcRateLimitError } from '@/common/evm/evm-transport';
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
@@ -68,6 +69,20 @@ const txDeadline = (): bigint => BigInt(Math.floor(Date.now() / 1000)) + TX_DEAD
 @Injectable()
 export class EvmGovernanceExecutionService implements OnModuleInit {
   private readonly logger = new Logger(EvmGovernanceExecutionService.name);
+
+  /**
+   * Why the last attempt of a proposal failed, set by {@link fail} and stored on the proposal by
+   * `executeProposal`, so retries, the UI and the "gave up" alert can show it. A proposal is
+   * executed under a lock, so one entry per proposal id cannot be overwritten by another run.
+   */
+  private readonly failures = new Map<string, string>();
+
+  /** Log an execution failure, remember it for the proposal, and return `false`. */
+  private fail(proposal: Proposal, message: string): false {
+    this.logger.error(message);
+    this.failures.set(proposal.id, message);
+    return false;
+  }
   private readonly isTestnet: boolean;
   private readonly mockAdapterAddress: Address | null;
   /**
@@ -148,6 +163,47 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       await this.markWaiting(proposal, wait);
       return false;
     }
+
+    this.failures.delete(proposal.id);
+    try {
+      const ok = await this.dispatch(proposal, vault);
+      if (ok) return true;
+      const reason = this.failures.get(proposal.id) ?? null;
+      if (reason && isRpcRateLimitError(reason)) {
+        // The RPC node was overloaded, nothing about the proposal is wrong: wait and continue on
+        // the next tick without spending the retry budget. Steps already done are not repeated
+        // (each swap has its own operation id; termination resumes at the step it reached).
+        await this.markWaiting(proposal, {
+          reason: 'the RPC node is rate-limiting requests; continuing shortly',
+          userFriendlyMessage: 'Execution is paused for a moment and will continue automatically.',
+        });
+        return false;
+      }
+      await this.recordFailure(proposal, reason);
+      return false;
+    } finally {
+      this.failures.delete(proposal.id);
+    }
+  }
+
+  /** Stores why an attempt failed, so retries, the UI and the "gave up" alert can show it. */
+  private async recordFailure(proposal: Proposal, lastError: string | null): Promise<void> {
+    try {
+      const fresh = await this.proposalRepository.findOne({ where: { id: proposal.id }, select: ['id', 'metadata'] });
+      const metadata = { ...(fresh?.metadata ?? proposal.metadata) };
+      metadata.executionError = {
+        message: lastError ?? `Execution of ${proposal.proposalType} returned no result and logged no error.`,
+        timestamp: new Date().toISOString(),
+        errorCode: 'EVM_EXECUTION_FAILED',
+        userFriendlyMessage: 'Execution failed; it will be retried automatically.',
+      };
+      await this.proposalRepository.update({ id: proposal.id }, { metadata });
+    } catch (err) {
+      this.logger.warn(`Proposal ${proposal.id}: could not store the execution error — ${(err as Error).message}`);
+    }
+  }
+
+  private async dispatch(proposal: Proposal, vault: EvmGovernanceVaultRef): Promise<boolean> {
     switch (proposal.proposalType) {
       case ProposalType.MARKETPLACE_ACTION:
       case ProposalType.BUY_SELL:
@@ -359,8 +415,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       this.logger.log(`EVM expansion cycle opened for vault ${vault.id} cycleId=${cycleId} tx=${txHash}`);
       return true;
     } catch (err) {
-      this.logger.error(`EVM expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`);
-      return false;
+      return this.fail(
+        proposal,
+        `EVM expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`
+      );
     }
   }
 
@@ -406,10 +464,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       this.logger.log(`EVM acquire expansion cycle opened for vault ${vault.id} cycleId=${cycleId} tx=${txHash}`);
       return true;
     } catch (err) {
-      this.logger.error(
+      return this.fail(
+        proposal,
         `EVM acquire expansion openCycle failed for proposal ${proposal.id}: ${(err as Error).message}`
       );
-      return false;
     }
   }
 
@@ -478,11 +536,11 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       const adapter = (action.adapter ?? this.nftSaleAdapterAddress) as Address | undefined;
 
       if (!nftContract || !adapter) {
-        this.logger.error(
+        return this.fail(
+          proposal,
           `Proposal ${proposal.id} action[${index}]: NFT sale needs nftContract and an adapter ` +
             `(none passed and EVM_NFT_SALE_ADAPTER_ADDRESS is unset)`
         );
-        return false;
       }
 
       const kind = Number(action.assetKind ?? action.kind) as EvmAssetKind.ERC721 | EvmAssetKind.ERC1155;
@@ -520,10 +578,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
       };
 
       if (params.deadline === 0n) {
-        this.logger.error(
+        return this.fail(
+          proposal,
           `Proposal ${proposal.id} action[${index}]: NFT sale needs a non-zero deadline — the vault rejects 0`
         );
-        return false;
       }
 
       try {
@@ -533,8 +591,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
             `gross=${res.grossProceeds} net=${res.netProceeds} tx=${res.txHash}`
         );
       } catch (err) {
-        this.logger.error(`Proposal ${proposal.id} action[${index}]: sellNft failed — ${(err as Error).message}`);
-        return false;
+        return this.fail(
+          proposal,
+          `Proposal ${proposal.id} action[${index}]: sellNft failed — ${(err as Error).message}`
+        );
       }
     }
 
@@ -605,24 +665,21 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     });
     const vaultAddress = vaultRow?.contract_address as Address | undefined;
     if (!vaultRow || !vaultAddress) {
-      this.logger.error(`Proposal ${proposal.id}: vault ${vault.id} has no contract address`);
-      return false;
+      return this.fail(proposal, `Proposal ${proposal.id}: vault ${vault.id} has no contract address`);
     }
 
     let adapter: Address;
     try {
       adapter = this.swapRouteService.tradingAdapterFor(vaultRow);
     } catch (err) {
-      this.logger.error(`Cannot execute market proposal ${proposal.id}: ${(err as Error).message}`);
-      return false;
+      return this.fail(proposal, `Cannot execute market proposal ${proposal.id}: ${(err as Error).message}`);
     }
 
     let tradeFeeBps: number;
     try {
       tradeFeeBps = await this.swapService.tradeFeeBps(vaultAddress);
     } catch (err) {
-      this.logger.error(`Proposal ${proposal.id}: failed to read trade fee — ${(err as Error).message}`);
-      return false;
+      return this.fail(proposal, `Proposal ${proposal.id}: failed to read trade fee — ${(err as Error).message}`);
     }
 
     await this.assertSwapsStillCovered(proposal, vault.id, vaultAddress, actions);
@@ -632,10 +689,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
       // Swap-adapter trades leave no position behind, so there is nothing to close.
       if (action.exec === 'CLOSE_POSITION') {
-        this.logger.error(
+        return this.fail(
+          proposal,
           `Proposal ${proposal.id} action[${i}]: CLOSE_POSITION is not supported — trades settle in one swap`
         );
-        return false;
       }
 
       const assetIn: Address = action.inputAsset ?? action.policyId ?? '0x0000000000000000000000000000000000000000';
@@ -673,8 +730,7 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
             `grossOut=${res.grossOut} fee=${res.fee} tx=${res.txHash}`
         );
       } catch (err) {
-        this.logger.error(`Proposal ${proposal.id} action[${i}]: swap failed — ${(err as Error).message}`);
-        return false;
+        return this.fail(proposal, `Proposal ${proposal.id} action[${i}]: swap failed — ${(err as Error).message}`);
       }
     }
 
@@ -687,10 +743,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     actions: any[]
   ): Promise<boolean> {
     if (!this.mockAdapterAddress) {
-      this.logger.error(
+      return this.fail(
+        proposal,
         `EVM_MOCK_ADAPTER_ADDRESS is not configured — cannot execute testnet market proposal ${proposal.id}`
       );
-      return false;
     }
 
     for (let i = 0; i < actions.length; i++) {
@@ -717,8 +773,10 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
 
         this.logger.log(`Proposal ${proposal.id} action[${i}]: openPosition via MockAdapter — ok`);
       } catch (err) {
-        this.logger.error(`Proposal ${proposal.id} action[${i}]: openPosition failed — ${(err as Error).message}`);
-        return false;
+        return this.fail(
+          proposal,
+          `Proposal ${proposal.id} action[${i}]: openPosition failed — ${(err as Error).message}`
+        );
       }
     }
 
@@ -802,15 +860,14 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     } catch (err) {
       const message = (err as Error).message;
       if (prepared) {
-        this.logger.error(
+        return this.fail(
+          proposal,
           `Proposal ${proposal.id}: vault ${vault.id} is in TerminationPreparing but the rate commit failed — ` +
             `${message}. The vault cannot open cycles or terminate until beginTermination succeeds; ` +
             `fix the cause and call retryTermination.`
         );
-      } else {
-        this.logger.error(`Proposal ${proposal.id}: EVM termination failed before preparing — ${message}`);
       }
-      return false;
+      return this.fail(proposal, `Proposal ${proposal.id}: EVM termination failed before preparing — ${message}`);
     }
   }
 
