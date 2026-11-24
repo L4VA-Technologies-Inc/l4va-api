@@ -1750,26 +1750,28 @@ export class VaultsService {
 
     // Calculate if acquire window is currently active
     // Considers both acquire and expansion windows for acquire_expansion status
-    const BUTTON_DISABLE_THRESHOLD_MS = 300000; // 5 minutes buffer before window closes
     const now = Date.now();
+    // Action buttons close a little before the window does, so a tx sent at the last moment
+    // still lands in time: 2 minutes, none for short (< 1 h, staging) windows.
+    // Keep in sync with l4va-client VaultProfileView (phaseCloseBufferMs).
+    const closeBuffer = (durationMs: number): number => (Number(durationMs) >= 3_600_000 ? 120_000 : 0);
+    const isOpen = (start: Date | string, durationMs: number): boolean =>
+      new Date(start).getTime() + Number(durationMs) > now + closeBuffer(durationMs);
     let isAcquireWindowActive = false;
 
     if (vault.vault_status === VaultStatus.acquire && vault.acquire_phase_start && vault.acquire_window_duration) {
-      const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
-      isAcquireWindowActive = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      isAcquireWindowActive = isOpen(vault.acquire_phase_start, vault.acquire_window_duration);
     } else if (vault.vault_status === VaultStatus.acquire_expansion) {
       // For acquire_expansion: button is active if EITHER acquire OR expansion window is open
       let acquireWindowOpen = false;
       let expansionWindowOpen = false;
 
       if (vault.acquire_phase_start && vault.acquire_window_duration) {
-        const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
-        acquireWindowOpen = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+        acquireWindowOpen = isOpen(vault.acquire_phase_start, vault.acquire_window_duration);
       }
 
       if (vault.expansion_phase_start && vault.expansion_duration) {
-        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
-        expansionWindowOpen = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+        expansionWindowOpen = isOpen(vault.expansion_phase_start, vault.expansion_duration);
       }
 
       isAcquireWindowActive = acquireWindowOpen || expansionWindowOpen;
@@ -1785,20 +1787,17 @@ export class VaultsService {
       vault.contribution_phase_start &&
       vault.contribution_duration
     ) {
-      const contributionEndTime = new Date(vault.contribution_phase_start).getTime() + vault.contribution_duration;
-      isContributionWindowActive = contributionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      isContributionWindowActive = isOpen(vault.contribution_phase_start, vault.contribution_duration);
     } else if (
       vault.vault_status === VaultStatus.expansion &&
       vault.expansion_phase_start &&
       vault.expansion_duration
     ) {
-      const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
-      isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      isContributionWindowActive = isOpen(vault.expansion_phase_start, vault.expansion_duration);
     } else if (vault.vault_status === VaultStatus.acquire_expansion) {
       // For acquire_expansion: contribution button is active if expansion window is open
       if (vault.expansion_phase_start && vault.expansion_duration) {
-        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
-        isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+        isContributionWindowActive = isOpen(vault.expansion_phase_start, vault.expansion_duration);
       }
     }
 
