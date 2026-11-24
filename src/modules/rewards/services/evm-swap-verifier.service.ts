@@ -4,7 +4,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
   createPublicClient,
-  defineChain,
   getAddress,
   isAddress,
   isHash,
@@ -14,7 +13,7 @@ import {
   type PublicClient,
 } from 'viem';
 
-import { buildEvmTransport } from '@/common/evm/evm-transport';
+import { buildEvmTransport, robinhoodChain } from '@/common/evm/evm-transport';
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { ChainType } from '@/types/vault.types';
@@ -108,12 +107,7 @@ export class EvmSwapVerifier {
   private getClient(): PublicClient {
     if (!this.client) {
       const rpcUrl = this.configService.get<string>('EVM_RPC_URL');
-      const chain = defineChain({
-        id: Number(this.configService.get<number>('EVM_CHAIN_ID', 46630)),
-        name: 'Robinhood',
-        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-        rpcUrls: { default: { http: [rpcUrl] } },
-      });
+      const chain = robinhoodChain(Number(this.configService.get<string>('EVM_CHAIN_ID') || 46630), rpcUrl);
       this.client = createPublicClient({
         chain,
         transport: buildEvmTransport(this.configService, rpcUrl),

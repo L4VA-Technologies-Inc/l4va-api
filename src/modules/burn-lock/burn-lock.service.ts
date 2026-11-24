@@ -4,7 +4,6 @@ import { Cron } from '@nestjs/schedule';
 import {
   createPublicClient,
   createWalletClient,
-  defineChain,
   formatEther,
   getAddress,
   type Account,
@@ -15,7 +14,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import { BURN_LOCK_ABI } from './burn-lock.abi';
 
-import { buildEvmTransport, buildEvmWriteTransport } from '@/common/evm/evm-transport';
+import { buildEvmTransport, robinhoodChain, buildEvmWriteTransport } from '@/common/evm/evm-transport';
 
 /** Keep the keeper topped up above this; below it every run logs a warning. */
 const LOW_BALANCE_WEI = 200_000_000_000_000n; // 0.0002 ETH ≈ 200+ burns at current gas
@@ -86,12 +85,7 @@ export class BurnLockService implements OnModuleInit {
     this.address = getAddress(rawAddress as string);
     this.account = privateKeyToAccount(privateKey as Hex);
 
-    const chain = defineChain({
-      id: chainId,
-      name: 'Robinhood Chain',
-      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-      rpcUrls: { default: { http: [rpcUrl as string] } },
-    });
+    const chain = robinhoodChain(chainId, rpcUrl);
     this.publicClient = createPublicClient({ chain, transport: buildEvmTransport(this.configService, rpcUrl) });
     this.walletClient = createWalletClient({
       account: this.account,

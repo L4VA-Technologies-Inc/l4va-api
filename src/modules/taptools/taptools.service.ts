@@ -6,7 +6,7 @@ import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
-import { createPublicClient, defineChain, formatUnits, parseAbi, type Address } from 'viem';
+import { createPublicClient, formatUnits, parseAbi, type Address } from 'viem';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
@@ -20,7 +20,7 @@ import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summa
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 import { TapToolsClient } from './taptools.client';
 
-import { buildEvmTransport } from '@/common/evm/evm-transport';
+import { buildEvmTransport, robinhoodChain } from '@/common/evm/evm-transport';
 import {
   fetchJsonWithRetry,
   isBaseDown,
@@ -2661,19 +2661,27 @@ export class TaptoolsService {
     }
   }
 
-  private getEvmPublicClient(): ReturnType<typeof createPublicClient> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private evmPublicClient: any = null;
+
+  /**
+   * Shared read client: built once, with Multicall3 in the chain definition (so `client.multicall`
+   * works) and concurrent reads batched into one eth_call.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private getEvmPublicClient(): any {
+    if (this.evmPublicClient) return this.evmPublicClient;
     const evmRpcUrl = this.configService.get<string>('EVM_RPC_URL');
     if (!evmRpcUrl) {
       throw new HttpException('EVM RPC URL not configured', 500);
     }
-    const chainId = this.configService.get<number>('EVM_CHAIN_ID', 46630);
-    const robinhoodChain = defineChain({
-      id: chainId,
-      name: 'Robinhood',
-      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-      rpcUrls: { default: { http: [evmRpcUrl] } },
+    const chainId = Number(this.configService.get<string | number>('EVM_CHAIN_ID') || 46630);
+    this.evmPublicClient = createPublicClient({
+      chain: robinhoodChain(chainId, evmRpcUrl),
+      transport: buildEvmTransport(this.configService, evmRpcUrl),
+      batch: { multicall: true },
     });
-    return createPublicClient({ chain: robinhoodChain, transport: buildEvmTransport(this.configService, evmRpcUrl) });
+    return this.evmPublicClient;
   }
 
   /**
