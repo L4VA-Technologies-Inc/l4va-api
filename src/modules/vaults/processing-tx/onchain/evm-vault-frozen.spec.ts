@@ -1,7 +1,17 @@
 import { describe, expect, it } from '@jest/globals';
-import { ContractFunctionRevertedError, ContractFunctionZeroDataError, toFunctionSelector, type Address } from 'viem';
+import {
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  encodeErrorResult,
+  toFunctionSelector,
+  type Address,
+} from 'viem';
 
-import { isVaultFrozenRevert } from './evm-admin-signer.service';
+import {
+  expansionWindowTooShortRevert,
+  isExpansionWindowTooShortReason,
+  isVaultFrozenRevert,
+} from './evm-admin-signer.service';
 import { readVaultFrozen } from './evm-pause.service';
 import { VAULT_ABI } from './vault.abi';
 
@@ -67,5 +77,37 @@ describe('readVaultFrozen', () => {
       throw new Error('fetch failed');
     });
     await expect(readVaultFrozen(down, VAULT)).rejects.toThrow('fetch failed');
+  });
+});
+
+describe('expansionWindowTooShortRevert', () => {
+  const data = encodeErrorResult({ abi: VAULT_ABI, errorName: 'ExpansionWindowTooShort', args: [1_795_539_759n] });
+
+  it('returns earliestClose for the decoded revert', () => {
+    const err = new ContractFunctionRevertedError({ abi: VAULT_ABI, data, functionName: 'closeCycle' });
+    expect(expansionWindowTooShortRevert(err)).toBe(1_795_539_759n);
+  });
+
+  it('recognises it by selector when the ABI in use lacks the error', () => {
+    const err = new ContractFunctionRevertedError({ abi: [], data, functionName: 'closeCycle' });
+    expect(expansionWindowTooShortRevert(err)).toBeNull();
+  });
+
+  it('ignores other reverts and non-viem errors', () => {
+    expect(expansionWindowTooShortRevert(reverted(toFunctionSelector('VaultFrozen()')))).toBeUndefined();
+    expect(expansionWindowTooShortRevert(new Error('ExpansionWindowTooShort'))).toBeUndefined();
+  });
+});
+
+describe('isExpansionWindowTooShortReason', () => {
+  it('matches the stored stage failure (undecoded selector) and decoded names', () => {
+    expect(
+      isExpansionWindowTooShortReason(
+        'broadcast: The contract function "closeCycle" reverted with the following signature:\n0x89ecb62c'
+      )
+    ).toBe(true);
+    expect(isExpansionWindowTooShortReason('broadcast: ... ExpansionWindowTooShort(1795539759)')).toBe(true);
+    expect(isExpansionWindowTooShortReason('broadcast: NotAuthority')).toBe(false);
+    expect(isExpansionWindowTooShortReason(null)).toBe(false);
   });
 });
