@@ -45,6 +45,7 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { TokenVerification } from '@/database/token-verification.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
@@ -59,6 +60,7 @@ import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance
 import { EvmContractReader } from '@/modules/vaults/processing-tx/onchain/evm-contract-reader.service';
 import { EvmLiquidityService } from '@/modules/vaults/processing-tx/onchain/evm-liquidity.service';
 import { EvmLpStatus } from '@/modules/vaults/processing-tx/onchain/evm-lp.config';
+import { buildOperationId } from '@/modules/vaults/processing-tx/onchain/evm-position.service';
 import {
   acquireExpansionVtForWei,
   readV13DistributionTiming,
@@ -117,6 +119,21 @@ const EMPTY_VAULT_TERMINATION_REASON =
  */
 const UNPAID_REWEIGHT_GRACE_MS = 60 * 60_000;
 
+/** What one Robinhood swap action of a proposal actually did on-chain. */
+interface EvmSwapExecution {
+  status: string;
+  txHash: string | null;
+  amountIn: string | null;
+  /** Output before the protocol fee, in the output token's base units. */
+  amountOut: string | null;
+  fee: string | null;
+  assetInSymbol: string | null;
+  assetInDecimals: number | null;
+  assetOutSymbol: string | null;
+  assetOutDecimals: number | null;
+  executedAt: Date;
+}
+
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
@@ -172,6 +189,8 @@ export class GovernanceService {
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(TokenVerification)
     private readonly tokenVerificationRepository: Repository<TokenVerification>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
@@ -2719,6 +2738,49 @@ export class GovernanceService {
     }
   }
 
+  /**
+   * The swap each Robinhood market action ran, keyed by action index: matched by its operation id,
+   * which is derived from (vault, proposal, action index), so swaps recorded before
+   * `metadata.proposalId` existed are found too.
+   */
+  private async getEvmSwapExecutions(proposal: Proposal): Promise<Map<number, EvmSwapExecution>> {
+    const actions: any[] = proposal.metadata?.marketplaceActions ?? [];
+    const out = new Map<number, EvmSwapExecution>();
+    if (!actions.some(a => a?.market === 'Uniswap' && a?.inputAsset)) return out;
+
+    const indexByOperationId = new Map<string, number>();
+    actions.forEach((_, i) =>
+      indexByOperationId.set(buildOperationId(proposal.vaultId, proposal.id, i).toLowerCase(), i)
+    );
+    const txs = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .where('tx.vault_id = :vaultId', { vaultId: proposal.vaultId })
+      .andWhere('tx.type = :type', { type: TransactionType.evmSwap })
+      .andWhere(`LOWER(tx.metadata->>'operationId') IN (:...ids)`, { ids: [...indexByOperationId.keys()] })
+      .orderBy('tx.created_at', 'ASC')
+      .getMany();
+
+    for (const tx of txs) {
+      const m: any = tx.metadata ?? {};
+      const index = indexByOperationId.get(String(m.operationId ?? '').toLowerCase());
+      if (index === undefined) continue;
+      // A later attempt of the same action (after a failed broadcast) replaces an earlier one.
+      out.set(index, {
+        status: tx.status,
+        txHash: tx.tx_hash ?? null,
+        amountIn: m.amountIn ?? null,
+        amountOut: m.grossOut ?? null,
+        fee: m.fee ?? null,
+        assetInSymbol: m.assetInSymbol ?? null,
+        assetInDecimals: m.assetInDecimals ?? null,
+        assetOutSymbol: m.assetOutSymbol ?? null,
+        assetOutDecimals: m.assetOutDecimals ?? null,
+        executedAt: tx.updated_at ?? tx.created_at,
+      });
+    }
+    return out;
+  }
+
   async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
@@ -2927,7 +2989,13 @@ export class GovernanceService {
 
     // Transform marketplace actions with enriched asset data and WayUp URLs
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
-    const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
+    const swapExecutions = await this.getEvmSwapExecutions(proposal);
+    const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map((action, index) => {
+      // Robinhood swaps: no catalogue asset, but the swap this action ran (if it ran).
+      if (action.market === 'Uniswap' && action.inputAsset) {
+        return { ...action, execution: swapExecutions.get(index) ?? null };
+      }
+
       const isBuy = action.exec === ExecType.BUY;
       const isOffer = action.exec === ExecType.OFFER;
       const isCancelOffer = action.exec === ExecType.CANCEL_OFFER;
