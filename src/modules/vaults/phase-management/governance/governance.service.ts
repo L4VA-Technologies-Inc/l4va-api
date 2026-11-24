@@ -3983,74 +3983,69 @@ export class GovernanceService {
         excludeExtraneousValues: true,
       });
 
+      const isRh = vault.chain_type === ChainType.robinhood;
+      const fmt = (raw: bigint, decimals: number): string => {
+        const value = Number(formatUnits(raw, decimals));
+        return value >= 1
+          ? value.toLocaleString('en', { maximumFractionDigits: 4 })
+          : new Intl.NumberFormat('en', { maximumSignificantDigits: 4 }).format(value);
+      };
+
+      // One on-chain read (batched into Multicall3) serves the asset list and the empty-vault check.
+      // No pricing here: termination distributes balances, so quoting ~50 basket assets is wasted time.
+      const [free, lp, lpValidation] = await Promise.all([
+        isRh && vault.contract_address
+          ? this.evmFreeTerminationAssets(vault.contract_address).catch(err => {
+              this.logger.warn(
+                `Termination preview: free-asset read failed for ${vault.id}: ${(err as Error).message}`
+              );
+              return null;
+            })
+          : Promise.resolve(null),
+        isRh ? this.evmLiquidityService.getVaultLp(vault.id).catch(() => null) : Promise.resolve(null),
+        this.validateLpForTermination(vault),
+      ]);
+
       // Index vaults buy their basket on-chain, so those holdings never appear as contributed
-      // rows above. Show what termination actually distributes: the live ERC-20 balances and
-      // the native ETH reserve. Ids are display-only (proposal creation does not read them).
-      if (vault.chain_type === ChainType.robinhood && vault.vault_archetype === VaultArchetype.index_weighted) {
-        const { portfolio } = await this.indexVaultService.getOverview(vaultId);
-        const fmt = (raw: string, decimals: number) => {
-          const value = Number(formatUnits(BigInt(raw || '0'), decimals));
-          return value >= 1
-            ? value.toLocaleString('en', { maximumFractionDigits: 4 })
-            : new Intl.NumberFormat('en', {
-                maximumSignificantDigits: 4,
-              }).format(value);
-        };
-        for (const a of portfolio.assets) {
-          if (BigInt(a.balance || '0') === 0n) continue;
+      // rows above. Show what termination actually distributes: the free ERC-20 balances.
+      // Ids are display-only (proposal creation does not read them).
+      if (free && vault.vault_archetype === VaultArchetype.index_weighted) {
+        const targets = new Map((vault.index_config?.targets ?? []).map(t => [t.assetAddress.toLowerCase(), t]));
+        const lpToken = lp?.lpToken?.toLowerCase();
+        for (const { token, amount } of free.erc20) {
+          const address = token.toLowerCase();
+          if (amount === 0n || address === lpToken) continue;
+          const target = targets.get(address);
           assetDtos.push({
-            id: `onchain:${a.assetAddress}`,
-            name: a.symbol,
-            policy_id: a.assetAddress,
-            asset_id: a.assetAddress,
-            quantity: a.balance,
-            formattedQuantity: fmt(a.balance, a.decimals),
-            imageUrl: a.image,
-            type: AssetType.FT,
-          } as unknown as AssetBuySellDto);
-        }
-        if (BigInt(portfolio.reserve.valueNative || '0') > 0n) {
-          assetDtos.push({
-            id: 'onchain:native',
-            name: 'ETH',
-            policy_id: '',
-            asset_id: '',
-            quantity: portfolio.reserve.valueNative,
-            formattedQuantity: fmt(portfolio.reserve.valueNative, 18),
-            imageUrl: null,
+            id: `onchain:${address}`,
+            name: target?.symbol ?? address.slice(0, 8),
+            policy_id: address,
+            asset_id: address,
+            quantity: amount.toString(),
+            formattedQuantity: fmt(amount, target?.decimals ?? 18),
+            imageUrl: target?.image ?? null,
             type: AssetType.FT,
           } as unknown as AssetBuySellDto);
         }
       }
 
-      let evm: GetTerminationAssetsDto['evm'];
-      if (vault.chain_type === ChainType.robinhood) {
-        // Non-index RH vaults: native ETH in custody is distributed too, but never appears
-        // as a contributed asset row (index vaults already list their reserve above).
-        if (vault.vault_archetype !== VaultArchetype.index_weighted && vault.contract_address) {
-          try {
-            // Free ETH only: pots reserved for open distributions are not part of termination.
-            const wei = (await this.evmFreeTerminationAssets(vault.contract_address)).native;
-            if (wei > 0n) {
-              assetDtos.push({
-                id: 'onchain:native',
-                name: 'ETH',
-                policy_id: '',
-                asset_id: '',
-                quantity: wei.toString(),
-                formattedQuantity: new Intl.NumberFormat('en', {
-                  maximumSignificantDigits: 4,
-                }).format(Number(formatUnits(wei, 18))),
-                imageUrl: null,
-                type: AssetType.FT,
-              } as unknown as AssetBuySellDto);
-            }
-          } catch (err) {
-            this.logger.warn(`Termination preview: ETH balance read failed for ${vault.id}: ${(err as Error).message}`);
-          }
-        }
+      // Native ETH in custody is distributed too, but never appears as a contributed asset row.
+      // Free ETH only: pots reserved for open distributions are not part of termination.
+      if (free && free.native > 0n) {
+        assetDtos.push({
+          id: 'onchain:native',
+          name: 'ETH',
+          policy_id: '',
+          asset_id: '',
+          quantity: free.native.toString(),
+          formattedQuantity: fmt(free.native, 18),
+          imageUrl: null,
+          type: AssetType.FT,
+        } as unknown as AssetBuySellDto);
+      }
 
-        const lp = await this.evmLiquidityService.getVaultLp(vault.id).catch(() => null);
+      let evm: GetTerminationAssetsDto['evm'];
+      if (isRh) {
         evm = {
           lp:
             lp && lp.status === EvmLpStatus.provided
@@ -4064,14 +4059,7 @@ export class GovernanceService {
         };
       }
 
-      // Get LP validation info
-      const lpValidation = await this.validateLpForTermination(vault);
-
-      let emptyVault = false;
-      if (vault.chain_type === ChainType.robinhood && vault.contract_address) {
-        const free = await this.evmFreeTerminationAssets(vault.contract_address).catch(() => null);
-        emptyVault = free !== null && free.native === 0n && free.erc20Count === 0;
-      }
+      const emptyVault = free !== null && free.native === 0n && free.erc20Count === 0;
 
       return {
         assets: assetDtos,
@@ -4145,7 +4133,9 @@ export class GovernanceService {
     }
   }
 
-  private async evmFreeTerminationAssets(vaultAddress: string): Promise<{ native: bigint; erc20Count: number }> {
+  private async evmFreeTerminationAssets(
+    vaultAddress: string
+  ): Promise<{ native: bigint; erc20Count: number; erc20: { token: `0x${string}`; amount: bigint }[] }> {
     const client = this.evmContractReader.publicClient;
     const address = vaultAddress as `0x${string}`;
     const [native, tokens] = await Promise.all([
@@ -4163,7 +4153,11 @@ export class GovernanceService {
           }) as Promise<bigint>
       )
     );
-    return { native, erc20Count: free.filter(f => f > 0n).length };
+    return {
+      native,
+      erc20Count: free.filter(f => f > 0n).length,
+      erc20: tokens.map((token, i) => ({ token, amount: free[i] })),
+    };
   }
 
   private async validateLpForTermination(vault: Vault): Promise<{
