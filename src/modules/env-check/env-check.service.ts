@@ -5,6 +5,8 @@ import { checkEnv, EnvIssue, EnvMap } from './env-check.rules';
 
 import { AlertsService } from '@/modules/alerts/alerts.service';
 
+const PROBE_RATE_LIMIT_ATTEMPTS = 4;
+const PROBE_RATE_LIMIT_DELAY_MS = 5_000;
 const PROBE_TIMEOUT_MS = 8000;
 
 /**
@@ -56,11 +58,7 @@ export class EnvCheckService implements OnApplicationBootstrap {
         const url = env[key]?.trim();
         if (!url || !expectedChainId) return;
         try {
-          const { data } = await axios.post(
-            url,
-            { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] },
-            { timeout: PROBE_TIMEOUT_MS }
-          );
+          const data = await this.probeChainId(url);
           const actual = data?.result ? Number(BigInt(data.result)) : NaN;
           if (actual !== expectedChainId) {
             issues.push({
@@ -122,6 +120,30 @@ export class EnvCheckService implements OnApplicationBootstrap {
       errors: errors.map(i => `${i.key}: ${i.message}`),
       warnings: issues.filter(i => i.level === 'warn').map(i => `${i.key}: ${i.message}`),
     });
+  }
+
+  /**
+   * eth_chainId on `url`. A 429 means the node is busy, not misconfigured (at startup the API's own
+   * jobs hit it at once), so it is retried a few times, a few seconds apart, before it counts.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async probeChainId(url: string): Promise<any> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const { data } = await axios.post(
+          url,
+          { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] },
+          { timeout: PROBE_TIMEOUT_MS }
+        );
+        return data;
+      } catch (e) {
+        if (axios.isAxiosError(e) && e.response?.status === 429 && attempt < PROBE_RATE_LIMIT_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, PROBE_RATE_LIMIT_DELAY_MS * attempt));
+          continue;
+        }
+        throw e;
+      }
+    }
   }
 
   private httpError(e: unknown): string {
