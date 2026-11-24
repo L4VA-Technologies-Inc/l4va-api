@@ -318,6 +318,20 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
         return null;
       }
 
+      case ProposalType.INDEX_REWEIGHT: {
+        // A re-weight is sized within the daily sell cap at creation, but a swap or rebalance in the
+        // last 24 h can have used part of the window; wait for it to refill instead of failing.
+        const capWait = await this.indexVaultService.reweightCapWait(proposal);
+        return capWait
+          ? {
+              reason: capWait,
+              userFriendlyMessage:
+                'The vault recently traded one of these assets, so part of its daily trading limit is used. ' +
+                'The re-weight runs automatically once the limit refills (within 24 hours).',
+            }
+          : null;
+      }
+
       // Swaps, marketplace actions, staking and re-weights do not wait for an expansion: the contract
       // trades only `availableNativeForOperations` / `availableErc20`, which leave out the open
       // cycle's ETH and refundable contributions, and `swap` runs while a cycle is Active.

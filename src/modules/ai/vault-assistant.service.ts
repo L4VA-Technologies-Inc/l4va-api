@@ -46,6 +46,8 @@ interface AssistantTurnContext {
   basketAssets: IndexSupportedAsset[];
   /** The client's draft before this turn, sanitized against the spec. */
   currentDraft: Record<string, unknown>;
+  /** Fields the user set by hand; whatever the model returns for them is dropped. */
+  lockedFields: Set<string>;
 }
 
 export type VaultAssistantStreamEvent =
@@ -332,10 +334,13 @@ export class VaultAssistantService {
       completion.isLaunchable = false;
     }
 
+    const lockedFields = new Set((request.lockedFields ?? []).filter(field => typeof field === 'string'));
+
     const systemPrompt = buildVaultAssistantPrompt({
       spec,
       presets: presetContext,
       currentDraft,
+      lockedFields: [...lockedFields].filter(field => field in spec.fields || field === 'indexBasket'),
       completion,
       validationErrors: request.validationErrors,
       basketSymbols: basketAssets.map(asset => asset.symbol),
@@ -353,6 +358,7 @@ export class VaultAssistantService {
       }),
       basketAssets,
       currentDraft,
+      lockedFields,
       toolContext: {
         userId,
         chain: request.chain as SpecChain,
@@ -449,6 +455,18 @@ export class VaultAssistantService {
     }
   }
 
+  /**
+   * A field the user set by hand is theirs: the assistant never changes it, whatever the prompt
+   * says or the model returns. The client pins these values too; this keeps the reply honest.
+   */
+  private dropLockedFields(draft: Record<string, unknown>, context: AssistantTurnContext): void {
+    for (const key of Object.keys(draft)) {
+      if (!context.lockedFields.has(key)) continue;
+      this.logger.debug(`Dropped ${key} from the assistant draft: the user set it by hand`);
+      delete draft[key];
+    }
+  }
+
   private async toResponse(
     completion: AssistantCompletion,
     context: AssistantTurnContext,
@@ -460,6 +478,7 @@ export class VaultAssistantService {
       this.logger.warn(`Vault assistant produced rejected values: ${rejected.join('; ')}`);
     }
     if (completion.resetDraft !== true) this.keepEstablishedValues(draft, context);
+    this.dropLockedFields(draft, context);
     const tickerNote = await this.replaceTakenTicker(draft);
 
     const missingFields = Array.isArray(completion.missingFields)
@@ -480,7 +499,9 @@ export class VaultAssistantService {
       // An action only exists because a tool produced it after server-side validation — the model
       // cannot put one here by claiming the vault is ready.
       action: action ?? null,
-      indexBasket: this.resolveBasket(completion.basketSymbols, context.basketAssets),
+      indexBasket: context.lockedFields.has('indexBasket')
+        ? null
+        : this.resolveBasket(completion.basketSymbols, context.basketAssets),
     };
   }
 }

@@ -610,7 +610,8 @@ export class EvmLpExitService {
         assetIn: leg.assetIn,
         amountIn: 1n,
         assetOut: leg.assetOut,
-        minAmountOut: owed,
+        // Vault.swap takes the trade fee from GROSS and floors NET: the floor is owed minus that fee.
+        minAmountOut: owed - (owed * BigInt(await this.swapService.tradeFeeBps(vaultAddress))) / 10_000n,
         deadline: BigInt(Math.floor(Date.now() / 1000) + 600),
         route: '0x',
       });
@@ -814,7 +815,8 @@ export class EvmLpExitService {
           assetIn: leg.assetIn,
           amountIn: 1n,
           assetOut: leg.assetOut,
-          minAmountOut: owed,
+          // Vault.swap takes the trade fee from GROSS and floors NET: the floor is owed minus that fee.
+          minAmountOut: owed - (owed * BigInt(await this.swapService.tradeFeeBps(vaultAddress))) / 10_000n,
           deadline: BigInt(Math.floor(Date.now() / 1000) + 600),
           route: '0x',
         });
