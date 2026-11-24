@@ -489,7 +489,8 @@ export class DexHunterPricingClient {
       // Map DexHunter format to MarketOhlcvPoint format
       // DexHunter response doesn't include timestamps, so generate them based on from/period
       let ohlcvData: MarketOhlcvSeries = result.data.map((candle: any, index: number) => ({
-        time: from + index * intervalDuration,
+        // Prefer DexHunter's own candle timestamp; the series can start after `from`.
+        time: Number.isFinite(Number(candle.unix)) ? Number(candle.unix) : from + index * intervalDuration,
         open: candle.open,
         high: candle.high,
         low: candle.low,

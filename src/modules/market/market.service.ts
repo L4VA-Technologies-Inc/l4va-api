@@ -18,6 +18,13 @@ import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { MarketTokenKind, MarketType } from '@/types/market.types';
 import { ChainType, VAULT_STATUSES_WITH_VT_TOKENS } from '@/types/vault.types';
 
+interface Cardano24hStats {
+  volumeAda: number;
+  highAda: number | null;
+  lowAda: number | null;
+  sparklineAda: number[];
+}
+
 @Injectable()
 export class MarketService implements OnModuleInit {
   private readonly logger = new Logger(MarketService.name);
@@ -79,8 +86,38 @@ export class MarketService implements OnModuleInit {
     }
 
     const items = await queryBuilder.getMany();
-    const holders = await this.holderCountsByVault(items.map(item => item.vault_id));
-    return items.map(item => this.mapVaultMarketToTokenRow(item, adaPrice, ethPrice, holders.get(item.vault_id)));
+    const [holders, stats] = await Promise.all([
+      this.holderCountsByVault(items.map(item => item.vault_id)),
+      Promise.all(items.map(item => this.getCardano24hStats(item))),
+    ]);
+    return items.map((item, i) =>
+      this.mapVaultMarketToTokenRow(item, adaPrice, ethPrice, holders.get(item.vault_id), stats[i])
+    );
+  }
+
+  /**
+   * 24h volume / high / low / sparkline (all in ADA) from DexHunter hourly candles.
+   * Only for mainnet Cardano vaults with an active LP; null when DexHunter has no candles.
+   */
+  private async getCardano24hStats(item: Market): Promise<Cardano24hStats | null> {
+    const vault = item.vault;
+    if (!this.isMainnet || !vault?.has_active_lp || vault.chain_type !== ChainType.cardano) return null;
+    if (!vault.script_hash || !vault.asset_vault_name) return null;
+    try {
+      const candles = await this.dexHunterClient.getTokenOHLCV(vault.script_hash, vault.asset_vault_name, '1h', 24);
+      if (!candles?.length) return null;
+      const highs = candles.map(c => Number(c.high)).filter(v => Number.isFinite(v) && v > 0);
+      const lows = candles.map(c => Number(c.low)).filter(v => Number.isFinite(v) && v > 0);
+      return {
+        volumeAda: candles.reduce((sum, c) => sum + (Number(c.volume) || 0), 0),
+        highAda: highs.length ? Math.max(...highs) : null,
+        lowAda: lows.length ? Math.min(...lows) : null,
+        sparklineAda: candles.map(c => Number(c.close)).filter(v => Number.isFinite(v)),
+      };
+    } catch (error) {
+      this.logger.warn(`24h stats unavailable for vault ${item.vault_id}: ${(error as Error).message}`);
+      return null;
+    }
   }
 
   /**
@@ -147,12 +184,13 @@ export class MarketService implements OnModuleInit {
   /** Single vault token in the same shape as the Tokens table, including swap/copy identity. */
   async getVaultTokenById(id: string) {
     const rawItem = await this.getRawMarketByVaultIdWithRelations(id);
-    const [adaPrice, ethPrice, holders] = await Promise.all([
+    const [adaPrice, ethPrice, holders, stats] = await Promise.all([
       this.priceService.getAdaPrice(),
       this.priceService.getEthPrice(),
       this.holderCountsByVault([rawItem.vault_id]),
+      this.getCardano24hStats(rawItem),
     ]);
-    return this.mapVaultMarketToTokenRow(rawItem, adaPrice, ethPrice, holders.get(rawItem.vault_id));
+    return this.mapVaultMarketToTokenRow(rawItem, adaPrice, ethPrice, holders.get(rawItem.vault_id), stats);
   }
 
   async getMarkets(query: GetMarketsDto): Promise<GetMarketsResponse> {
@@ -525,17 +563,29 @@ export class MarketService implements OnModuleInit {
     });
   }
 
-  private mapVaultMarketToTokenRow(item: Market, adaPrice: number, ethPrice: number, holdersCount?: number) {
+  private mapVaultMarketToTokenRow(
+    item: Market,
+    adaPrice: number,
+    ethPrice: number,
+    holdersCount?: number,
+    stats?: Cardano24hStats | null
+  ) {
     const mapped = this.mapMarketToItem(item, adaPrice);
     const priceUsd = mapped.price_usd;
     const fdvUsd = mapped.fdv_usd;
-    const mcapAda = item.mcap != null ? Number(item.mcap) : null;
+    // `markets.mcap` defaults to 0 when no source knows circulating supply — fall back to FDV then.
+    const mcapAda = item.mcap != null && Number(item.mcap) > 0 ? Number(item.mcap) : null;
     const mcapUsd = mcapAda != null && adaPrice > 0 ? mcapAda * adaPrice : fdvUsd;
     const liqAda = item.totalAdaLiquidity != null ? Number(item.totalAdaLiquidity) : mapped.tvl_ada;
     const liqUsd = liqAda != null && adaPrice > 0 ? liqAda * adaPrice : mapped.tvl_usd;
     const priceEth = priceUsd != null && ethPrice > 0 ? priceUsd / ethPrice : null;
     const fdvEth = fdvUsd != null && ethPrice > 0 ? fdvUsd / ethPrice : null;
     const mcapEth = mcapUsd != null && ethPrice > 0 ? mcapUsd / ethPrice : null;
+    const adaToUsd = (v: number | null | undefined) => (v != null && adaPrice > 0 ? v * adaPrice : null);
+    const usdToEth = (v: number | null) => (v != null && ethPrice > 0 ? v / ethPrice : null);
+    const volume24hUsd = adaToUsd(stats?.volumeAda);
+    const high24hUsd = adaToUsd(stats?.highAda);
+    const low24hUsd = adaToUsd(stats?.lowAda);
     const liqEth = liqUsd != null && ethPrice > 0 ? liqUsd / ethPrice : null;
 
     return {
@@ -553,20 +603,20 @@ export class MarketService implements OnModuleInit {
       fdv: fdvUsd,
       fdv_ada: mapped.fdv_ada,
       fdv_eth: fdvEth,
-      volume_24h: null,
-      volume_24h_ada: null,
-      volume_24h_eth: null,
+      volume_24h: volume24hUsd,
+      volume_24h_ada: stats?.volumeAda ?? null,
+      volume_24h_eth: usdToEth(volume24hUsd),
       liquidity_usd: liqUsd,
       liquidity_ada: liqAda,
       liquidity_eth: liqEth,
       change_24h: mapped.price_change_24h,
-      high_24h: null,
-      high_24h_ada: null,
-      high_24h_eth: null,
-      low_24h: null,
-      low_24h_ada: null,
-      low_24h_eth: null,
-      sparkline: [] as number[],
+      high_24h: high24hUsd,
+      high_24h_ada: stats?.highAda ?? null,
+      high_24h_eth: usdToEth(high24hUsd),
+      low_24h: low24hUsd,
+      low_24h_ada: stats?.lowAda ?? null,
+      low_24h_eth: usdToEth(low24hUsd),
+      sparkline: adaPrice > 0 ? (stats?.sparklineAda ?? []).map(v => v * adaPrice) : ([] as number[]),
       holders_count: holdersCount ?? null,
       source: 'vault' as const,
       asset_class: 'vault_token' as const,

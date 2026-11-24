@@ -1,16 +1,58 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { isAddress, type Address } from 'viem';
 
 import { IndexBasketReq } from './dto/index-basket.dto';
+import { IndexSwapRouteService } from './index-swap-route.service';
 import { IndexVaultService } from './index-vault.service';
 
+import { Vault } from '@/database/vault.entity';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 
 @ApiTags('Index vaults')
 @Controller('vaults')
 export class IndexVaultController {
-  constructor(private readonly indexVaultService: IndexVaultService) {}
+  constructor(
+    private readonly indexVaultService: IndexVaultService,
+    private readonly routeService: IndexSwapRouteService,
+    @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>
+  ) {}
+
+  @Get(':id/swap-cap')
+  @ApiOperation({
+    summary: "How much of an asset the vault's swap adapter lets it sell right now",
+    description:
+      '`capBps` is the share of the vault balance it may sell per 24 h (the allowance refills gradually); ' +
+      '`remaining` is the raw amount sellable now. `guarded: false` means the adapter has no cap. ' +
+      'Native ETH is the zero address.',
+  })
+  @ApiQuery({ name: 'asset', required: true })
+  async getSwapCap(
+    @Param('id', ParseUUIDPipe) vaultId: string,
+    @Query('asset') asset: string
+  ): ReturnType<IndexSwapRouteService['sellCap']> {
+    if (!asset || !isAddress(asset)) throw new BadRequestException(`Invalid asset address: ${asset}`);
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'chain_id', 'evm_protocol_version', 'contract_address'],
+    });
+    if (!vault?.contract_address) throw new NotFoundException('Vault has no on-chain contract');
+    return this.routeService.sellCap(vault, asset.toLowerCase() as Address);
+  }
 
   @Get('index/assets')
   @ApiOperation({
