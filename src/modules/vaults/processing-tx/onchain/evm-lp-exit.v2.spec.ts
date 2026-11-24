@@ -19,7 +19,7 @@ const OLD_CODE = '0x60016002' as Hex;
  * recipient, no `assign`), pulls native back through `Vault.swap` on the V2 exit adapter, and
  * releases the pool VT to the vault (2-argument `releaseToken`) before burning it.
  */
-function setup(opts: { code: Hex; nativeOwed?: bigint; vtOwed?: bigint }) {
+function setup(opts: { code: Hex; nativeOwed?: bigint; vtOwed?: bigint; configuredExit?: Address }) {
   const state = { liquidity: 5n, nativeOwed: 0n, vtOwed: 0n, vaultVt: 0n };
   const proceeds = { native: opts.nativeOwed ?? 2n * 10n ** 18n, vt: opts.vtOwed ?? 1_000n };
 
@@ -55,7 +55,11 @@ function setup(opts: { code: Hex; nativeOwed?: bigint; vtOwed?: bigint }) {
       // The V1 flow that follows runs against no V1 adapter and an empty exit.
       case 'unassignedNative':
       case 'unassignedToken':
+        if (address === EXIT_V2) throw new Error('unassignedNative reverted on V2 exit');
         return 0n;
+      case 'unownedNative':
+        if (address === EXIT_V2) return 0n;
+        throw new Error('not v2 exit');
       default:
         throw new Error(`unexpected read ${functionName}`);
     }
@@ -86,7 +90,7 @@ function setup(opts: { code: Hex; nativeOwed?: bigint; vtOwed?: bigint }) {
     { publicClient: { readContract, getCode: jest.fn(async () => opts.code) } } as any,
     { sendAndConfirm } as any,
     { swap } as any,
-    { get: () => undefined } as any, // no V1 exit adapter configured
+    { get: (k: string) => (k === 'EVM_LP_EXIT_ADAPTER_ADDRESS' ? opts.configuredExit : undefined) } as any,
     {} as any
   );
   const run = () =>
@@ -123,5 +127,19 @@ describe('EvmLpExitService with UniswapV4LiquidityAdapterV2', () => {
     const t = setup({ code: OLD_CODE });
     await expect(t.run()).rejects.toThrow(/cannot burn VT/);
     expect(t.sent.some(s => s.fn === 'releaseToken')).toBe(false);
+  });
+
+  it('V13+: configured lpExitAdapter is the V2 exit — V1 flow is skipped, no unassignedNative call', async () => {
+    const t = setup({ code: V12_CODE, configuredExit: EXIT_V2 });
+    const r = await t.run();
+    expect(t.sent.map(s => s.fn)).toEqual(['withdrawToExit', 'vault.swap', 'releaseToken', 'burnHeldVaultToken']);
+    expect(r.vtBurned).toBe(t.proceeds.vt);
+  });
+
+  it('V13+: retry after a completed V2 exit is a no-op', async () => {
+    const t = setup({ code: V12_CODE, configuredExit: EXIT_V2 });
+    t.state.liquidity = 0n;
+    await t.run();
+    expect(t.sent).toEqual([]);
   });
 });

@@ -258,6 +258,13 @@ const V4_LP_ADAPTER_V2_ABI = [
 const LP_EXIT_ADAPTER_V2_ABI = [
   {
     type: 'function',
+    name: 'unownedNative',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    type: 'function',
     name: 'releaseToken',
     stateMutability: 'nonpayable',
     inputs: [
@@ -318,6 +325,7 @@ export class EvmLpExitService {
   private readonly burnSupport = new Map<string, boolean>();
   /** LP adapter → its V2 exit adapter, or null for a V1 adapter. Adapter code never changes. */
   private readonly exitTargets = new Map<string, Address | null>();
+  private readonly v2ExitAdapters = new Map<string, boolean>();
 
   constructor(
     private readonly contractReader: EvmContractReader,
@@ -464,6 +472,18 @@ export class EvmLpExitService {
         throw new BadRequestException(
           `Vault ${vaultAddress} has v4 LP in a pool and no LiquidityExitAdapter is configured for its protocol ` +
             `version (or EVM_LP_EXIT_ADAPTER_ADDRESS). Refusing: the pool's ETH would not reach holders.`
+        );
+      }
+      return result;
+    }
+
+    // From V13 on, a version's `lpExitAdapter` is a LiquidityExitAdapterV2 (no `unassignedNative`,
+    // no `assign`): the V1 flow below cannot run against it. V2 positions were handled above.
+    if (await this.isV2ExitAdapter(exitAdapter)) {
+      if ((await this.liquidityInPools(vaultAddress)) > 0n) {
+        throw new BadRequestException(
+          `Vault ${vaultAddress} still has v4 LP in a pool after the V2 exit, and its configured exit adapter ` +
+            `${exitAdapter} is a LiquidityExitAdapterV2, which cannot take V1 withdrawals. Refusing.`
         );
       }
       return result;
@@ -685,6 +705,26 @@ export class EvmLpExitService {
     }
 
     return result;
+  }
+
+  /** True when `exitAdapter` is a LiquidityExitAdapterV2 (has `unownedNative()`, V1 has `unassignedNative()`). */
+  async isV2ExitAdapter(exitAdapter: Address): Promise<boolean> {
+    const key = exitAdapter.toLowerCase();
+    const cached = this.v2ExitAdapters.get(key);
+    if (cached !== undefined) return cached;
+    let isV2: boolean;
+    try {
+      await this.contractReader.publicClient.readContract({
+        address: exitAdapter,
+        abi: LP_EXIT_ADAPTER_V2_ABI,
+        functionName: 'unownedNative',
+      });
+      isV2 = true;
+    } catch {
+      isV2 = false;
+    }
+    this.v2ExitAdapters.set(key, isV2);
+    return isV2;
   }
 
   /** The V2 exit adapter of `lpAdapter`, or null when it is a V1 adapter (no `exitAdapter()`). */
