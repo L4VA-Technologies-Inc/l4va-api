@@ -67,7 +67,11 @@ const KNOWN_V4_POOL_MANAGER: Record<number, Address> = {
 export class EvmLpVotingService {
   private readonly logger = new Logger(EvmLpVotingService.name);
   /** Incremental log scans, so daily snapshots only read new blocks. */
-  private readonly poolScans = new Map<string, { nextBlock: bigint; pools: Map<Hex, VtPool> }>();
+  /**
+   * Pools found per vault token. VT can be either side of a pool, so each side has its own cursor;
+   * both advance chunk by chunk, so a scan that fails half way resumes where it stopped.
+   */
+  private readonly poolScans = new Map<string, { nextBlock: Record<'c0' | 'c1', bigint>; pools: Map<Hex, VtPool> }>();
 
   constructor(
     @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
@@ -202,12 +206,15 @@ export class EvmLpVotingService {
     const key = vt.toLowerCase();
     let scan = this.poolScans.get(key);
     if (!scan) {
-      scan = { nextBlock: fromBlock, pools: new Map() };
+      scan = { nextBlock: { c0: fromBlock, c1: fromBlock }, pools: new Map() };
       this.poolScans.set(key, scan);
     }
+    const state = scan;
     for (const vtIsCurrency0 of [true, false]) {
-      const logs = await this.positionScanner.getLogsChunked<{ blockNumber: bigint; args: { id?: Hex } }>(
-        scan.nextBlock,
+      const side = vtIsCurrency0 ? 'c0' : 'c1';
+      if (state.nextBlock[side] > atBlock) continue;
+      await this.positionScanner.forEachLogChunk<{ blockNumber: bigint; args: { id?: Hex } }>(
+        state.nextBlock[side],
         atBlock,
         (from, to) =>
           this.contractReader.publicClient.getLogs({
@@ -216,13 +223,19 @@ export class EvmLpVotingService {
             args: vtIsCurrency0 ? { currency0: vt } : { currency1: vt },
             fromBlock: from,
             toBlock: to,
-          })
+          }),
+        (logs, to) => {
+          for (const log of logs) {
+            state.pools.set(log.args.id as Hex, {
+              poolId: log.args.id as Hex,
+              vtIsCurrency0,
+              initBlock: log.blockNumber,
+            });
+          }
+          state.nextBlock[side] = to + 1n;
+        }
       );
-      for (const log of logs) {
-        scan.pools.set(log.args.id as Hex, { poolId: log.args.id as Hex, vtIsCurrency0, initBlock: log.blockNumber });
-      }
     }
-    scan.nextBlock = atBlock + 1n;
     return [...scan.pools.values()];
   }
 

@@ -55,6 +55,7 @@ import { EvmContributionValuation } from '@/database/evm-contribution-valuation.
 import { EvmContribution } from '@/database/evm-contribution.entity';
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { EvmIndexRebalance } from '@/database/evm-index-rebalance.entity';
+import { EvmV4PositionScan } from '@/database/evm-v4-position-scan.entity';
 import { EvmValuationSnapshot } from '@/database/evm-valuation-snapshot.entity';
 import { EvmAssetPriceFeedEntity } from '@/database/evmAssetPriceFeed.entity';
 import { Market } from '@/database/market.entity';
@@ -94,6 +95,7 @@ import { EvmGovernanceFeeService } from '@/modules/vaults/phase-management/gover
       EvmAssetPriceFeedEntity,
       EvmExternalPosition,
       EvmIndexRebalance,
+      EvmV4PositionScan,
       Market,
     ]),
   ],
