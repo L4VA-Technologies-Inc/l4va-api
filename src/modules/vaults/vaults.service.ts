@@ -602,6 +602,15 @@ export class VaultsService {
         data.vaultArchetype === VaultArchetype.index_weighted ? VaultArchetype.index_weighted : VaultArchetype.standard
       );
       const hasAcquirePhase = Number(data.tokensForAcquires) !== 0;
+      // Robinhood acquire-only vaults always have a minimum raise (product rule): without one,
+      // any acquired ETH would lock the vault. A missing value gets the floor; a set one is range-checked below.
+      if (
+        specChain === ChainType.robinhood &&
+        data.isAcquireOnly &&
+        (data.minAcquireThreshold == null || !(Number(data.minAcquireThreshold) > 0))
+      ) {
+        data.minAcquireThreshold = this.systemSettingsService.minAcquireThresholdEth;
+      }
       const boundsViolations = findSpecBoundsViolations(creationSpec, data as unknown as Record<string, unknown>, {
         creationThreshold: 'Proposal threshold',
         cosigningThreshold: 'Vote quorum threshold',

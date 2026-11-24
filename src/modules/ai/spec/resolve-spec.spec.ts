@@ -32,8 +32,8 @@ const settings = (overrides: Partial<VaultSpecSettings> = {}): VaultSpecSettings
   maxContributionDuration: 30 * 86_400_000,
   minAcquireWindowDuration: 300_000,
   maxAcquireWindowDuration: 7 * 86_400_000,
-  minAcquireThresholdEth: 0.01,
-  maxAcquireThresholdEth: 100_000,
+  minAcquireThresholdEth: 0.1,
+  maxAcquireThresholdEth: 1_000,
   vaultArchetypesEnabled: () => [VaultArchetype.index_weighted],
   ...overrides,
 });
@@ -48,7 +48,7 @@ describe('resolveVaultCreationSpecFromSettings', () => {
     expect(spec.archetype).toBe(VaultArchetype.index_weighted);
     expect(spec.fields.contributionDuration).toMatchObject({ min: 120_000, max: 30 * 86_400_000 });
     expect(spec.fields.acquireWindowDuration).toMatchObject({ min: 300_000, max: 3 * 86_400_000 });
-    expect(spec.fields.minAcquireThreshold).toMatchObject({ min: 0.01, max: 100_000 });
+    expect(spec.fields.minAcquireThreshold).toMatchObject({ min: 0.1, max: 1_000 });
   });
 
   it('does not put ETH threshold bounds on Cardano', () => {
