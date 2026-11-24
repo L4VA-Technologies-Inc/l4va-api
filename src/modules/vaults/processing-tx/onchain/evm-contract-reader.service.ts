@@ -5,7 +5,7 @@ import { createPublicClient, type Address, type Hex } from 'viem';
 import { PROTOCOL_FEE_CONFIG_ABI, type ProtocolFeeType } from './protocol-fee-config.abi';
 import { EvmContributionStatus, EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
-import { buildEvmTransport } from '@/common/evm/evm-transport';
+import { buildEvmTransport, robinhoodChain } from '@/common/evm/evm-transport';
 
 /** Shape returned by Vault.getCycle(cycleId). Mirrors CycleView in Vault.sol. */
 export interface OnchainCycleView {
@@ -63,7 +63,11 @@ export class EvmContractReader {
     this.chainId = Number(this.configService.get<string>('EVM_CHAIN_ID') || '46630');
 
     this.client = createPublicClient({
+      chain: robinhoodChain(this.chainId, rpcUrl),
       transport: buildEvmTransport(this.configService, rpcUrl),
+      // Concurrent readContract calls (e.g. a Promise.all over a basket) go out as one Multicall3
+      // eth_call instead of one request each. Each call still resolves or reverts on its own.
+      batch: { multicall: true },
     });
   }
 

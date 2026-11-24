@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { isUUID } from 'class-validator';
+import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { encodeAbiParameters, formatUnits, isAddress, keccak256, parseAbi, type Address, type Hex } from 'viem';
 
@@ -72,7 +73,25 @@ const ERC20_METADATA_ABI = parseAbi([
 /** A 0.001 ETH leg is not worth its gas. */
 const MIN_TRADE_NATIVE = 10n ** 15n;
 const SWAP_DEADLINE_SECONDS = 600n;
-const PORTFOLIO_CACHE_MS = 60_000;
+const PORTFOLIO_CACHE_S = 60;
+/** A failed portfolio read is not retried by every caller: the fallback answer is reused this long. */
+const PORTFOLIO_FAILURE_CACHE_S = 20;
+/** Parallel swap quotes when valuing a basket. */
+const QUOTE_CONCURRENCY = 5;
+
+/** `Promise.all` over `items` with at most `limit` calls running; results keep the input order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 /** Statuses in which an index vault holds its basket. */
 const HOLDING_STATUSES = [
   VaultStatus.locked,
@@ -154,7 +173,9 @@ export interface IndexPortfolio {
 @Injectable()
 export class IndexVaultService implements OnApplicationBootstrap {
   private readonly logger = new Logger(IndexVaultService.name);
-  private readonly portfolioCache = new Map<string, { at: number; data: IndexPortfolio }>();
+  private readonly portfolioCache = new NodeCache({ checkperiod: 60, useClones: false });
+  /** One portfolio read per vault at a time: concurrent callers (page views, TVL cron) share it. */
+  private readonly portfolioInFlight = new Map<string, Promise<IndexPortfolio>>();
   private readonly running = new Set<string>();
   /** Vaults already reported as stuck on a non-multi-path adapter, so the cron warns once, not every minute. */
   private readonly outdatedAdapterWarned = new Set<string>();
@@ -632,9 +653,16 @@ export class IndexVaultService implements OnApplicationBootstrap {
   }
 
   private async getPortfolio(vault: Vault): Promise<IndexPortfolio> {
-    const cached = this.portfolioCache.get(vault.id);
-    if (cached && Date.now() - cached.at < PORTFOLIO_CACHE_MS) return cached.data;
+    const cached = this.portfolioCache.get<IndexPortfolio>(vault.id);
+    if (cached) return cached;
+    const running = this.portfolioInFlight.get(vault.id);
+    if (running) return running;
+    const run = this.loadPortfolio(vault).finally(() => this.portfolioInFlight.delete(vault.id));
+    this.portfolioInFlight.set(vault.id, run);
+    return run;
+  }
 
+  private async loadPortfolio(vault: Vault): Promise<IndexPortfolio> {
     const config = vault.index_config;
     const targets = config?.targets ?? [];
     const reserveBps = config?.reserveBps ?? 0;
@@ -645,7 +673,11 @@ export class IndexVaultService implements OnApplicationBootstrap {
           vault,
           targets.map(t => t.assetAddress as Address)
         ),
-        this.liquidityService.getVaultLp(vault.id),
+        // The LP is an extra line on the page: if its read fails, the holdings still show.
+        this.liquidityService.getVaultLp(vault.id).catch(err => {
+          this.logger.warn(`Index portfolio: LP read failed for vault ${vault.id}: ${(err as Error).message}`);
+          return null;
+        }),
         this.displayPrices(),
       ]);
       const allocation = computeAllocation(
@@ -686,11 +718,11 @@ export class IndexVaultService implements OnApplicationBootstrap {
         total: this.priced(allocation.nav + lpValue, prices),
         pricedAt: new Date().toISOString(),
       };
-      this.portfolioCache.set(vault.id, { at: Date.now(), data });
+      this.portfolioCache.set(vault.id, data, PORTFOLIO_CACHE_S);
       return data;
     } catch (err) {
       this.logger.warn(`Index portfolio read failed for vault ${vault.id}: ${(err as Error).message}`);
-      return {
+      const fallback: IndexPortfolio = {
         navNative: '0',
         reserve: {
           targetBps: reserveBps,
@@ -705,6 +737,9 @@ export class IndexVaultService implements OnApplicationBootstrap {
         pricedAt: new Date().toISOString(),
         error: 'Live holdings are temporarily unavailable',
       };
+      // Callers in the next few seconds get this answer instead of each starting a new read.
+      this.portfolioCache.set(vault.id, fallback, PORTFOLIO_FAILURE_CACHE_S);
+      return fallback;
     }
   }
 
@@ -745,31 +780,35 @@ export class IndexVaultService implements OnApplicationBootstrap {
       t => t !== vaultToken.toLowerCase() && t !== lpToken
     ) as Address[];
 
+    // One batched read for every balance (the reader packs concurrent calls into a Multicall3 call).
+    const balances = (await Promise.all(
+      tokens.map(token =>
+        client.readContract({
+          address: vaultAddress,
+          abi: VAULT_ABI,
+          functionName: 'availableErc20ForOperations',
+          args: [token],
+        })
+      )
+    )) as bigint[];
+
+    // Quotes a few at a time: enough to avoid one round trip per asset in series, few enough not
+    // to burst the quoting API on a 50-asset basket.
     const holdings: HoldingValue[] = [];
-    for (const token of tokens) {
-      const balance = (await client.readContract({
-        address: vaultAddress,
-        abi: VAULT_ABI,
-        functionName: 'availableErc20ForOperations',
-        args: [token],
-      })) as bigint;
-      if (balance === 0n) {
-        if (basket.has(token)) holdings.push({ asset: token, balance, valueNative: 0n });
-        continue;
-      }
+    const priced = await mapLimit(tokens, QUOTE_CONCURRENCY, async (token, i): Promise<HoldingValue | null> => {
+      const balance = balances[i];
+      if (balance === 0n) return basket.has(token) ? { asset: token, balance, valueNative: 0n } : null;
       try {
-        holdings.push({
-          asset: token,
-          balance,
-          valueNative: await this.routeService.valueInNative(token, balance),
-        });
+        return { asset: token, balance, valueNative: await this.routeService.valueInNative(token, balance) };
       } catch (err) {
         if (basket.has(token)) {
           throw new Error(`Cannot price basket asset ${token}: ${(err as Error).message}`);
         }
         this.logger.warn(`Ignoring unpriceable custody token ${token} in ${vaultAddress}: ${(err as Error).message}`);
+        return null;
       }
-    }
+    });
+    for (const h of priced) if (h) holdings.push(h);
 
     return { nativeAvailable, holdings };
   }
@@ -1005,7 +1044,7 @@ export class IndexVaultService implements OnApplicationBootstrap {
         rebalanceCadenceDays: payload.rebalanceCadenceDays,
       });
       await this.vaultRepository.update({ id: vault.id }, { index_config: config });
-      this.portfolioCache.delete(vault.id);
+      this.portfolioCache.del(vault.id);
     }
 
     // A schedule-only proposal changes when the keeper trades, not what it targets.
@@ -1198,7 +1237,7 @@ export class IndexVaultService implements OnApplicationBootstrap {
       }
     } finally {
       this.running.delete(lockKey);
-      this.portfolioCache.delete(vaultId);
+      this.portfolioCache.del(vaultId);
     }
   }
 

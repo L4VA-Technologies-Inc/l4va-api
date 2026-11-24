@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { fallback, http, type Transport } from 'viem';
+import { defineChain, fallback, http, type Chain, type Transport } from 'viem';
 
 const logger = new Logger('EvmTransport');
 const loggedSummaries = new Set<string>();
@@ -129,4 +129,21 @@ export function isRpcRateLimitError(err: unknown): boolean {
     e = e.cause;
   }
   return false;
+}
+
+/** Multicall3 (same address on every chain); deployed on Robinhood mainnet and testnet. */
+export const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11' as const;
+
+/**
+ * Robinhood Chain for viem clients, with Multicall3 so `client.multicall` works and read clients
+ * can batch concurrent `readContract` calls into one `eth_call` (`batch: { multicall: true }`).
+ */
+export function robinhoodChain(chainId: number, rpcUrl?: string | null): Chain {
+  return defineChain({
+    id: chainId,
+    name: chainId === 4663 ? 'Robinhood Chain' : 'Robinhood Chain Testnet',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: rpcUrl ? [rpcUrl] : [] } },
+    contracts: { multicall3: { address: MULTICALL3_ADDRESS } },
+  });
 }
