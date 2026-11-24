@@ -17,6 +17,7 @@ import {
   TimeoutError,
   toFunctionSelector,
 } from 'viem';
+import { prepareTransactionRequest } from 'viem/actions';
 
 import { EvmContractReader } from './evm-contract-reader.service';
 import { EvmKmsSigners } from './evm-kms-signers.service';
@@ -291,7 +292,7 @@ export class EvmAdminSigner {
   }
 
   /**
-   * Prepare (nonce, gas, fees from the primary RPC), sign locally and send. The hash is the
+   * Prepare (nonce, gas, fees from the read RPCs), sign locally and send to the primary RPC. The hash is the
    * keccak of the signed bytes, so it is known whatever happens to the send call.
    *
    * If `eth_sendRawTransaction` fails, the hash is looked up before giving up: a timeout or a
@@ -342,7 +343,10 @@ export class EvmAdminSigner {
       blockTag: 'pending',
     });
     const nonce = Math.max(rpcNonce, this.nextLocalNonce ?? 0);
-    const prepared = await this.walletClient.prepareTransactionRequest({ account, chain: null, nonce, ...request });
+    // Gas, fees and chain id are reads: take them from the read transport (with its fallbacks), so
+    // a rate-limited primary does not stop the send before anything is signed. Only the broadcast
+    // below goes to the single write node (see buildEvmWriteTransport).
+    const prepared = await prepareTransactionRequest(this.publicClient, { account, nonce, ...request });
     const serializedTransaction = (await account.signTransaction(prepared)) as Hex;
     const hash = keccak256(serializedTransaction);
 

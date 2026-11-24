@@ -110,3 +110,23 @@ export function buildEvmTransport(config: ConfigLike, primary?: string | null): 
     { rank: false, retryCount: 1 }
   );
 }
+
+/**
+ * True when an RPC call failed because the node rate-limited us (HTTP 429, "too many requests",
+ * "too many concurrent requests", "request exceeds defined limit"). Such a failure says nothing
+ * about the call itself: the same call succeeds once the node has capacity again.
+ */
+export function isRpcRateLimitError(err: unknown): boolean {
+  const RATE_LIMIT = /too many (concurrent )?requests|rate limit|request exceeds defined limit|\b429\b/i;
+  const seen = new Set<unknown>();
+  let e: any = err;
+  while (e && !seen.has(e)) {
+    seen.add(e);
+    if (e.status === 429 || (typeof e === 'string' ? RATE_LIMIT.test(e) : RATE_LIMIT.test(String(e.message ?? '')))) {
+      return true;
+    }
+    if (typeof e.details === 'string' && RATE_LIMIT.test(e.details)) return true;
+    e = e.cause;
+  }
+  return false;
+}

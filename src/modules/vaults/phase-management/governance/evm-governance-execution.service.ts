@@ -22,6 +22,7 @@ import { EvmVaultOnchainStatus, VAULT_ABI } from '../../processing-tx/onchain/va
 import { EvmDistributionService } from './evm-distribution.service';
 import { ProposalConditionsChangedError } from './proposal-errors';
 
+import { isRpcRateLimitError } from '@/common/evm/evm-transport';
 import { EvmExternalPosition } from '@/database/evm-external-position.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
@@ -166,8 +167,20 @@ export class EvmGovernanceExecutionService implements OnModuleInit {
     this.failures.delete(proposal.id);
     try {
       const ok = await this.dispatch(proposal, vault);
-      if (!ok) await this.recordFailure(proposal, this.failures.get(proposal.id) ?? null);
-      return ok;
+      if (ok) return true;
+      const reason = this.failures.get(proposal.id) ?? null;
+      if (reason && isRpcRateLimitError(reason)) {
+        // The RPC node was overloaded, nothing about the proposal is wrong: wait and continue on
+        // the next tick without spending the retry budget. Steps already done are not repeated
+        // (each swap has its own operation id; termination resumes at the step it reached).
+        await this.markWaiting(proposal, {
+          reason: 'the RPC node is rate-limiting requests; continuing shortly',
+          userFriendlyMessage: 'Execution is paused for a moment and will continue automatically.',
+        });
+        return false;
+      }
+      await this.recordFailure(proposal, reason);
+      return false;
     } finally {
       this.failures.delete(proposal.id);
     }
