@@ -388,7 +388,7 @@ jobs:
         run: |
           APPS_ROOT=~/apps
           APP_DIR="$APPS_ROOT/l4va-api"
-          COMPOSE_PROJECT_NAME=l4va-api-prod
+          COMPOSE_PROJECT_NAME=l4va-api
           export CONTAINER_PREFIX=l4va
           export L4VA_NETWORK_NAME=l4va-network
           export REDIS_HOST=l4va-redis
