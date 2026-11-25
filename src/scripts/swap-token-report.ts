@@ -46,7 +46,7 @@ const STABLE_SYMBOLS = new Set([
 const MEME_WORDS =
   /\b(cat|dog|doge|inu|shib|pepe|frog|moon|baby|elon|trump|wojak|chad|meme|pump|rug|ape|bonk|wif|hood(rat)?|rocket|lambo|degen|giga|based|fart|poop|tard|kitty|puppy|king|goat|sigma|cope|wagmi|ngmi|gme|pnut)\b/i;
 
-type Category =
+export type Category =
   | 'RWA - Robinhood stock token'
   | 'RWA - Ondo tokenized'
   | 'RWA - other (aStock/Anchored)'
@@ -115,7 +115,7 @@ const log = (msg: string): void => {
 const lower = (s: string): string => s.toLowerCase();
 const isRobinhoodIcon = (t: BlockscoutToken): boolean => (t.iconUrl ?? '').includes('cdn.robinhood.com');
 
-function category(t: BlockscoutToken, canonical: Map<string, BlockscoutToken>): { cat: Category; why?: string } {
+export function category(t: BlockscoutToken, canonical: Map<string, BlockscoutToken>): { cat: Category; why?: string } {
   const name = t.name;
   const sym = t.symbol.toUpperCase();
   if (t.address === L4VA_TOKEN) return { cat: 'L4VA' };
@@ -508,7 +508,9 @@ async function main(): Promise<void> {
   log(`written to ${outDir}/ (tokens.csv, tokens.json, summary.md)`);
 }
 
-main().catch(e => {
-  log(String(e));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(e => {
+    log(String(e));
+    process.exit(1);
+  });
+}
