@@ -68,3 +68,6 @@ test/testnet-v13/.state.json
 
 # swap-pool-sync.ts output
 pool-sync-*/
+
+# swap-pool-review.ts output
+pool-review/

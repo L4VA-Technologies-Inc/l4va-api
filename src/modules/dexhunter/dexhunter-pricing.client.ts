@@ -6,6 +6,9 @@ import NodeCache from 'node-cache';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 
+/** Per-call cap so one hung DexHunter request can't stall list endpoints. */
+const DEXHUNTER_FETCH_TIMEOUT_MS = 8_000;
+
 /**
  * DexHunter API client for token pricing and OHLCV data
  * Centralized client for DexHunter token price lookups and chart data
@@ -458,6 +461,7 @@ export class DexHunterPricingClient {
           from,
           to,
         }),
+        signal: AbortSignal.timeout(DEXHUNTER_FETCH_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -623,6 +627,7 @@ export class DexHunterPricingClient {
     const response = await fetch(`${this.dexHunterBaseUrl}/swap/globalOrders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Partner-Id': this.dexHunterApiKey },
+      signal: AbortSignal.timeout(DEXHUNTER_FETCH_TIMEOUT_MS),
       body: JSON.stringify({
         filters: [
           { filterType: 'TOKENID', values: [tokenUnit] },

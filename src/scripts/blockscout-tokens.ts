@@ -50,6 +50,47 @@ const num = (v: string | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+function toToken(t: RawToken): BlockscoutToken {
+  return {
+    address: t.address_hash.toLowerCase(),
+    name: t.name ?? '',
+    symbol: t.symbol ?? '',
+    decimals: t.decimals === null ? null : Number(t.decimals),
+    holders: num(t.holders_count),
+    marketCapUsd: num(t.circulating_market_cap),
+    volume24hUsd: num(t.volume_24h),
+    priceUsd: num(t.exchange_rate),
+    totalSupply: t.total_supply,
+    iconUrl: t.icon_url,
+    reputation: t.reputation,
+    uiMultiplier: t.ui_multiplier,
+  };
+}
+
+/** One token by address (null: Blockscout does not know it). 20 credits. */
+export async function fetchBlockscoutToken(
+  apiKey: string,
+  address: string,
+  chainId = 4663
+): Promise<BlockscoutToken | null> {
+  const res = await fetch(`https://api.blockscout.com/${chainId}/api/v2/tokens/${address}?apikey=${apiKey}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Blockscout token ${address}: HTTP ${res.status}`);
+  return toToken((await res.json()) as RawToken);
+}
+
+/** First page of tokens whose name or symbol matches `query` (to spot copies of a symbol). 20 credits. */
+export async function searchBlockscoutTokens(
+  apiKey: string,
+  query: string,
+  chainId = 4663
+): Promise<BlockscoutToken[]> {
+  const q = new URLSearchParams({ q: query, apikey: apiKey });
+  const res = await fetch(`https://api.blockscout.com/${chainId}/api/v2/tokens?${q}`);
+  if (!res.ok) throw new Error(`Blockscout token search: HTTP ${res.status}`);
+  return ((await res.json()) as { items: RawToken[] }).items.map(toToken);
+}
+
 /** Token standards Blockscout lists on Robinhood Chain. Robinhood's stock tokens are ERC-8056, not ERC-20. */
 export const TOKEN_TYPES = ['ERC-20', 'ERC-8056'] as const;
 
@@ -96,22 +137,7 @@ async function fetchType(
     const res = await fetch(`https://api.blockscout.com/${chainId}/api/v2/tokens?${q}`);
     if (!res.ok) throw new Error(`Blockscout tokens: HTTP ${res.status}`);
     const body = (await res.json()) as { items: RawToken[]; next_page_params: Record<string, unknown> | null };
-    for (const t of body.items) {
-      out.push({
-        address: t.address_hash.toLowerCase(),
-        name: t.name ?? '',
-        symbol: t.symbol ?? '',
-        decimals: t.decimals === null ? null : Number(t.decimals),
-        holders: num(t.holders_count),
-        marketCapUsd: num(t.circulating_market_cap),
-        volume24hUsd: num(t.volume_24h),
-        priceUsd: num(t.exchange_rate),
-        totalSupply: t.total_supply,
-        iconUrl: t.icon_url,
-        reputation: t.reputation,
-        uiMultiplier: t.ui_multiplier,
-      });
-    }
+    for (const t of body.items) out.push(toToken(t));
     page++;
     opts.onPage?.(page, out.length);
     // Blockscout's own cursor holds small fiat values as "9.84088E-7" and then rejects that form with
