@@ -23,9 +23,8 @@ const VAULT_SPEC_OVERRIDES = {
   robinhood: {
     liquidityPoolContribution: { min: 5, max: 20, default: 10 },
     creationThreshold: { min: 0.1, default: 0.1 },
+    // Range stays in evm_min/max_acquire_threshold_eth; a min/max here would override those.
     minAcquireThreshold: {
-      min: 0.01,
-      max: 100000,
       requiredIf: [{ field: 'isAcquireOnly', equals: true }],
       disabled: false,
     },
