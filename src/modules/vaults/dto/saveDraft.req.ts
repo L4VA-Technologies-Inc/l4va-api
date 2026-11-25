@@ -17,6 +17,7 @@ import {
 } from 'class-validator';
 
 import {
+  ChainType,
   ContributionWindowType,
   InvestmentWindowType,
   TerminationType,
@@ -452,4 +453,10 @@ export class SaveDraftReq {
   @IsObject()
   @Expose()
   indexBasket?: { targets: IndexBasketItemDto[]; reserveBps: number } | null;
+
+  @ApiProperty({ description: 'Chain the draft vault will be launched on', enum: ChainType, required: false })
+  @IsOptional()
+  @IsEnum(ChainType)
+  @Expose()
+  chainType?: ChainType;
 }
