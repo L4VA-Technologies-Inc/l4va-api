@@ -34,9 +34,26 @@ export interface VaultFieldSpec {
   pattern?: string;
   values?: readonly string[];
   default?: string | number | boolean | null;
+  /** Name the UI shows for this field. The assistant maps what the user says onto it. */
+  label?: string;
+  /** One-line explanation shown as the UI tooltip; the assistant reads the same text. */
+  hint?: string;
+  /**
+   * Feature switched off on this chain (by the spec or by config). The field is fixed at
+   * `default`, hidden in the UI, never required and never editable by the assistant.
+   */
+  disabled?: boolean;
 }
 
 export type VaultFieldOverride = Partial<VaultFieldSpec>;
+
+/**
+ * Config-driven spec overrides, per chain, from system settings (`vault_spec_overrides`, editable
+ * without a deploy). `all` applies to every chain before the chain's own entry. Example:
+ *   { "robinhood": { "minAcquireThreshold": { "min": 0.05, "required": true } },
+ *     "all": { "allowAcquireExpansion": { "disabled": true, "default": false } } }
+ */
+export type VaultSpecOverrides = Partial<Record<SpecChain | 'all', Record<string, VaultFieldOverride>>>;
 
 export interface ChainProfile {
   currency: string;

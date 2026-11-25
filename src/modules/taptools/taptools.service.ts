@@ -138,6 +138,8 @@ export class TaptoolsService {
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
   private walletUnitsCache = new NodeCache({ stdTTL: 60 }); // cache for 1 minute for wallet asset units
   private relicsTraitPriceCache = new NodeCache({ stdTTL: 900, checkperiod: 120 }); // cache for 15 minutes for trait prices
+  // Throttles the "fallback trait price" log to once per character per 15 min (one valuation run), instead of once per NFT
+  private relicsFallbackLogCache = new NodeCache({ stdTTL: 900, checkperiod: 120 });
 
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
@@ -145,9 +147,10 @@ export class TaptoolsService {
   private readonly CNFT_TOOLS_VITA_TRAIT_FLOORS_URL = 'https://cnft.tools/toolsapi/v3/traitfloors/romtv';
   // Fallback prices if CNFT.tools API fails
   private readonly RELICS_CHARACTER_PRICES_FALLBACK = {
-    Exploratur: 300, // 300 ADA
-    Phoenix: 200, // 200 ADA
-    Balaena: 140, // 140 ADA
+    // WayUp listed floors as of 2026-11-25
+    Exploratur: 350, // 350 ADA
+    Phoenix: 300, // 300 ADA
+    Balaena: 329, // 329 ADA
   };
   private readonly RELICS_PORTA_PRICE_FALLBACK = 70; // 70 ADA for all Porta NFTs - fallback
   private readonly testnetPrices = {
@@ -669,9 +672,12 @@ export class TaptoolsService {
 
         // Priority 4: Fallback to hardcoded prices if CNFT.tools API fails or character not found
         if (this.RELICS_CHARACTER_PRICES_FALLBACK[character]) {
-          this.logger.debug(
-            `Using fallback trait price for ${character}: ${this.RELICS_CHARACTER_PRICES_FALLBACK[character]} ADA`
-          );
+          if (!this.relicsFallbackLogCache.has(character)) {
+            this.relicsFallbackLogCache.set(character, true);
+            this.logger.debug(
+              `Using fallback trait price for ${character}: ${this.RELICS_CHARACTER_PRICES_FALLBACK[character]} ADA (no CNFT.tools listing)`
+            );
+          }
           return this.RELICS_CHARACTER_PRICES_FALLBACK[character];
         }
       }

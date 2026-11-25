@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { SystemSettings } from '@/database/systemSettings.entity';
+import { VaultSpecOverrides } from '@/modules/ai/spec/spec.types';
 import { VaultArchetype } from '@/types/index-vault.types';
 import { ChainType } from '@/types/vault.types';
 
@@ -69,6 +70,11 @@ export interface SystemSettingsData {
    * this, so a chain can be reopened without a deploy.
    */
   vault_archetypes_enabled: Record<string, VaultArchetype[]>;
+  /**
+   * Per-chain overrides of the vault creation spec (min/max/default/required/disabled/label/hint),
+   * shared by the AI assistant, the create endpoint and the client form. See VaultSpecOverrides.
+   */
+  vault_spec_overrides: VaultSpecOverrides;
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: number;
   governance_fee_proposal_distribution: number;
@@ -157,6 +163,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
     [ChainType.cardano]: [VaultArchetype.standard],
     [ChainType.robinhood]: [VaultArchetype.index_weighted],
   },
+  vault_spec_overrides: {},
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: 5000000, // 5 ADA
   governance_fee_proposal_distribution: 5000000, // 5 ADA
@@ -610,6 +617,11 @@ export class SystemSettingsService implements OnModuleInit {
     return Array.isArray(configured) && configured.length > 0 ? configured : [VaultArchetype.standard];
   }
 
+  /** Spec overrides from system settings (DB): change and reload, no deploy. */
+  get vaultSpecOverrides(): VaultSpecOverrides {
+    return sanitizeVaultSpecOverrides(this.settings.vault_spec_overrides, msg => this.logger.warn(msg));
+  }
+
   isVaultArchetypeEnabled(chainType: ChainType, archetype: VaultArchetype): boolean {
     return this.vaultArchetypesEnabled(chainType).includes(archetype);
   }
@@ -680,4 +692,44 @@ export class SystemSettingsService implements OnModuleInit {
         return '0';
     }
   }
+}
+
+const SPEC_OVERRIDE_KEYS: Record<string, (v: unknown) => boolean> = {
+  min: v => typeof v === 'number' && Number.isFinite(v),
+  max: v => typeof v === 'number' && Number.isFinite(v),
+  default: v => v === null || ['number', 'string', 'boolean'].includes(typeof v),
+  required: v => typeof v === 'boolean',
+  disabled: v => typeof v === 'boolean',
+  label: v => typeof v === 'string',
+  hint: v => typeof v === 'string',
+  requiredIf: v =>
+    Array.isArray(v) && v.every(c => c && typeof c === 'object' && typeof c.field === 'string' && 'equals' in c),
+};
+
+/**
+ * Keeps only well-formed entries of `vault_spec_overrides` (edited by hand in the admin JSON
+ * editor), so a typo drops one value with a warning instead of breaking vault creation.
+ */
+export function sanitizeVaultSpecOverrides(raw: unknown, warn: (msg: string) => void): VaultSpecOverrides {
+  const result: VaultSpecOverrides = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result;
+  for (const [chain, fields] of Object.entries(raw)) {
+    if (!['all', ChainType.cardano, ChainType.robinhood].includes(chain)) {
+      warn(`vault_spec_overrides: unknown chain "${chain}" ignored`);
+      continue;
+    }
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) continue;
+    const clean: Record<string, Record<string, unknown>> = {};
+    for (const [field, override] of Object.entries(fields as Record<string, unknown>)) {
+      if (!override || typeof override !== 'object' || Array.isArray(override)) continue;
+      const entry: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(override)) {
+        if (SPEC_OVERRIDE_KEYS[key]?.(value)) entry[key] = value;
+        else warn(`vault_spec_overrides.${chain}.${field}.${key} ignored (unknown key or wrong type)`);
+      }
+      clean[field] = entry;
+    }
+    result[chain as keyof VaultSpecOverrides] = clean;
+  }
+  return result;
 }

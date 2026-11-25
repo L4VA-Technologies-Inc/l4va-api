@@ -1,4 +1,11 @@
-import { ResolvedVaultCreationSpec, SpecChain, SpecNetwork, VaultFieldOverride, VaultFieldSpec } from './spec.types';
+import {
+  ResolvedVaultCreationSpec,
+  SpecChain,
+  SpecNetwork,
+  VaultFieldOverride,
+  VaultFieldSpec,
+  VaultSpecOverrides,
+} from './spec.types';
 import { VAULT_CREATION_SPEC } from './vault-creation-spec';
 
 import { VaultArchetype } from '@/types/index-vault.types';
@@ -22,7 +29,8 @@ export function resolveVaultCreationSpec(
   chain: SpecChain,
   network: SpecNetwork,
   archetype: VaultArchetype = VaultArchetype.standard,
-  runtimeOverrides: Record<string, VaultFieldOverride> = {}
+  runtimeOverrides: Record<string, VaultFieldOverride> = {},
+  configOverrides: VaultSpecOverrides = {}
 ): ResolvedVaultCreationSpec {
   const profile = VAULT_CREATION_SPEC.chainProfiles[chain];
   const networkOverrides = VAULT_CREATION_SPEC.networkOverrides[network];
@@ -36,7 +44,20 @@ export function resolveVaultCreationSpec(
       ...(profile.fields?.[name] ?? {}),
       ...(archetypeProfile.fields?.[name] ?? {}),
       ...(runtimeOverrides[name] ?? {}),
+      ...(configOverrides.all?.[name] ?? {}),
+      ...(configOverrides[chain]?.[name] ?? {}),
     };
+    const resolved = fields[name];
+    // A config-added condition still needs prompt text.
+    if (resolved.requiredIf?.length && !resolved.requiredWhen) {
+      resolved.requiredWhen = resolved.requiredIf.map(c => `${c.field} is ${JSON.stringify(c.equals)}`).join(' and ');
+    }
+    if (resolved.disabled) {
+      resolved.required = false;
+      resolved.requiredIf = undefined;
+      resolved.requiredWhen = undefined;
+      resolved.aiEditable = false;
+    }
     // A raised minimum must not leave the default below it.
     const { min, default: fallback } = fields[name];
     if (typeof min === 'number' && typeof fallback === 'number' && fallback < min) {
@@ -60,7 +81,7 @@ export function resolveVaultCreationSpec(
 /** Field names the model is allowed to emit. Everything else is dropped from its output. */
 export function aiEditableFieldNames(spec: ResolvedVaultCreationSpec): string[] {
   return Object.entries(spec.fields)
-    .filter(([, field]) => field.aiEditable)
+    .filter(([, field]) => field.aiEditable && !field.disabled)
     .map(([name]) => name);
 }
 
@@ -76,6 +97,8 @@ export interface VaultSpecSettings {
   minAcquireThresholdEth: number;
   maxAcquireThresholdEth: number;
   vaultArchetypesEnabled(chain: ChainType): VaultArchetype[];
+  /** Config overrides (system settings, then env); optional so plain settings objects still work. */
+  vaultSpecOverrides?: VaultSpecOverrides;
 }
 
 /**
@@ -102,7 +125,14 @@ export function resolveVaultCreationSpecFromSettings(
   if (chain === ChainType.robinhood) {
     overrides.minAcquireThreshold = { min: settings.minAcquireThresholdEth, max: settings.maxAcquireThresholdEth };
   }
-  return resolveVaultCreationSpec(chain, network, resolvedArchetype, overrides);
+  return resolveVaultCreationSpec(chain, network, resolvedArchetype, overrides, settings.vaultSpecOverrides ?? {});
+}
+
+/** True when the spec makes `name` required for these values (`required`, or every `requiredIf` holds). */
+export function isSpecFieldRequired(field: VaultFieldSpec | undefined, values: Record<string, unknown>): boolean {
+  if (!field || field.disabled) return false;
+  if (field.required === true) return true;
+  return !!field.requiredIf?.length && field.requiredIf.every(c => values[c.field] === c.equals);
 }
 
 export interface SpecBoundsViolation {

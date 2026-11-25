@@ -81,7 +81,11 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
-import { findSpecBoundsViolations, resolveVaultCreationSpecFromSettings } from '@/modules/ai/spec/resolve-spec';
+import {
+  findSpecBoundsViolations,
+  isSpecFieldRequired,
+  resolveVaultCreationSpecFromSettings,
+} from '@/modules/ai/spec/resolve-spec';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
@@ -625,6 +629,24 @@ export class VaultsService {
       });
       if (boundsViolations.length) {
         throw new BadRequestException(boundsViolations.map(v => v.message).join('; '));
+      }
+      // Conditional requirements and switched-off features come from the same spec the AI and form use.
+      const specValues = data as unknown as Record<string, unknown>;
+      for (const [name, field] of Object.entries(creationSpec.fields)) {
+        if (field.disabled) {
+          if (specValues[name] !== undefined) specValues[name] = field.default ?? null;
+          continue;
+        }
+        if (!field.requiredIf?.length || !isSpecFieldRequired(field, specValues)) continue;
+        const value = specValues[name];
+        const missing =
+          value === null ||
+          value === undefined ||
+          value === '' ||
+          (typeof field.min === 'number' && field.min > 0 && Number(value) === 0);
+        if (missing) {
+          throw new BadRequestException(`${field.label ?? name} is required`);
+        }
       }
       if (hasAcquirePhase && !Number.isFinite(Number(data.acquireWindowDuration))) {
         throw new BadRequestException('Acquire window duration is required');
