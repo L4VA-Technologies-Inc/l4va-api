@@ -23,6 +23,7 @@ import {
   ValueMethod,
   VaultPrivacy,
   VaultType,
+  ChainType,
 } from '../../../types/vault.types';
 import { ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
 
@@ -33,6 +34,12 @@ import { IndexBasketItemDto } from '@/modules/vaults/index-vault/dto/index-baske
 import { VaultArchetype } from '@/types/index-vault.types';
 
 export class SaveDraftReq {
+  @ApiProperty({ description: 'Chain the vault is created on', enum: ChainType, required: false })
+  @IsOptional()
+  @IsEnum(ChainType)
+  @Expose()
+  chainType?: ChainType;
+
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
