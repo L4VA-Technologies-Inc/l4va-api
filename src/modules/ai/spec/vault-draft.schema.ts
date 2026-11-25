@@ -12,6 +12,7 @@ interface JsonSchemaProperty {
  * keywords are not supported by OpenAI structured outputs, so bounds live in prose). */
 export function describeFieldConstraints(field: VaultFieldSpec): string {
   const parts: string[] = [];
+  if (field.label) parts.push(`shown in the UI as "${field.label}"`);
   if (field.unit) parts.push(`unit: ${field.unit}`);
   if (field.min !== undefined) parts.push(`min: ${field.min}`);
   if (field.max !== undefined) parts.push(`max: ${field.max}`);

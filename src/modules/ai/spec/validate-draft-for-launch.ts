@@ -214,7 +214,9 @@ export function validateVaultDraftForLaunch(
     if (!isApplicable(field.notApplicableIf, view)) continue;
 
     const required = field.required === true || matches(field.requiredIf, view);
-    if (required && !hasValue(view[name])) {
+    // A 0 under a positive minimum is the "skip it" value, not an answer (e.g. minAcquireThreshold on Robinhood).
+    const zeroBelowMin = typeof field.min === 'number' && field.min > 0 && Number(view[name]) === 0;
+    if (required && (!hasValue(view[name]) || zeroBelowMin)) {
       missingFields.push(name);
       addBlocker({ field: name, message: `${humanize(name)} is required.`, action: null });
     }
