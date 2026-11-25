@@ -753,6 +753,8 @@ export class VaultsService {
         delete vaultData.acquirer_whitelist_csv;
         delete vaultData.contributor_whitelist_csv;
         delete vaultData.index_basket;
+        // Every vault's asset whitelist can be expanded by governance, whatever the form sent.
+        vaultData.is_expandable_asset_whitelist = true;
         // Set after the snake-case transform, which would otherwise rewrite the config's own keys.
         vaultData.vault_archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
         vaultData.index_config = indexConfig;
@@ -778,6 +780,8 @@ export class VaultsService {
         delete vaultData.acquirer_whitelist;
         delete vaultData.contributor_whitelist;
         delete vaultData.tags;
+        // Every vault's asset whitelist can be expanded by governance, whatever the form sent.
+        vaultData.is_expandable_asset_whitelist = true;
         try {
           newVault = await this.vaultsRepository.save(vaultData as Vault);
           newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
