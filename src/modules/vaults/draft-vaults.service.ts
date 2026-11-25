@@ -215,6 +215,7 @@ export class DraftVaultsService {
       if (data.chainType !== undefined) vaultData.chain_type = data.chainType;
       if (data.name !== undefined) vaultData.name = data.name;
       if (data.type !== undefined) vaultData.type = data.type;
+      if (data.chainType !== undefined) vaultData.chain_type = data.chainType;
       if (data.preset_id !== undefined) vaultData.preset_id = data.preset_id;
       if (data.privacy !== undefined) vaultData.privacy = data.privacy;
       if (data.valueMethod !== undefined) vaultData.value_method = data.valueMethod;

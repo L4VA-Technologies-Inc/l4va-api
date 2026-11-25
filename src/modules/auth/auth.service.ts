@@ -13,6 +13,7 @@ import { BadRequestException, HttpException, HttpStatus, Inject, Injectable } fr
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
+import { blake2b } from 'blakejs';
 import Redis from 'ioredis';
 import { Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
@@ -351,8 +352,23 @@ export class AuthService {
       })();
       const walletMatches = !!walletStakeHash && walletStakeHash === stakeKeyHash?.to_hex();
 
-      const utf8Payload = payload ? Buffer.from(payload).toString('utf8') : '';
       const isVerified = publicKey.verify(signedData, sig);
+
+      // CIP-8: with `hashed: true` the signed payload is blake2b-224(message), not the message.
+      // Ledger signs that way for multi-line/long messages, so match it against active challenges.
+      const hashedHeader = decoded.headers().unprotected().header(Label.new_text('hashed'));
+      const isHashed = hashedHeader?.as_special()?.as_bool() === true;
+      let utf8Payload = '';
+      if (payload && isHashed) {
+        const payloadHex = Buffer.from(payload).toString('hex');
+        const challenges = await this.activeChallenges(cardanoChallengeKey(stakeAddress));
+        utf8Payload =
+          challenges.find(
+            m => Buffer.from(blake2b(Buffer.from(m, 'utf8'), undefined, 28)).toString('hex') === payloadHex
+          ) ?? '';
+      } else if (payload) {
+        utf8Payload = Buffer.from(payload).toString('utf8');
+      }
 
       // Server-issued single-use challenge: the signed payload must be one of the address's active
       // challenges. Consumed only once everything else checks out, so a bad attempt cannot burn it.
