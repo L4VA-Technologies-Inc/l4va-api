@@ -39,7 +39,7 @@
  * warns (stderr + runs/<time>/warnings.md) about held tokens that are not ALREADY_OK. CHECK_HELD=1
  * also reviews every held token.
  * RENDER_ONLY=1 rebuilds the table from registry.json without new quotes.
- * Other env: TOKENS_FILE, SIZES_ETH (0.003,0.03,0.1,0.3,1), REF_ETH, SMALL_ETH, APPROVE_LOSS_BPS,
+ * Other env: CONCURRENCY (4 tokens in parallel), TOKENS_FILE, SIZES_ETH (0.003,0.03,0.1), REF_ETH, SMALL_ETH, APPROVE_LOSS_BPS,
  * LIMIT_LOSS_BPS, SWAPPER, SAFE, REVIEW_DIR, ENV_FILE (.env: UNISWAP_API_KEY, ROBINHOOD_RPC_URL or
  * EVM_RPC_URL, BLOCKSCOUT_API_KEY).
  */
@@ -548,9 +548,10 @@ async function main(): Promise<void> {
   if (chainId !== CHAIN_ID) throw new Error(`RPC is chain ${chainId}, expected ${CHAIN_ID}`);
   const api = new UniswapTradingApiClient({ get: (k: string) => process.env[k] } as never);
 
-  const sizes = (
-    list(process.env.SIZES_ETH).length ? list(process.env.SIZES_ETH) : ['0.003', '0.03', '0.1', '0.3', '1']
-  ).sort((a, b) => Number(a) - Number(b));
+  const sizes = // 0.3 / 1 ETH do not change the verdict; add them with SIZES_ETH when the extra columns help.
+    (list(process.env.SIZES_ETH).length ? list(process.env.SIZES_ETH) : ['0.003', '0.03', '0.1']).sort(
+      (a, b) => Number(a) - Number(b)
+    );
   const refEth = process.env.REF_ETH ?? '0.1';
   const smallEth = process.env.SMALL_ETH ?? '0.03';
   for (const s of [refEth, smallEth]) if (!sizes.includes(s)) sizes.push(s);
@@ -640,7 +641,8 @@ async function main(): Promise<void> {
 
   const runAt = new Date().toISOString();
   const results: Review[] = [];
-  for (const [i, token] of tokens.entries()) {
+  let done = 0;
+  const reviewOne = async (token: Address): Promise<void> => {
     // ---- trust ----
     let info = meta.get(token) ?? null;
     if (!info && bsKey) info = await fetchBlockscoutToken(bsKey, token).catch(() => null);
@@ -726,24 +728,19 @@ async function main(): Promise<void> {
         reason += `; liquid via hooked pools (${pct(hookedLossBps)}, hooks ${hooks.join(', ')}), not supported yet`;
     }
 
-    const pools: PoolRow[] = [];
-    for (const p of seen.values()) {
-      const allowed =
-        (await client.readContract({
-          address: swapper,
-          abi: ADAPTER_ABI,
-          functionName: 'poolAllowed',
-          args: [p.id],
-        })) === true;
-      pools.push({
+    const isAllowed = async (id: Hex): Promise<boolean> =>
+      (await client.readContract({ address: swapper, abi: ADAPTER_ABI, functionName: 'poolAllowed', args: [id] })) ===
+      true;
+    const pools: PoolRow[] = await Promise.all(
+      [...seen.values()].map(async p => ({
         id: p.id,
         pair: `${await symbolOf(p.token0)}/${await symbolOf(p.token1)}`,
         venue: p.venue,
         feePct: p.fee / 10_000,
         tickSpacing: p.tickSpacing,
-        allowed,
-      });
-    }
+        allowed: await isAllowed(p.id),
+      }))
+    );
     let toAdd = verdict === 'REJECT' ? [] : pools.filter(p => !p.allowed).map(p => p.id);
     // Uniswap's best route may prefer new pools even when the token already trades through an
     // allowlisted direct pool (the API then routes around the missing ones). Extra pools are
@@ -776,17 +773,9 @@ async function main(): Promise<void> {
           ).map(([fee, tickSpacing]) => guardedPoolOf({ venue: 1, tokenIn: token, tokenOut: hub, fee, tickSpacing }))
         ),
       ];
-      for (const { id } of candidates) {
-        if (directIds.includes(id)) continue;
-        const allowed =
-          (await client.readContract({
-            address: swapper,
-            abi: ADAPTER_ABI,
-            functionName: 'poolAllowed',
-            args: [id],
-          })) === true;
-        if (allowed) directIds.push(id);
-      }
+      const fresh = candidates.map(c => c.id).filter(id => !directIds.includes(id));
+      const answers = await Promise.all(fresh.map(isAllowed));
+      directIds.push(...fresh.filter((_, k) => answers[k]));
     }
     const direct = directIds.length > 0;
     if (verdict !== 'REJECT' && (toAdd.length === 0 || direct)) {
@@ -823,8 +812,26 @@ async function main(): Promise<void> {
     const review: Review = { ...base, reply: replyLine(base, Number(smallEth), Number(refEth), ethUsd) };
     results.push(review);
     registry[token] = review;
-    log(`[${i + 1}/${tokens.length}] ${symbol.padEnd(10)} ${verdict.padEnd(11)} ${reason}`);
-  }
+    log(`[${++done}/${tokens.length}] ${symbol.padEnd(10)} ${verdict.padEnd(11)} ${reason}`);
+  };
+
+  // Tokens run in parallel; the Trading API client still spaces every request by 200 ms (one
+  // queue for the process), so more workers only overlap the waiting, never exceed its rate.
+  const concurrency = Math.max(1, Number(process.env.CONCURRENCY ?? 4));
+  const queue = [...tokens];
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      for (let t = queue.shift(); t; t = queue.shift()) {
+        try {
+          await reviewOne(t);
+        } catch (err) {
+          log(`  ${t}: review failed, skipped (${(err as Error).message.split('\n')[0]})`);
+        }
+      }
+    })
+  );
+  const order = new Map(tokens.map((t, k) => [t as string, k]));
+  results.sort((a, b) => order.get(a.address)! - order.get(b.address)!);
 
   // ---- output -------------------------------------------------------------
   const runDir = join(dir, 'runs', runAt.replace(/[:.]/g, '-'));
