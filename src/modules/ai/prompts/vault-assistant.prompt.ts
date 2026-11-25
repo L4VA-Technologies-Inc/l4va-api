@@ -17,7 +17,8 @@ function renderFields(spec: ResolvedVaultCreationSpec): string {
     .map(name => {
       const field = spec.fields[name];
       const values = field.values?.length ? ` [${field.values.join(' | ')}]` : '';
-      return `- ${name} (step ${field.step}, ${field.type})${values}: ${field.description}${describeFieldConstraints(field)}`;
+      const hint = field.hint ? ` UI tooltip: "${field.hint}"` : '';
+      return `- ${name} (step ${field.step}, ${field.type})${values}: ${field.description}${hint}${describeFieldConstraints(field)}`;
     })
     .join('\n');
 }

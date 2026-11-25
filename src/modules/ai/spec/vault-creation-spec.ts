@@ -142,6 +142,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     allowAcquireExpansion: {
+      label: 'Acquire expansion',
+      hint: 'Holders can later vote to reopen the vault for new funds in exchange for newly minted vault tokens.',
       type: 'boolean',
       step: 1,
       default: false,
@@ -286,6 +288,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
 
     // --- Step 3: Acquire -----------------------------------------------------
     acquireOpenWindowType: {
+      label: 'Acquire opens',
+      hint: 'When the acquire window starts. Acquire-only vaults open the moment the vault launches.',
       type: 'enum',
       step: 3,
       required: true,
@@ -296,6 +300,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     acquireOpenWindowTime: {
+      label: 'Acquire launch date',
+      hint: 'The date and time the acquire window opens.',
       type: 'number',
       step: 3,
       requiredWhen: 'acquireOpenWindowType is "custom"',
@@ -307,6 +313,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     acquireWindowDuration: {
+      label: 'Acquire duration',
+      hint: 'How long the acquire window stays open. Acquirers send the native currency during this window and receive vault tokens when it closes.',
       type: 'integer',
       step: 3,
       required: true,
@@ -318,6 +326,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     tokensForAcquires: {
+      label: 'For acquirers',
+      hint: 'Share of vault tokens that goes to acquirers. Fixed at 100% for acquire vaults.',
       type: 'number',
       step: 3,
       required: true,
@@ -328,16 +338,21 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     acquireReserve: {
+      label: 'Reserve %',
+      hint: 'Share of the funds raised that stays in the vault. Fixed at 100% for acquire vaults.',
       type: 'number',
       step: 3,
       required: true,
       unit: '%',
       min: 0,
       max: 100,
-      description: 'Share of the acquire allocation held back as reserve.',
+      description:
+        'Share of the acquire allocation held back as reserve. Shown in the UI as "Reserve %". NOT the "Reserve amount" / "Min acquire" / "Minimum raise" field — that is minAcquireThreshold.',
       aiEditable: true,
     },
     liquidityPoolContribution: {
+      label: 'LP contribution',
+      hint: 'Share of vault tokens and funds used to seed a liquidity pool when the vault locks. 0% means no pool.',
       type: 'number',
       step: 3,
       required: true,
@@ -348,6 +363,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     isAcquireOnly: {
+      label: 'Acquisitions only',
+      hint: 'The vault raises the native currency from acquirers only; there is no asset contribution phase.',
       type: 'boolean',
       step: 3,
       default: false,
@@ -355,6 +372,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     minAcquireThreshold: {
+      label: 'Min acquire',
+      hint: 'Minimum the acquire window must raise. If less is raised, the vault fails and every acquirer is refunded.',
       type: 'number',
       step: 3,
       unit: 'ADA',
@@ -366,6 +385,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
 
     // --- Step 4: Govern ------------------------------------------------------
     ftTokenSupply: {
+      label: 'Token supply',
+      hint: 'Total number of vault tokens minted.',
       type: 'integer',
       step: 4,
       required: true,
@@ -377,6 +398,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     terminationType: {
+      label: 'Termination',
+      hint: 'How the vault can be wound down. DAO: holders vote to terminate.',
       type: 'enum',
       step: 4,
       required: true,
@@ -386,6 +409,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     creationThreshold: {
+      label: 'Proposal threshold',
+      hint: 'Share of vault tokens a holder needs to create a governance proposal.',
       type: 'number',
       step: 4,
       required: true,
@@ -396,6 +421,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     cosigningThreshold: {
+      label: 'Quorum',
+      hint: 'Share of all vault tokens that must vote for a proposal to count.',
       type: 'number',
       step: 4,
       required: true,
@@ -406,6 +433,8 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
       aiEditable: true,
     },
     executionThreshold: {
+      label: 'Approval',
+      hint: "Share of the votes cast that must be 'yes' for a proposal to pass.",
       type: 'number',
       step: 4,
       required: true,
@@ -427,11 +456,12 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
   networkOverrides: {
     preprod: {
       contributionDuration: { min: 300_000, default: 300_000 },
-      acquireWindowDuration: { min: 300_000, default: 300_000 },
+      // 48h default (the form's long-standing default); staging env overrides it with its short minimum.
+      acquireWindowDuration: { min: 300_000, default: 2 * DAY_MS },
     },
     mainnet: {
       contributionDuration: { min: 5 * DAY_MS, default: 5 * DAY_MS },
-      acquireWindowDuration: { min: 5 * DAY_MS, default: 5 * DAY_MS },
+      acquireWindowDuration: { min: DAY_MS, default: 2 * DAY_MS },
     },
   },
 
@@ -449,15 +479,27 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
           values: ['public'],
           description: 'Robinhood Chain vaults are always public.',
         },
-        minAcquireThreshold: { unit: 'ETH', min: 0.01, max: 100_000 },
+        // Required on Robinhood: an acquire-only vault must name the minimum it raises.
+        minAcquireThreshold: {
+          unit: 'ETH',
+          min: 0.01,
+          max: 100_000,
+          requiredWhen: 'isAcquireOnly is true',
+          requiredIf: [{ field: 'isAcquireOnly', equals: true }],
+          hint: 'Minimum the acquire window must raise, entered in USD and stored in ETH at the current price. If less is raised, the vault fails and every acquirer is refunded.',
+          description:
+            'Required minimum the acquire window must raise (ETH) for the vault to lock; otherwise every acquirer is refunded. Shown in the UI as "Reserve amount" (index vaults), "Min acquire" or "Minimum raise" — when the user says any of these, set this field, not acquireReserve. Only used when isAcquireOnly is true.',
+        },
         // Same floor the client form and the create endpoint use on Robinhood (Cardano keeps 0.5%).
         creationThreshold: { min: 0.1, default: 0.1 },
         // Robinhood launch range, same as the client form's rh-lp-range check.
         liquidityPoolContribution: { min: 5, max: 20, default: 10 },
+        // Robinhood launch spec: acquire expansion is on by default (creator can turn it off).
+        allowAcquireExpansion: { default: true },
       },
       rules: [
         'Robinhood Chain vaults are always public — never propose "private" or "semi-private".',
-        'minAcquireThreshold is entered in ETH and may be fractional.',
+        'minAcquireThreshold is entered in ETH and may be fractional. It is REQUIRED for acquire-only vaults — never set it to 0 or leave it empty; ask the user for an amount.',
       ],
     },
   },
@@ -477,6 +519,7 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
         tokensForAcquires: { default: 100, description: 'Always 100 for an index vault.', aiEditable: false },
         assetsWhitelist: { required: false, notApplicableIf: [{ field: 'isAcquireOnly', equals: true }] },
         indexBasket: { required: true },
+        minAcquireThreshold: { label: 'Reserve amount' },
         type: { values: ['cnt'], default: 'cnt', description: 'Always "cnt": the vault holds fungible tokens.' },
         tags: {
           values: VAULT_TAGS.filter(tag => !NON_INDEX_TAGS.has(tag)),
