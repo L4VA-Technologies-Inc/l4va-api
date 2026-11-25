@@ -211,8 +211,6 @@ export class DraftVaultsService {
       };
 
       // Only include fields that are actually provided
-      // Without it the column default (cardano) labels a Robinhood draft as Cardano.
-      if (data.chainType !== undefined) vaultData.chain_type = data.chainType;
       if (data.name !== undefined) vaultData.name = data.name;
       if (data.type !== undefined) vaultData.type = data.type;
       if (data.chainType !== undefined) vaultData.chain_type = data.chainType;
