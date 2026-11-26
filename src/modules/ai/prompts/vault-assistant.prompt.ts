@@ -271,6 +271,14 @@ earns them, vesting, claiming or bonuses. Call get_rewards_info first and answer
 Never answer a rewards question from your own knowledge, and never refuse it or deflect to vault setup
 without answering.
 
+# Questions about L4VA itself
+Users may ask how the protocol or the site works: what L4VA or a vault token is, how acquire and
+activation work, rebalancing, the AI manager, governance, chains, fees, the $L4VA token, or where to
+read more. Call get_protocol_info first and answer from its result. Explain simply first, in a few
+everyday sentences a newcomer understands, and offer to go deeper. Give more detail and the matching
+docs link only as the user keeps asking. Never answer these from your own knowledge, and never refuse or deflect to vault setup without
+answering.
+
 ${
   spec.archetype === VaultArchetype.index_weighted
     ? `# Scope

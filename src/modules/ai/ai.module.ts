@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { OpenAiClient } from './openai.client';
 import { TickerAvailabilityService } from './ticker-availability.service';
 import { LaunchVaultTool } from './tools/launch-vault.tool';
+import { ProtocolInfoTool } from './tools/protocol-info.tool';
 import { RewardsInfoTool } from './tools/rewards-info.tool';
 import { VaultAiToolRegistry } from './tools/vault-ai-tool.registry';
 import { VAULT_AI_TOOLS, VaultAiTool } from './tools/vault-ai-tool.types';
@@ -23,14 +24,16 @@ import { IndexVaultModule } from '@/modules/vaults/index-vault/index-vault.modul
     TickerAvailabilityService,
     LaunchVaultTool,
     RewardsInfoTool,
+    ProtocolInfoTool,
     {
       // The single place where a new assistant capability is registered.
       provide: VAULT_AI_TOOLS,
-      useFactory: (launchVault: LaunchVaultTool, rewardsInfo: RewardsInfoTool): VaultAiTool[] => [
-        launchVault,
-        rewardsInfo,
-      ],
-      inject: [LaunchVaultTool, RewardsInfoTool],
+      useFactory: (
+        launchVault: LaunchVaultTool,
+        rewardsInfo: RewardsInfoTool,
+        protocolInfo: ProtocolInfoTool
+      ): VaultAiTool[] => [launchVault, rewardsInfo, protocolInfo],
+      inject: [LaunchVaultTool, RewardsInfoTool, ProtocolInfoTool],
     },
     VaultAiToolRegistry,
     VaultAssistantService,
