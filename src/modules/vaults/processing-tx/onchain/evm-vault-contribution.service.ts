@@ -15,9 +15,10 @@ import { EvmKmsSigners } from './evm-kms-signers.service';
 import { readVaultFrozen } from './evm-pause.service';
 import { acquireExpansionVtForWei, isV13Version, toV13CycleView, VAULT_V13_ABI } from './evm-v13';
 import { EvmVaultEventReconciler } from './evm-vault-event-reconciler.service';
-import { VAULT_ABI } from './vault.abi';
+import { EvmCycleStatus, VAULT_ABI } from './vault.abi';
 
 import { Asset } from '@/database/asset.entity';
+import { EvmContribution, EvmContributionRowStatus } from '@/database/evm-contribution.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -144,6 +145,32 @@ const CONTRIBUTION_TYPES = {
  *     status confirmation.
  */
 
+/** Solidity AssetKind.Native (ETH acquire). */
+const EVM_ASSET_KIND_NATIVE = 0;
+
+export interface SelfCancellableContribution {
+  /** On-chain id to pass to `cancelContribution`. */
+  contributionId: string;
+  /** Asset row the contribution created (matches the id in the vault's asset lists). */
+  assetId: string | null;
+  /** 0=Native (ETH acquire), 1=ERC20, 2=ERC721, 3=ERC1155 */
+  kind: number;
+  asset: string;
+  tokenId: string | null;
+  /** Base units (wei for ETH). */
+  amount: string;
+  txHash: string;
+  createdAt: Date;
+  /** After this the contract no longer accepts the self-cancel. */
+  windowEndsAt: Date;
+}
+
+export interface SelfCancellableContributionsResponse {
+  vaultAddress: string | null;
+  chainId: number;
+  contributions: SelfCancellableContribution[];
+}
+
 @Injectable()
 export class EvmVaultContributionService {
   private readonly logger = new Logger(EvmVaultContributionService.name);
@@ -161,6 +188,7 @@ export class EvmVaultContributionService {
   constructor(
     @InjectRepository(Vault) private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(Transaction) private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(EvmContribution) private readonly contribsRepository: Repository<EvmContribution>,
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     private readonly blockchainWebhookService: BlockchainWebhookService,
@@ -859,5 +887,65 @@ export class EvmVaultContributionService {
       default:
         return { required: false };
     }
+  }
+
+  /**
+   * The caller's contributions on the vault's current cycle that they can still take back
+   * themselves with `cancelContribution(id)`: cycle Active and the contribution's window
+   * (acquire for ETH, asset window for tokens) still open — the same rule the contract enforces.
+   */
+  async listSelfCancellableContributions(
+    vaultId: string,
+    userAddress: string
+  ): Promise<SelfCancellableContributionsResponse> {
+    const vault = await this.vaultsRepository.findOne({ where: { id: vaultId } });
+    if (!vault || vault.deleted) throw new NotFoundException('Vault not found');
+    const empty: SelfCancellableContributionsResponse = {
+      vaultAddress: vault.contract_address ?? null,
+      chainId: this.chainId,
+      contributions: [],
+    };
+    if (vault.chain_type !== ChainType.robinhood || !vault.contract_address || !userAddress) return empty;
+
+    const vaultAddress = vault.contract_address as Address;
+    const cycleId = await this.contractReader.currentCycleId(vaultAddress);
+    const cycle = await this.contractReader.getCycle(vaultAddress, cycleId);
+    if (Number(cycle.status) !== EvmCycleStatus.Active) return empty;
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const openUntil = (w: { start: bigint; end: bigint }): bigint | null =>
+      w.end > 0n && nowSec >= w.start && nowSec < w.end ? w.end : null;
+    const acquireEnd = openUntil(cycle.acquireWindow);
+    const assetEnd = openUntil(cycle.assetWindow);
+    if (acquireEnd === null && assetEnd === null) return empty;
+
+    const rows = await this.contribsRepository
+      .createQueryBuilder('c')
+      .where('c.vault_id = :vaultId', { vaultId })
+      .andWhere('c.cycle_id = :cycleId', { cycleId: cycleId.toString() })
+      .andWhere('c.status = :active', { active: EvmContributionRowStatus.active })
+      .andWhere('LOWER(c.contributor) = :me', { me: userAddress.toLowerCase() })
+      .orderBy('c.created_at', 'DESC')
+      .getMany();
+
+    const contributions = rows
+      .map(row => {
+        const windowEnd = row.kind === EVM_ASSET_KIND_NATIVE ? acquireEnd : assetEnd;
+        if (windowEnd === null) return null;
+        return {
+          contributionId: row.on_chain_contribution_id,
+          assetId: row.asset_id ?? null,
+          kind: row.kind,
+          asset: row.asset,
+          tokenId: row.token_id ?? null,
+          amount: row.amount,
+          txHash: row.contribution_tx_hash,
+          createdAt: row.created_at,
+          windowEndsAt: new Date(Number(windowEnd) * 1000),
+        };
+      })
+      .filter((c): c is SelfCancellableContribution => c !== null);
+
+    return { ...empty, contributions };
   }
 }
