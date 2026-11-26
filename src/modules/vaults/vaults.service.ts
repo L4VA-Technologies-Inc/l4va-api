@@ -753,6 +753,8 @@ export class VaultsService {
         delete vaultData.acquirer_whitelist_csv;
         delete vaultData.contributor_whitelist_csv;
         delete vaultData.index_basket;
+        // Expandable unless the creator turned it off (index vaults have no checkbox).
+        vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist ?? true;
         // Set after the snake-case transform, which would otherwise rewrite the config's own keys.
         vaultData.vault_archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
         vaultData.index_config = indexConfig;
@@ -778,6 +780,8 @@ export class VaultsService {
         delete vaultData.acquirer_whitelist;
         delete vaultData.contributor_whitelist;
         delete vaultData.tags;
+        // Expandable unless the creator turned it off (index vaults have no checkbox).
+        vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist ?? true;
         try {
           newVault = await this.vaultsRepository.save(vaultData as Vault);
           newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
@@ -3717,8 +3721,14 @@ export class VaultsService {
 
     const vaultAddress = vault.contract_address as Address;
     let cancelTxHash: string | undefined = vault.evm_cancel_cycle_tx_hash;
+    const onChainStatus = cancelTxHash ? null : await this.readEvmVaultStatus(vaultAddress);
 
-    if (!cancelTxHash && (await this.readEvmVaultStatus(vaultAddress)) === EvmVaultOnchainStatus.Active) {
+    // In the acquire phase the cycle must still be open on-chain; a closing/locked cycle cannot be cancelled.
+    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault) && onChainStatus !== EvmVaultOnchainStatus.Active) {
+      throw new BadRequestException('The acquire window is already closing; the vault can no longer be cancelled');
+    }
+
+    if (!cancelTxHash && onChainStatus === EvmVaultOnchainStatus.Active) {
       try {
         const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(
           vault.id,
@@ -3744,6 +3754,14 @@ export class VaultsService {
     }
 
     if (onChainContributions === 0n && !hasRefundableFlows) {
+      if (cancelTxHash) {
+        // Cancelled on-chain: leave no live phase status behind, or phase crons keep picking the vault up.
+        vault.vault_status = VaultStatus.failed;
+        vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+        vault.last_update_tx_hash = cancelTxHash;
+        vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
+        vault.failure_details = { message: 'Cancelled by owner', chainType: ChainType.robinhood };
+      }
       return this.softDeleteCancelledVault(vault);
     }
 
@@ -3803,8 +3821,19 @@ export class VaultsService {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status)) {
+    // Robinhood acquire-only vaults can also be cancelled while the acquire window is open:
+    // the cycle is cancelled on-chain and every acquirer gets their ETH back by the refund cron.
+    const isRhAcquireCancel = isRobinhoodAcquireOnlyCancel(vault);
+
+    if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status) && !isRhAcquireCancel) {
       throw new BadRequestException('Vault cannot be cancelled in its current status');
+    }
+
+    if (isRhAcquireCancel && vault.acquire_phase_start && vault.acquire_window_duration) {
+      const endsAt = new Date(vault.acquire_phase_start).getTime() + Number(vault.acquire_window_duration);
+      if (Date.now() >= endsAt) {
+        throw new BadRequestException('The acquire window has ended; the vault can no longer be cancelled');
+      }
     }
 
     if (vault.vault_status === VaultStatus.contribution) {
@@ -3833,6 +3862,9 @@ export class VaultsService {
         throw new BadRequestException('Vault cannot be cancelled while a contribution is being processed');
       }
     }
+
+    // Acquirers' ETH does not block an acquire-phase cancel: it is refunded.
+    if (isRhAcquireCancel) return vault;
 
     const blockingAsset = await this.assetsRepository
       .createQueryBuilder('asset')
@@ -3962,4 +3994,13 @@ export class VaultsService {
 
     return true;
   }
+}
+
+/** Robinhood acquire-only vault in its acquire phase: cancellable by the owner, acquirers refunded. */
+function isRobinhoodAcquireOnlyCancel(vault: Vault): boolean {
+  return (
+    vault.chain_type === ChainType.robinhood &&
+    vault.is_acquire_only === true &&
+    vault.vault_status === VaultStatus.acquire
+  );
 }

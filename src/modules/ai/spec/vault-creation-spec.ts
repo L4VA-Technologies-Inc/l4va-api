@@ -153,7 +153,7 @@ export const VAULT_CREATION_SPEC: VaultCreationSpec = {
     isExpandableAssetWhitelist: {
       type: 'boolean',
       step: 1,
-      default: false,
+      default: true,
       description: 'Allow governance to add collections to the asset whitelist after launch.',
       aiEditable: true,
     },
