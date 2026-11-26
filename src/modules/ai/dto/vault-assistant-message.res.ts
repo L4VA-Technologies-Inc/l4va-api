@@ -31,6 +31,14 @@ export class VaultAssistantMessageRes {
   @Expose()
   options: VaultAssistantOption[];
 
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "The user's likely next message, shown as the input placeholder; always null when options are set",
+  })
+  @Expose()
+  suggestedReply: string | null;
+
   @ApiProperty({ type: [String], description: 'Required fields that still have no value' })
   @Expose()
   missingFields: string[];

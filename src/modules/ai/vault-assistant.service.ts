@@ -32,6 +32,7 @@ interface AssistantCompletion {
   status?: unknown;
   missingFields?: unknown;
   options?: unknown;
+  suggestedReply?: unknown;
   vaultDraft?: unknown;
   resetDraft?: unknown;
   basketSymbols?: unknown;
@@ -67,6 +68,16 @@ const MAX_TOOL_ROUNDS = 3;
 const MAX_OPTIONS = 3;
 const MAX_OPTION_LABEL_LENGTH = 40;
 const MAX_OPTION_VALUE_LENGTH = 200;
+
+const MAX_SUGGESTED_REPLY_LENGTH = 120;
+
+/** The input hint is model-authored text, so it is trimmed to one short line or dropped. */
+function sanitizeSuggestedReply(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.replace(/\s+/g, ' ').trim();
+  if (!text || text.length > MAX_SUGGESTED_REPLY_LENGTH) return null;
+  return text;
+}
 
 /** Quick replies are model-authored text that becomes a button, so they are length-capped here. */
 function sanitizeOptions(raw: unknown): VaultAssistantOption[] {
@@ -486,6 +497,7 @@ export class VaultAssistantService {
       : [];
 
     const message = typeof completion.message === 'string' ? completion.message : '';
+    const options = sanitizeOptions(completion.options);
     return {
       message: tickerNote ? `${message}${message ? ' ' : ''}${tickerNote}` : message,
       // A rejected value means the draft is not complete, whatever the model claims.
@@ -493,7 +505,9 @@ export class VaultAssistantService {
       vaultDraft: draft,
       resetDraft: completion.resetDraft === true,
       missingFields,
-      options: sanitizeOptions(completion.options),
+      options,
+      // A hint never competes with quick replies: with options on screen there is none.
+      suggestedReply: options.length ? null : sanitizeSuggestedReply(completion.suggestedReply),
       rejected,
       specVersion: spec.version,
       // An action only exists because a tool produced it after server-side validation — the model

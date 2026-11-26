@@ -79,7 +79,16 @@ export function buildVaultDraftJsonSchema(
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['message', 'status', 'missingFields', 'options', 'vaultDraft', 'resetDraft', 'basketSymbols'],
+    required: [
+      'message',
+      'status',
+      'missingFields',
+      'options',
+      'suggestedReply',
+      'vaultDraft',
+      'resetDraft',
+      'basketSymbols',
+    ],
     properties: {
       basketSymbols: {
         type: ['array', 'null'],
@@ -113,6 +122,12 @@ export function buildVaultDraftJsonSchema(
             value: { type: 'string', description: 'Reply to send as the user, or a reserved UI action.' },
           },
         },
+      },
+      suggestedReply: {
+        type: ['string', 'null'],
+        description:
+          "The user's most likely next message, shown as a hint in the empty input; null when options are set " +
+          "or there is no obvious next step. One short sentence in the user's language.",
       },
       missingFields: {
         type: 'array',
