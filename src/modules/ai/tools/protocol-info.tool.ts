@@ -12,7 +12,7 @@ const DOCS = 'https://l4va.gitbook.io/l4va-protocol';
 // The GitBook rewards page is out of date (2026-11-25), so it is not linked; rewards come from
 // get_rewards_info, which mirrors the site.
 const L4VA_PROTOCOL_REFERENCE = `In plain words (use this level first)
-- L4VA lets anyone turn an investment idea into a vault: a basket of assets with its own token.
+- L4VA lets anyone turn a strategy idea into a vault: a basket of assets with its own token.
 - People put in ETH (or ADA on Cardano) during the acquire phase and get the vault's token in return.
 - Once enough is raised, the vault goes live: it buys the assets in the basket and the token becomes
   tradable on Uniswap.
@@ -20,6 +20,9 @@ const L4VA_PROTOCOL_REFERENCE = `In plain words (use this level first)
   changes.
 - Holding the vault token is like holding a share of that basket; its price can move above or below
   what the basket is worth.
+
+Wording (always): the people who put ETH/ADA into a vault are "acquirers" (or "participants");
+assets are "acquired" or "contributed". Never say investors, investment, invest, returns or profit.
 
 Details (only when the user asks for more)
 
