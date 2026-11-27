@@ -10,6 +10,12 @@ export class VaultCreationFlagsResponseDto {
   @ApiProperty({ description: 'Whether NFT (ERC721/ERC1155) assets are enabled on EVM (Robinhood-chain) vaults' })
   evm_nft_assets_enabled: boolean;
 
+  @ApiProperty({ description: 'Robinhood: owner may cancel an acquire-only vault during the acquire window' })
+  evm_vault_cancel_enabled: boolean;
+
+  @ApiProperty({ description: 'Robinhood: contributors may withdraw their own contributions while the window is open' })
+  evm_contribution_withdraw_enabled: boolean;
+
   @ApiProperty({
     description:
       'Vault archetypes a creator may choose, per chain. A chain with a single entry has no vault-type choice to make.',

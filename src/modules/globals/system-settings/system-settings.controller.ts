@@ -86,8 +86,9 @@ export class SystemSettingsController {
     };
   }
 
+  // Public on purpose: the vault browse pages (Acquire/Govern) read the archetype filter from
+  // these flags, and anonymous visitors must not get a 401 (the client logs out/redirects on 401).
   @Get('vault-creation-flags')
-  @UseGuards(AuthGuard)
   @ApiDoc({
     summary: 'Get the vault-creation feature flags',
     description:
@@ -103,6 +104,8 @@ export class SystemSettingsController {
     return {
       evm_enabled: this.systemSettingsService.evmEnabled,
       evm_nft_assets_enabled: this.systemSettingsService.evmNftAssetsEnabled,
+      evm_vault_cancel_enabled: this.systemSettingsService.evmVaultCancelEnabled,
+      evm_contribution_withdraw_enabled: this.systemSettingsService.evmContributionWithdrawEnabled,
       vault_archetypes_enabled: {
         [ChainType.cardano]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.cardano),
         [ChainType.robinhood]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.robinhood),

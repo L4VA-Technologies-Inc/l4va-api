@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Post,
   UseGuards,
   HttpCode,
@@ -25,7 +26,11 @@ import { SubmitStandaloneTokenMetadataDto } from './dto/submit-standalone-token-
 import { BuildTransactionDto, SubmitTransactionDto, TransactionSubmitResponseDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { EvmCycleCloseService } from './evm-cycle-close.service';
-import { EvmContributionPrepareResponse, EvmVaultContributionService } from './evm-vault-contribution.service';
+import {
+  EvmContributionPrepareResponse,
+  EvmVaultContributionService,
+  SelfCancellableContributionsResponse,
+} from './evm-vault-contribution.service';
 import { EvmWebhookService } from './evm-webhook.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
@@ -78,6 +83,21 @@ export class BlockchainController {
     @Request() req: AuthRequest
   ): Promise<TransactionSubmitResponseDto> {
     return this.vaultContributionService.submitContributionTransaction(params, req.user.sub);
+  }
+
+  @Get('evm/vaults/:vaultId/my-contributions')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: "Caller's contributions they can still cancel themselves",
+    description:
+      'Active contributions of the signed-in wallet on the current cycle whose window is still open. Each can be taken back by calling `cancelContribution(contributionId)` on the vault from the contributor wallet.',
+  })
+  @ApiParam({ name: 'vaultId', type: String })
+  async getMySelfCancellableContributions(
+    @Param('vaultId') vaultId: string,
+    @Request() req: AuthRequest
+  ): Promise<SelfCancellableContributionsResponse> {
+    return this.evmVaultContributionService.listSelfCancellableContributions(vaultId, req.user.address);
   }
 
   @Post('evm/contribution/prepare')

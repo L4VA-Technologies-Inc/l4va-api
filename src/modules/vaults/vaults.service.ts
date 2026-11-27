@@ -753,8 +753,8 @@ export class VaultsService {
         delete vaultData.acquirer_whitelist_csv;
         delete vaultData.contributor_whitelist_csv;
         delete vaultData.index_basket;
-        // Every vault's asset whitelist can be expanded by governance, whatever the form sent.
-        vaultData.is_expandable_asset_whitelist = true;
+        // Expandable unless the creator turned it off (index vaults have no checkbox).
+        vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist ?? true;
         // Set after the snake-case transform, which would otherwise rewrite the config's own keys.
         vaultData.vault_archetype = isIndexVault ? VaultArchetype.index_weighted : VaultArchetype.standard;
         vaultData.index_config = indexConfig;
@@ -780,8 +780,8 @@ export class VaultsService {
         delete vaultData.acquirer_whitelist;
         delete vaultData.contributor_whitelist;
         delete vaultData.tags;
-        // Every vault's asset whitelist can be expanded by governance, whatever the form sent.
-        vaultData.is_expandable_asset_whitelist = true;
+        // Expandable unless the creator turned it off (index vaults have no checkbox).
+        vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist ?? true;
         try {
           newVault = await this.vaultsRepository.save(vaultData as Vault);
           newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
@@ -3722,7 +3722,32 @@ export class VaultsService {
     const vaultAddress = vault.contract_address as Address;
     let cancelTxHash: string | undefined = vault.evm_cancel_cycle_tx_hash;
 
-    if (!cancelTxHash && (await this.readEvmVaultStatus(vaultAddress)) === EvmVaultOnchainStatus.Active) {
+    // The DB can lag behind the chain: pull in on-chain acquires before the irreversible cancel,
+    // so a non-owner acquire the API has not seen yet still blocks it.
+    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled)) {
+      try {
+        await this.evmContributionBackfillService.backfillVault(vault.id);
+      } catch (err) {
+        this.logger.error(`Owner cancel: pre-cancel sync failed for vault ${vault.id}: ${(err as Error).message}`);
+        throw new BadRequestException('Failed to verify vault contributions on-chain. Please try again later.');
+      }
+      if (await this.hasForeignEvmFunds(vault)) {
+        throw new BadRequestException('Vault cannot be cancelled because other users have already acquired');
+      }
+    }
+
+    const onChainStatus = cancelTxHash ? null : await this.readEvmVaultStatus(vaultAddress);
+
+    // In the acquire phase the cycle must still be open on-chain; a closing/locked cycle cannot be cancelled.
+    if (
+      !cancelTxHash &&
+      isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled) &&
+      onChainStatus !== EvmVaultOnchainStatus.Active
+    ) {
+      throw new BadRequestException('The acquire window is already closing; the vault can no longer be cancelled');
+    }
+
+    if (!cancelTxHash && onChainStatus === EvmVaultOnchainStatus.Active) {
       try {
         const { txHash } = await this.evmCycleCloseService.cancelCurrentCycle(
           vault.id,
@@ -3748,6 +3773,14 @@ export class VaultsService {
     }
 
     if (onChainContributions === 0n && !hasRefundableFlows) {
+      if (cancelTxHash) {
+        // Cancelled on-chain: leave no live phase status behind, or phase crons keep picking the vault up.
+        vault.vault_status = VaultStatus.failed;
+        vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+        vault.last_update_tx_hash = cancelTxHash;
+        vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
+        vault.failure_details = { message: 'Cancelled by owner', chainType: ChainType.robinhood };
+      }
       return this.softDeleteCancelledVault(vault);
     }
 
@@ -3768,6 +3801,26 @@ export class VaultsService {
     await this.vaultsRepository.save(vault);
 
     return { success: true };
+  }
+
+  /** True when anyone but the owner has put funds into this EVM vault (recorded, or still in flight). */
+  private async hasForeignEvmFunds(vault: Vault): Promise<boolean> {
+    const ownerAddress = vault.owner?.address?.toLowerCase();
+    const foreignOnChain = await this.evmContributionsRepository
+      .createQueryBuilder('c')
+      .where('c.vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere(ownerAddress ? 'LOWER(c.contributor) <> :owner' : '1=1', { owner: ownerAddress })
+      .getExists();
+    if (foreignOnChain) return true;
+
+    return this.transactionRepository.exists({
+      where: {
+        vault_id: vault.id,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: In([TransactionStatus.pending, TransactionStatus.submitted, TransactionStatus.confirmed]),
+        user_id: Not(vault.owner.id),
+      },
+    });
   }
 
   private async readEvmVaultStatus(vaultAddress: Address): Promise<EvmVaultOnchainStatus> {
@@ -3807,8 +3860,19 @@ export class VaultsService {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status)) {
+    // Robinhood acquire-only vaults can also be cancelled while the acquire window is open, as long
+    // as only the owner has acquired; the cycle is cancelled on-chain and the owner's ETH refunded.
+    const isRhAcquireCancel = isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled);
+
+    if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status) && !isRhAcquireCancel) {
       throw new BadRequestException('Vault cannot be cancelled in its current status');
+    }
+
+    if (isRhAcquireCancel && vault.acquire_phase_start && vault.acquire_window_duration) {
+      const endsAt = new Date(vault.acquire_phase_start).getTime() + Number(vault.acquire_window_duration);
+      if (Date.now() >= endsAt) {
+        throw new BadRequestException('The acquire window has ended; the vault can no longer be cancelled');
+      }
     }
 
     if (vault.vault_status === VaultStatus.contribution) {
@@ -3836,6 +3900,13 @@ export class VaultsService {
       if (hasInFlightTx) {
         throw new BadRequestException('Vault cannot be cancelled while a contribution is being processed');
       }
+    }
+
+    if (isRhAcquireCancel) {
+      if (await this.hasForeignEvmFunds(vault)) {
+        throw new BadRequestException('Vault cannot be cancelled because other users have already acquired');
+      }
+      return vault;
     }
 
     const blockingAsset = await this.assetsRepository
@@ -3966,4 +4037,14 @@ export class VaultsService {
 
     return true;
   }
+}
+
+/** Robinhood acquire-only vault in its acquire phase: cancellable by the owner, acquirers refunded. */
+function isRobinhoodAcquireOnlyCancel(vault: Vault, enabled: boolean): boolean {
+  return (
+    enabled &&
+    vault.chain_type === ChainType.robinhood &&
+    vault.is_acquire_only === true &&
+    vault.vault_status === VaultStatus.acquire
+  );
 }

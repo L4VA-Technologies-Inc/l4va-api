@@ -63,6 +63,10 @@ export interface SystemSettingsData {
   // Allows disabling NFT (ERC721/ERC1155) assets on EVM (Robinhood-chain) vaults
   // without a contract change; Cardano NFT support is unaffected.
   evm_nft_assets_enabled: boolean;
+  // Robinhood: owner may cancel an acquire-only vault during the acquire window. Off until released.
+  evm_vault_cancel_enabled: boolean;
+  // Robinhood: contributors may take their own contributions back (cancelContribution). Off until released.
+  evm_contribution_withdraw_enabled: boolean;
   /**
    * Vault archetypes a creator may choose, per chain. Robinhood is limited to
    * index-weighted vaults until RWA and NFT support lands there; Cardano has no
@@ -159,6 +163,8 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   evm_enabled: true,
   cardano_buyback_enabled: true,
   evm_nft_assets_enabled: false,
+  evm_vault_cancel_enabled: false,
+  evm_contribution_withdraw_enabled: false,
   vault_archetypes_enabled: {
     [ChainType.cardano]: [VaultArchetype.standard],
     [ChainType.robinhood]: [VaultArchetype.index_weighted],
@@ -601,6 +607,14 @@ export class SystemSettingsService implements OnModuleInit {
 
   get cardanoBuybackEnabled(): boolean {
     return this.settings.cardano_buyback_enabled !== false; // Default true if not set
+  }
+
+  get evmVaultCancelEnabled(): boolean {
+    return this.settings.evm_vault_cancel_enabled === true; // Default false if not set
+  }
+
+  get evmContributionWithdrawEnabled(): boolean {
+    return this.settings.evm_contribution_withdraw_enabled === true; // Default false if not set
   }
 
   get evmNftAssetsEnabled(): boolean {
