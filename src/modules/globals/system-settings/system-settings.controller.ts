@@ -86,8 +86,9 @@ export class SystemSettingsController {
     };
   }
 
+  // Public on purpose: the vault browse pages (Acquire/Govern) read the archetype filter from
+  // these flags, and anonymous visitors must not get a 401 (the client logs out/redirects on 401).
   @Get('vault-creation-flags')
-  @UseGuards(AuthGuard)
   @ApiDoc({
     summary: 'Get the vault-creation feature flags',
     description:
