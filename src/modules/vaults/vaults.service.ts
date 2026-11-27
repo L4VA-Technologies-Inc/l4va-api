@@ -3724,7 +3724,7 @@ export class VaultsService {
 
     // The DB can lag behind the chain: pull in on-chain acquires before the irreversible cancel,
     // so a non-owner acquire the API has not seen yet still blocks it.
-    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault)) {
+    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled)) {
       try {
         await this.evmContributionBackfillService.backfillVault(vault.id);
       } catch (err) {
@@ -3739,7 +3739,11 @@ export class VaultsService {
     const onChainStatus = cancelTxHash ? null : await this.readEvmVaultStatus(vaultAddress);
 
     // In the acquire phase the cycle must still be open on-chain; a closing/locked cycle cannot be cancelled.
-    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault) && onChainStatus !== EvmVaultOnchainStatus.Active) {
+    if (
+      !cancelTxHash &&
+      isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled) &&
+      onChainStatus !== EvmVaultOnchainStatus.Active
+    ) {
       throw new BadRequestException('The acquire window is already closing; the vault can no longer be cancelled');
     }
 
@@ -3858,7 +3862,7 @@ export class VaultsService {
 
     // Robinhood acquire-only vaults can also be cancelled while the acquire window is open, as long
     // as only the owner has acquired; the cycle is cancelled on-chain and the owner's ETH refunded.
-    const isRhAcquireCancel = isRobinhoodAcquireOnlyCancel(vault);
+    const isRhAcquireCancel = isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled);
 
     if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status) && !isRhAcquireCancel) {
       throw new BadRequestException('Vault cannot be cancelled in its current status');
@@ -4036,8 +4040,9 @@ export class VaultsService {
 }
 
 /** Robinhood acquire-only vault in its acquire phase: cancellable by the owner, acquirers refunded. */
-function isRobinhoodAcquireOnlyCancel(vault: Vault): boolean {
+function isRobinhoodAcquireOnlyCancel(vault: Vault, enabled: boolean): boolean {
   return (
+    enabled &&
     vault.chain_type === ChainType.robinhood &&
     vault.is_acquire_only === true &&
     vault.vault_status === VaultStatus.acquire

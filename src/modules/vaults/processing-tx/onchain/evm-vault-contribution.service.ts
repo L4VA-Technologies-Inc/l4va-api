@@ -905,7 +905,13 @@ export class EvmVaultContributionService {
       chainId: this.chainId,
       contributions: [],
     };
-    if (vault.chain_type !== ChainType.robinhood || !vault.contract_address || !userAddress) return empty;
+    if (
+      !this.systemSettingsService.evmContributionWithdrawEnabled ||
+      vault.chain_type !== ChainType.robinhood ||
+      !vault.contract_address ||
+      !userAddress
+    )
+      return empty;
 
     const vaultAddress = vault.contract_address as Address;
     const cycleId = await this.contractReader.currentCycleId(vaultAddress);
