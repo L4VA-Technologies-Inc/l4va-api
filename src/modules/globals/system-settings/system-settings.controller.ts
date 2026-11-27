@@ -106,6 +106,7 @@ export class SystemSettingsController {
       evm_nft_assets_enabled: this.systemSettingsService.evmNftAssetsEnabled,
       evm_vault_cancel_enabled: this.systemSettingsService.evmVaultCancelEnabled,
       evm_contribution_withdraw_enabled: this.systemSettingsService.evmContributionWithdrawEnabled,
+      evm_staking_enabled: this.systemSettingsService.evmStakingEnabled,
       vault_archetypes_enabled: {
         [ChainType.cardano]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.cardano),
         [ChainType.robinhood]: this.systemSettingsService.vaultArchetypesEnabled(ChainType.robinhood),

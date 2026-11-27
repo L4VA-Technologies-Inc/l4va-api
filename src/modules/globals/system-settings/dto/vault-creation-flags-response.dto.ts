@@ -16,6 +16,9 @@ export class VaultCreationFlagsResponseDto {
   @ApiProperty({ description: 'Robinhood: contributors may withdraw their own contributions while the window is open' })
   evm_contribution_withdraw_enabled: boolean;
 
+  @ApiProperty({ description: 'Robinhood: L4VA staking (L4VAStaking contract) is available' })
+  evm_staking_enabled: boolean;
+
   @ApiProperty({
     description:
       'Vault archetypes a creator may choose, per chain. A chain with a single entry has no vault-type choice to make.',

@@ -9,6 +9,7 @@ import { In, Repository } from 'typeorm';
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
 import { StakingStatus, TokenStakingPosition } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { EVM_STAKE_CHAIN } from '@/modules/stake/evm/evm-stake.service';
 import { tryDecodeStakeDatum } from '@/modules/stake/stake-datum';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -109,6 +110,10 @@ export class StakeReconciliationService {
       .andWhere('tx.tx_hash IS NOT NULL')
       .andWhere('tx.created_at >= :threshold', { threshold })
       .andWhere("(tx.metadata IS NULL OR tx.metadata->>'orphaned_detected_at' IS NULL)")
+      // EVM staking rows are verified on Robinhood, not Blockfrost.
+      .andWhere("(tx.metadata IS NULL OR tx.metadata->>'chain' IS NULL OR tx.metadata->>'chain' <> :evmChain)", {
+        evmChain: EVM_STAKE_CHAIN,
+      })
       .getMany();
 
     if (recentConfirmedUnstakes.length === 0) {
@@ -190,6 +195,7 @@ export class StakeReconciliationService {
     });
 
     const openStakes = allStakeLike.filter(tx => {
+      if (tx.metadata?.chain === EVM_STAKE_CHAIN) return false;
       const stakedAt = Number(tx.metadata?.staked_at);
       const alreadyClosed = Boolean(tx.metadata?.direct_unstake_detected_at || tx.metadata?.closed_at);
       return Number.isFinite(stakedAt) && stakedAt > 0 && !alreadyClosed;

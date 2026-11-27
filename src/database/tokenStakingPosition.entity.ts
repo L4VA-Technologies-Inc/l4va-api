@@ -84,6 +84,15 @@ export class TokenStakingPosition {
   @Index()
   unstake_tx_id: string | null;
 
+  @Column({
+    name: 'chain_position_id',
+    type: 'varchar',
+    nullable: true,
+    comment: 'EVM only: L4VAStaking position id. Null for Cardano boxes.',
+  })
+  @Index('IDX_token_staking_positions_chain_position_id')
+  chain_position_id: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   created_at: Date;
 
