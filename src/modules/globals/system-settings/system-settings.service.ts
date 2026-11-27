@@ -67,6 +67,8 @@ export interface SystemSettingsData {
   evm_vault_cancel_enabled: boolean;
   // Robinhood: contributors may take their own contributions back (cancelContribution). Off until released.
   evm_contribution_withdraw_enabled: boolean;
+  // Robinhood: L4VAStaking (stake / unstake / harvest / compound) in API and UI. Off until released.
+  evm_staking_enabled: boolean;
   /**
    * Vault archetypes a creator may choose, per chain. Robinhood is limited to
    * index-weighted vaults until RWA and NFT support lands there; Cardano has no
@@ -165,6 +167,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   evm_nft_assets_enabled: false,
   evm_vault_cancel_enabled: false,
   evm_contribution_withdraw_enabled: false,
+  evm_staking_enabled: false,
   vault_archetypes_enabled: {
     [ChainType.cardano]: [VaultArchetype.standard],
     [ChainType.robinhood]: [VaultArchetype.index_weighted],
@@ -615,6 +618,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   get evmContributionWithdrawEnabled(): boolean {
     return this.settings.evm_contribution_withdraw_enabled === true; // Default false if not set
+  }
+
+  get evmStakingEnabled(): boolean {
+    return this.settings.evm_staking_enabled === true; // Default false if not set
   }
 
   get evmNftAssetsEnabled(): boolean {

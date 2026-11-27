@@ -1,14 +1,17 @@
 import { Body, Controller, ForbiddenException, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { isAddress } from 'viem';
 
 import { BuildTxRes } from './dto/build-tx.res';
 import { CompoundTokensDto } from './dto/compound-tokens.dto';
+import { ConfirmEvmStakeTxDto } from './dto/confirm-evm-stake-tx.dto';
 import { HarvestTokensDto } from './dto/harvest-tokens.dto';
 import { StakeTokensDto } from './dto/stake-tokens.dto';
 import { StakedBalanceRes } from './dto/staked-balance.res';
 import { SubmitStakeTxDto } from './dto/submit-stake-tx.dto';
 import { SubmitTxRes } from './dto/submit-tx.res';
 import { UnstakeTokensDto } from './dto/unstake-tokens.dto';
+import { EvmConfirmResult, EvmStakeConfig, EvmStakeService } from './evm/evm-stake.service';
 import { StakeService } from './stake.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
@@ -19,7 +22,10 @@ import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 @UseGuards(AuthGuard)
 @ApiBearerAuth()
 export class StakeController {
-  constructor(private readonly stakeService: StakeService) {}
+  constructor(
+    private readonly stakeService: StakeService,
+    private readonly evmStakeService: EvmStakeService
+  ) {}
 
   /** Ensures the payment address in the request body matches the JWT wallet. */
   private ensureWalletMatchesUser(req: AuthRequest, userAddress: string): void {
@@ -38,7 +44,33 @@ export class StakeController {
   })
   @ApiResponse({ status: 200, type: StakedBalanceRes })
   async getMyStakedBalance(@Req() req: AuthRequest): Promise<StakedBalanceRes> {
+    // Robinhood wallets: positions and live rewards come straight from L4VAStaking.
+    if (isAddress(req.user.address)) return this.evmStakeService.getStakedBalance(req.user.address);
     return this.stakeService.getStakedBalanceFromDb(req.user.sub);
+  }
+
+  @Get('evm/config')
+  @ApiOperation({
+    summary: 'Robinhood staking contract config',
+    description:
+      'L4VAStaking address, chain id, batch limit and per-token APY / minimum stake / reserve. ' +
+      'uint256 values are decimal strings in raw token units.',
+  })
+  async getEvmConfig(): Promise<EvmStakeConfig> {
+    return this.evmStakeService.getConfig();
+  }
+
+  @Post('evm/confirm')
+  @ApiOperation({
+    summary: 'Record a mined Robinhood staking transaction',
+    description:
+      'Called after the wallet tx (stake / unstake / harvest / compound / emergencyUnstake) is mined. ' +
+      'Reads the receipt, checks it was sent by the authenticated wallet and mirrors the events into ' +
+      'staking positions. Idempotent; a background scan records missed txs as well.',
+  })
+  async confirmEvm(@Req() req: AuthRequest, @Body() body: ConfirmEvmStakeTxDto): Promise<EvmConfirmResult> {
+    if (!isAddress(req.user.address)) throw new ForbiddenException('Only Robinhood wallets can confirm EVM staking');
+    return this.evmStakeService.confirmTx(req.user.address, body.txHash);
   }
 
   @Post('build-stake')
