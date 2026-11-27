@@ -140,6 +140,8 @@ export class TaptoolsService {
   private relicsTraitPriceCache = new NodeCache({ stdTTL: 900, checkperiod: 120 }); // cache for 15 minutes for trait prices
   // Throttles the "fallback trait price" log to once per character per 15 min (one valuation run), instead of once per NFT
   private relicsFallbackLogCache = new NodeCache({ stdTTL: 900, checkperiod: 120 });
+  private readonly RELICS_TRAIT_PRICE_FAILED_KEY = 'relics_vita_trait_prices_failed';
+  private relicsTraitPriceInFlight: Promise<Map<string, number> | null> | null = null;
 
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
@@ -444,6 +446,32 @@ export class TaptoolsService {
       return null;
     }
 
+    // A recent attempt failed: don't hit CNFT.tools (and log) again for every NFT in the run
+    if (this.relicsTraitPriceCache.has(this.RELICS_TRAIT_PRICE_FAILED_KEY)) {
+      return null;
+    }
+
+    // Share one in-flight request between concurrent callers
+    if (this.relicsTraitPriceInFlight) {
+      return this.relicsTraitPriceInFlight;
+    }
+
+    this.relicsTraitPriceInFlight = this.requestRelicsVitaTraitPricesFromCNFT(cacheKey).finally(() => {
+      this.relicsTraitPriceInFlight = null;
+    });
+    return this.relicsTraitPriceInFlight;
+  }
+
+  private async requestRelicsVitaTraitPricesFromCNFT(cacheKey: string): Promise<Map<string, number> | null> {
+    const result = await this.doRequestRelicsVitaTraitPricesFromCNFT(cacheKey);
+    if (!result) {
+      // Remember the failure for one cache period (15 min), so the next attempt is the next valuation run
+      this.relicsTraitPriceCache.set(this.RELICS_TRAIT_PRICE_FAILED_KEY, true);
+    }
+    return result;
+  }
+
+  private async doRequestRelicsVitaTraitPricesFromCNFT(cacheKey: string): Promise<Map<string, number> | null> {
     try {
       const response = await axios.get(this.CNFT_TOOLS_VITA_TRAIT_FLOORS_URL, {
         timeout: 5000,

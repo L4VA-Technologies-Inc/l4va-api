@@ -3721,10 +3721,29 @@ export class VaultsService {
 
     const vaultAddress = vault.contract_address as Address;
     let cancelTxHash: string | undefined = vault.evm_cancel_cycle_tx_hash;
+
+    // The DB can lag behind the chain: pull in on-chain acquires before the irreversible cancel,
+    // so a non-owner acquire the API has not seen yet still blocks it.
+    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled)) {
+      try {
+        await this.evmContributionBackfillService.backfillVault(vault.id);
+      } catch (err) {
+        this.logger.error(`Owner cancel: pre-cancel sync failed for vault ${vault.id}: ${(err as Error).message}`);
+        throw new BadRequestException('Failed to verify vault contributions on-chain. Please try again later.');
+      }
+      if (await this.hasForeignEvmFunds(vault)) {
+        throw new BadRequestException('Vault cannot be cancelled because other users have already acquired');
+      }
+    }
+
     const onChainStatus = cancelTxHash ? null : await this.readEvmVaultStatus(vaultAddress);
 
     // In the acquire phase the cycle must still be open on-chain; a closing/locked cycle cannot be cancelled.
-    if (!cancelTxHash && isRobinhoodAcquireOnlyCancel(vault) && onChainStatus !== EvmVaultOnchainStatus.Active) {
+    if (
+      !cancelTxHash &&
+      isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled) &&
+      onChainStatus !== EvmVaultOnchainStatus.Active
+    ) {
       throw new BadRequestException('The acquire window is already closing; the vault can no longer be cancelled');
     }
 
@@ -3784,6 +3803,26 @@ export class VaultsService {
     return { success: true };
   }
 
+  /** True when anyone but the owner has put funds into this EVM vault (recorded, or still in flight). */
+  private async hasForeignEvmFunds(vault: Vault): Promise<boolean> {
+    const ownerAddress = vault.owner?.address?.toLowerCase();
+    const foreignOnChain = await this.evmContributionsRepository
+      .createQueryBuilder('c')
+      .where('c.vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere(ownerAddress ? 'LOWER(c.contributor) <> :owner' : '1=1', { owner: ownerAddress })
+      .getExists();
+    if (foreignOnChain) return true;
+
+    return this.transactionRepository.exists({
+      where: {
+        vault_id: vault.id,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: In([TransactionStatus.pending, TransactionStatus.submitted, TransactionStatus.confirmed]),
+        user_id: Not(vault.owner.id),
+      },
+    });
+  }
+
   private async readEvmVaultStatus(vaultAddress: Address): Promise<EvmVaultOnchainStatus> {
     try {
       return Number(
@@ -3821,9 +3860,9 @@ export class VaultsService {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    // Robinhood acquire-only vaults can also be cancelled while the acquire window is open:
-    // the cycle is cancelled on-chain and every acquirer gets their ETH back by the refund cron.
-    const isRhAcquireCancel = isRobinhoodAcquireOnlyCancel(vault);
+    // Robinhood acquire-only vaults can also be cancelled while the acquire window is open, as long
+    // as only the owner has acquired; the cycle is cancelled on-chain and the owner's ETH refunded.
+    const isRhAcquireCancel = isRobinhoodAcquireOnlyCancel(vault, this.systemSettingsService.evmVaultCancelEnabled);
 
     if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status) && !isRhAcquireCancel) {
       throw new BadRequestException('Vault cannot be cancelled in its current status');
@@ -3863,8 +3902,12 @@ export class VaultsService {
       }
     }
 
-    // Acquirers' ETH does not block an acquire-phase cancel: it is refunded.
-    if (isRhAcquireCancel) return vault;
+    if (isRhAcquireCancel) {
+      if (await this.hasForeignEvmFunds(vault)) {
+        throw new BadRequestException('Vault cannot be cancelled because other users have already acquired');
+      }
+      return vault;
+    }
 
     const blockingAsset = await this.assetsRepository
       .createQueryBuilder('asset')
@@ -3997,8 +4040,9 @@ export class VaultsService {
 }
 
 /** Robinhood acquire-only vault in its acquire phase: cancellable by the owner, acquirers refunded. */
-function isRobinhoodAcquireOnlyCancel(vault: Vault): boolean {
+function isRobinhoodAcquireOnlyCancel(vault: Vault, enabled: boolean): boolean {
   return (
+    enabled &&
     vault.chain_type === ChainType.robinhood &&
     vault.is_acquire_only === true &&
     vault.vault_status === VaultStatus.acquire
